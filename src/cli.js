@@ -396,7 +396,7 @@ async function daemon(rest) {
   const interval = Number(flagValue(rest, '--interval', '120')) * 1000;
   const config = await configured();
   console.log(`SkillSync daemon started for ${config.repoPath}; interval ${interval / 1000}s`);
-  let lastHeartbeat = 0;
+  let lastHeartbeat = Date.now();
   while (true) {
     try {
       const now = Date.now();
