@@ -15,6 +15,7 @@ import {
   applyLinks,
   installSkill,
   loadDevice,
+  saveDevice,
   scanTargets,
   uninstallSkill,
 } from '../src/core/device.js';
@@ -137,6 +138,23 @@ test('scanTargets deduplicates duplicate local skills by name', async () => {
   assert.deepEqual(device.detected.hermes.map((skill) => [skill.name, skill.path]), [
     ['bog-hyperframes', 'openclaw-imports/bog-hyperframes'],
   ]);
+});
+
+test('scanTargets preserves last_seen so scans do not create heartbeat churn', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const scanRoot = path.join(root, 'hermes-skills');
+  await makeSkill(path.join(scanRoot, 'openclaw-imports'), 'bog-hyperframes', '# Bog\n');
+
+  const deviceId = 'vps';
+  await addTarget({ vaultPath: vault, deviceId, name: 'hermes', targetPath: path.join(scanRoot, 'personal'), scanPath: scanRoot });
+  const device = await loadDevice(vault, deviceId);
+  device.last_seen = '2026-01-01T00:00:00.000Z';
+  await saveDevice(vault, device);
+
+  const scanned = await scanTargets({ vaultPath: vault, deviceId });
+
+  assert.equal(scanned.last_seen, '2026-01-01T00:00:00.000Z');
 });
 
 test('deleteSkillFromVault removes the skill from registry and every device manifest', async () => {

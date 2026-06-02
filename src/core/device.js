@@ -163,7 +163,6 @@ export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
     }));
   }
   device.detected = detected;
-  device.last_seen = new Date().toISOString();
   await saveDevice(vaultPath, device);
   return device;
 }
