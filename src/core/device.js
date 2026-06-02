@@ -203,7 +203,8 @@ async function findLocalSkills(scanPath) {
   }
 
   await walk(root);
-  return skills.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+  const sorted = skills.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+  return sorted.filter((skill, index) => sorted.findIndex((candidate) => candidate.name === skill.name) === index);
 }
 
 async function symlinkedDirectory(child, entry) {

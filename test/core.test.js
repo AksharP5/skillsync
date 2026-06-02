@@ -121,6 +121,24 @@ test('scanTargets records unmanaged local skills from a separate scan path', asy
   assert.deepEqual(device.installed['bog-hyperframes'], ['hermes']);
 });
 
+test('scanTargets deduplicates duplicate local skills by name', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const scanRoot = path.join(root, 'hermes-skills');
+  await makeSkill(path.join(scanRoot, 'openclaw-imports'), 'bog-hyperframes', '# Bog source\n');
+  await makeSkill(path.join(scanRoot, 'personal'), 'bog-hyperframes', '# Bog projection\n');
+  await rebuildRegistry(vault);
+
+  const deviceId = 'vps';
+  await addTarget({ vaultPath: vault, deviceId, name: 'hermes', targetPath: path.join(scanRoot, 'personal'), scanPath: scanRoot });
+
+  const device = await scanTargets({ vaultPath: vault, deviceId });
+
+  assert.deepEqual(device.detected.hermes.map((skill) => [skill.name, skill.path]), [
+    ['bog-hyperframes', 'openclaw-imports/bog-hyperframes'],
+  ]);
+});
+
 test('deleteSkillFromVault removes the skill from registry and every device manifest', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
