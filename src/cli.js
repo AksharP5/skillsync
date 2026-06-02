@@ -87,8 +87,10 @@ async function resolveRepoCloneUrl(repo) {
   if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return repo;
   if (!repo.includes('/')) return repo;
   if (!await commandExists('gh')) return repo;
-  const { stdout } = await gh(['repo', 'view', repo, '--json', 'sshUrl', '--jq', '.sshUrl']);
-  return stdout.trim();
+  const { stdout } = await gh(['repo', 'view', repo, '--json', 'isPrivate,sshUrl', '--jq', '.']);
+  const view = JSON.parse(stdout);
+  if (!view.isPrivate) throw new Error(`${repo} exists but is not private. Make it private before using it as a skill vault.`);
+  return view.sshUrl;
 }
 
 async function setup(rest) {
