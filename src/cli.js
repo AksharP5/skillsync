@@ -107,7 +107,9 @@ async function setup(rest) {
   if (!repo) {
     const { stdout: ownerOut } = await gh(['api', 'user', '--jq', '.login']);
     const owner = ownerOut.trim();
-    const name = flagValue(rest, '--name', 'skills');
+    const name = flagValue(rest, '--name') || (yes || !process.stdin.isTTY
+      ? 'skills'
+      : await input({ message: 'GitHub skills vault repo name:', default: 'skills' }));
     repo = `${owner}/${name}`;
     let repoExists = true;
     try {

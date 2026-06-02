@@ -52,7 +52,7 @@ Or create/select a different private vault repo name:
 skillsync setup --name my-skills
 ```
 
-`setup --name` creates `OWNER/my-skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
+If you run plain `skillsync setup` in an interactive terminal, it asks for the repo name and defaults to `skills`. `setup --name` creates `OWNER/my-skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
 
 ## Commands
 
