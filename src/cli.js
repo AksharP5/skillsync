@@ -81,6 +81,14 @@ async function configured() {
   return config;
 }
 
+async function resolveRepoCloneUrl(repo) {
+  if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return repo;
+  if (!repo.includes('/')) return repo;
+  if (!await commandExists('gh')) return repo;
+  const { stdout } = await gh(['repo', 'view', repo, '--json', 'sshUrl', '--jq', '.sshUrl']);
+  return stdout.trim();
+}
+
 async function setup(rest) {
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
   if (!await commandExists('git')) throw new Error('git is required');
@@ -113,6 +121,8 @@ async function setup(rest) {
     const view = JSON.parse(viewOut);
     if (!view.isPrivate) throw new Error(`${repo} exists but is not private. Make it private before using it as a skill vault.`);
     repo = view.sshUrl;
+  } else {
+    repo = await resolveRepoCloneUrl(repo);
   }
 
   await mkdir(path.dirname(repoPath), { recursive: true });
@@ -134,8 +144,9 @@ async function setup(rest) {
 }
 
 async function connect(rest) {
-  const repo = rest[0];
-  if (!repo) throw new Error('Usage: skillsync connect <github-repo-or-url>');
+  const repoArg = rest[0];
+  if (!repoArg) throw new Error('Usage: skillsync connect <github-repo-or-url>');
+  const repo = await resolveRepoCloneUrl(repoArg);
   const repoPath = expandHome(flagValue(rest, '--path', defaultRepoPath()));
   await mkdir(path.dirname(repoPath), { recursive: true });
   await cloneRepo(repo, repoPath);
