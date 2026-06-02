@@ -216,7 +216,7 @@ async function status() {
   console.log(`Vault: ${config.repoPath}`);
   console.log(`Device: ${device.display_name} (${device.device_id})`);
   console.log(`Available skills: ${Object.keys(registry.skills).length}`);
-  console.log(`Installed here: ${Object.keys(device.installed).length} managed, ${detectedCount} detected locally`);
+  console.log(`Installed here: ${detectedCount} local detected, ${Object.keys(device.installed).length} SkillSync-managed`);
   console.log(`Targets: ${Object.keys(device.targets).join(', ') || 'none'}`);
 }
 
@@ -531,7 +531,7 @@ async function devicesScreen(config) {
     const installed = Object.keys(device.installed || {}).length;
     const detected = countDetectedSkills(device);
     const targets = Object.keys(device.targets || {}).join(', ') || 'no targets';
-    console.log(`- ${device.display_name} (${device.device_id}) — ${installed} managed, ${detected} detected — ${targets} — last seen ${device.last_seen || 'never'}`);
+    console.log(`- ${device.display_name} (${device.device_id}) — ${detected} local, ${installed} managed — ${targets} — last seen ${device.last_seen || 'never'}`);
   }
   console.log('');
 }
