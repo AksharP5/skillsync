@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, readlink, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readlink, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
 
@@ -17,6 +17,7 @@ export function newDevice(deviceId = defaultDeviceId()) {
     last_seen: new Date().toISOString(),
     targets: {},
     installed: {},
+    detected: {},
   };
 }
 
@@ -42,9 +43,22 @@ function normalizeDevice(device, deviceId) {
     device_id: device?.device_id || deviceId || defaultDeviceId(),
     display_name: device?.display_name || device?.device_id || deviceId || defaultDeviceId(),
     last_seen: device?.last_seen || new Date().toISOString(),
-    targets: device?.targets && typeof device.targets === 'object' ? device.targets : {},
+    targets: normalizeTargets(device?.targets),
     installed: device?.installed && typeof device.installed === 'object' ? device.installed : {},
+    detected: device?.detected && typeof device.detected === 'object' ? device.detected : {},
   };
+}
+
+function normalizeTargets(targets) {
+  if (!targets || typeof targets !== 'object') return {};
+  return Object.fromEntries(Object.entries(targets).map(([name, target]) => [
+    name,
+    {
+      path: target.path,
+      mode: target.mode || 'symlink',
+      ...(target.scan_path ? { scan_path: target.scan_path } : {}),
+    },
+  ]));
 }
 
 export async function touchDevice({ vaultPath, deviceId = defaultDeviceId() }) {
@@ -54,12 +68,12 @@ export async function touchDevice({ vaultPath, deviceId = defaultDeviceId() }) {
   return device;
 }
 
-export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name, targetPath, mode = 'symlink' }) {
+export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name, targetPath, mode = 'symlink', scanPath }) {
   if (!name) throw new Error('Target name is required');
   if (!targetPath) throw new Error('Target path is required');
   if (!['symlink', 'copy'].includes(mode)) throw new Error(`Unsupported target mode: ${mode}`);
   const device = await loadDevice(vaultPath, deviceId);
-  device.targets[name] = { path: targetPath, mode };
+  device.targets[name] = { path: targetPath, mode, ...(scanPath ? { scan_path: scanPath } : {}) };
   device.last_seen = new Date().toISOString();
   await saveDevice(vaultPath, device);
   return device;
@@ -68,6 +82,7 @@ export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name,
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   const device = await loadDevice(vaultPath, deviceId);
   delete device.targets[name];
+  delete device.detected[name];
   for (const targets of Object.values(device.installed)) {
     const index = targets.indexOf(name);
     if (index >= 0) targets.splice(index, 1);
@@ -132,6 +147,71 @@ export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
         await createSymlinkProjection(source, destination);
       }
     }
+  }
+}
+
+export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
+  const device = await loadDevice(vaultPath, deviceId);
+  const registry = await loadRegistry(vaultPath);
+  const detected = {};
+  for (const [targetName, targetConfig] of Object.entries(device.targets)) {
+    const scanPath = expandHome(targetConfig.scan_path || targetConfig.path);
+    const skills = await findLocalSkills(scanPath);
+    detected[targetName] = skills.map((skill) => ({
+      ...skill,
+      in_vault: Boolean(registry.skills[skill.name]),
+    }));
+  }
+  device.detected = detected;
+  device.last_seen = new Date().toISOString();
+  await saveDevice(vaultPath, device);
+  return device;
+}
+
+async function findLocalSkills(scanPath) {
+  const root = path.resolve(scanPath);
+  if (!await exists(root)) return [];
+  const seen = new Set();
+  const skills = [];
+
+  async function walk(current) {
+    let canonical;
+    try {
+      canonical = await realpath(current);
+    } catch {
+      canonical = path.resolve(current);
+    }
+    if (seen.has(canonical)) return;
+    seen.add(canonical);
+
+    if (await exists(path.join(current, 'SKILL.md'))) {
+      skills.push({
+        name: slugifySkillName(path.basename(current)),
+        path: path.relative(root, current).split(path.sep).join(path.posix.sep) || '.',
+      });
+      return;
+    }
+
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const child = path.join(current, entry.name);
+      if (entry.isDirectory() || await symlinkedDirectory(child, entry)) {
+        await walk(child);
+      }
+    }
+  }
+
+  await walk(root);
+  return skills.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+}
+
+async function symlinkedDirectory(child, entry) {
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await stat(child)).isDirectory();
+  } catch {
+    return false;
   }
 }
 

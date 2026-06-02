@@ -29,6 +29,8 @@ skillsync install <skill> --target codex
 skillsync uninstall <skill>
 skillsync delete <skill>
 skillsync target add codex ~/.codex/skills
+skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
+skillsync scan
 skillsync sync
 skillsync service install
 ```
@@ -37,6 +39,17 @@ skillsync service install
 
 - `skillsync uninstall <skill>` removes the skill from the current device only.
 - `skillsync delete <skill>` removes the skill from the vault and all device manifests.
+
+## Detected versus managed skills
+
+`installed` skills are SkillSync-managed projections into a target folder. `detected` skills are already present in a local agent's skill tree, such as bundled Hermes skills under `~/.hermes/skills`.
+
+For Hermes, use a separate scan path so SkillSync installs personal synced skills into `~/.hermes/skills/personal` while still showing the full Hermes skill inventory from `~/.hermes/skills`:
+
+```bash
+skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
+skillsync scan
+```
 
 ## Auto-sync
 

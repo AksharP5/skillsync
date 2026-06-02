@@ -5,7 +5,7 @@ import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
 import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
-import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, removeTarget, uninstallSkill } from './core/device.js';
+import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, removeTarget, scanTargets, uninstallSkill } from './core/device.js';
 import { ensureDir, exists, expandHome } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { addSkillToVault, deleteSkillFromVault, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
@@ -47,6 +47,8 @@ async function main() {
       return target(rest);
     case 'sync':
       return syncCommand(rest);
+    case 'scan':
+      return scanCommand();
     case 'doctor':
       return doctor();
     case 'service':
@@ -158,17 +160,19 @@ async function connect(rest) {
 
 async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
   const candidates = [
-    ['hermes', '~/.hermes/skills/personal'],
-    ['claude', '~/.claude/skills'],
-    ['codex', '~/.codex/skills'],
-    ['opencode', '~/.config/opencode/skills'],
+    { name: 'hermes', path: '~/.hermes/skills/personal', scanPath: '~/.hermes/skills' },
+    { name: 'claude', path: '~/.claude/skills' },
+    { name: 'codex', path: '~/.codex/skills' },
+    { name: 'opencode', path: '~/.config/opencode/skills' },
   ];
   const detected = [];
-  for (const [name, rawPath] of candidates) {
-    const expanded = expandHome(rawPath);
+  for (const candidate of candidates) {
+    const expanded = expandHome(candidate.path);
+    const scanExpanded = expandHome(candidate.scanPath || candidate.path);
     const parentExists = await exists(path.dirname(expanded));
     const dirExists = await exists(expanded);
-    if (dirExists || parentExists) detected.push({ name, path: rawPath });
+    const scanExists = await exists(scanExpanded);
+    if (dirExists || parentExists || scanExists) detected.push(candidate);
   }
   if (!detected.length) return;
   let selected = detected;
@@ -179,7 +183,14 @@ async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
     });
   }
   for (const targetConfig of selected) {
-    await addTarget({ vaultPath: repoPath, deviceId, name: targetConfig.name, targetPath: targetConfig.path, mode: 'symlink' });
+    await addTarget({
+      vaultPath: repoPath,
+      deviceId,
+      name: targetConfig.name,
+      targetPath: targetConfig.path,
+      scanPath: targetConfig.scanPath,
+      mode: 'symlink',
+    });
   }
 }
 
@@ -201,11 +212,16 @@ async function status() {
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
   const device = await loadDevice(config.repoPath, config.deviceId);
+  const detectedCount = countDetectedSkills(device);
   console.log(`Vault: ${config.repoPath}`);
   console.log(`Device: ${device.display_name} (${device.device_id})`);
   console.log(`Available skills: ${Object.keys(registry.skills).length}`);
-  console.log(`Installed here: ${Object.keys(device.installed).length}`);
+  console.log(`Installed here: ${Object.keys(device.installed).length} managed, ${detectedCount} detected locally`);
   console.log(`Targets: ${Object.keys(device.targets).join(', ') || 'none'}`);
+}
+
+function countDetectedSkills(device) {
+  return Object.values(device.detected || {}).reduce((count, skills) => count + (Array.isArray(skills) ? skills.length : 0), 0);
 }
 
 async function listSkills() {
@@ -322,9 +338,16 @@ async function target(rest) {
   const sub = rest[0];
   if (sub === 'add') {
     const [, name, targetPath] = rest;
-    if (!name || !targetPath) throw new Error('Usage: skillsync target add <name> <path> [--mode symlink|copy]');
+    if (!name || !targetPath) throw new Error('Usage: skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]');
     const config = await configured();
-    await addTarget({ vaultPath: config.repoPath, deviceId: config.deviceId, name, targetPath, mode: flagValue(rest, '--mode', 'symlink') });
+    await addTarget({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      name,
+      targetPath,
+      mode: flagValue(rest, '--mode', 'symlink'),
+      scanPath: flagValue(rest, '--scan-path'),
+    });
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
     console.log(`Added target ${name}: ${targetPath}`);
     return;
@@ -346,6 +369,13 @@ async function syncCommand(rest) {
   const config = await configured();
   const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: !hasFlag(rest, '--no-pull') });
   console.log(result.committed ? 'Synced and pushed changes.' : 'Synced. No local changes to push.');
+}
+
+async function scanCommand() {
+  const config = await configured();
+  const device = await scanTargets({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+  console.log(`Scanned local targets: ${countDetectedSkills(device)} skills detected.`);
 }
 
 async function doctor() {
@@ -433,6 +463,7 @@ async function runUi() {
         { name: 'Targets', value: 'targets' },
         { name: 'Add skill from folder', value: 'add' },
         { name: 'Import Hermes skills', value: 'import-hermes' },
+        { name: 'Scan local targets', value: 'scan' },
         { name: 'Sync now', value: 'sync' },
         { name: 'Quit', value: 'quit' },
       ],
@@ -443,6 +474,7 @@ async function runUi() {
     if (choice === 'targets') await targetsScreen(config);
     if (choice === 'add') await addSkill([await input({ message: 'Skill folder path:' })]);
     if (choice === 'import-hermes') await importSkills(['hermes']);
+    if (choice === 'scan') await scanCommand();
     if (choice === 'sync') await syncCommand([]);
   }
 }
@@ -497,8 +529,9 @@ async function devicesScreen(config) {
   console.log('\nDevices');
   for (const device of devices) {
     const installed = Object.keys(device.installed || {}).length;
+    const detected = countDetectedSkills(device);
     const targets = Object.keys(device.targets || {}).join(', ') || 'no targets';
-    console.log(`- ${device.display_name} (${device.device_id}) — ${installed} skills — ${targets} — last seen ${device.last_seen || 'never'}`);
+    console.log(`- ${device.display_name} (${device.device_id}) — ${installed} managed, ${detected} detected — ${targets} — last seen ${device.last_seen || 'never'}`);
   }
   console.log('');
 }
@@ -506,7 +539,7 @@ async function devicesScreen(config) {
 async function targetsScreen(config) {
   const device = await loadDevice(config.repoPath, config.deviceId);
   const choices = Object.entries(device.targets).map(([name, targetConfig]) => ({
-    name: `${name}: ${targetConfig.path} (${targetConfig.mode})`,
+    name: `${name}: ${targetConfig.path} (${targetConfig.mode})${targetConfig.scan_path ? ` scan ${targetConfig.scan_path}` : ''}`,
     value: `remove:${name}`,
   })).concat([
     { name: 'Add target', value: 'add' },
@@ -517,7 +550,8 @@ async function targetsScreen(config) {
   if (choice === 'add') {
     const name = await input({ message: 'Target name (codex, claude, hermes, custom):' });
     const targetPath = await input({ message: 'Target skill directory path:' });
-    await target(['add', name, targetPath]);
+    const scanPath = await input({ message: 'Optional scan path for existing skills:', default: '' });
+    await target(['add', name, targetPath, ...(scanPath ? ['--scan-path', scanPath] : [])]);
   } else if (choice.startsWith('remove:')) {
     const name = choice.slice('remove:'.length);
     if (await confirm({ message: `Remove target ${name}?`, default: false })) await target(['remove', name]);
@@ -525,5 +559,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync add <skill-folder>\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy]\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync add <skill-folder>\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

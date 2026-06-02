@@ -15,6 +15,7 @@ import {
   applyLinks,
   installSkill,
   loadDevice,
+  scanTargets,
   uninstallSkill,
 } from '../src/core/device.js';
 
@@ -84,6 +85,40 @@ test('installSkill creates device state and applyLinks creates/removes safe syml
   await assert.rejects(() => lstat(link));
   const skillStillExists = await readFile(path.join(vault, 'skills', 'bog-hyperframes', 'SKILL.md'), 'utf8');
   assert.match(skillStillExists, /# Bog/);
+});
+
+test('scanTargets records unmanaged local skills from a separate scan path', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const projectionTarget = path.join(root, 'hermes-skills', 'personal');
+  const scanRoot = path.join(root, 'hermes-skills');
+  await makeSkill(path.join(scanRoot, 'software-development'), 'systematic-debugging', '# Debugging\n');
+  await makeSkill(path.join(vault, 'skills'), 'bog-hyperframes', '# Bog\n');
+  await rebuildRegistry(vault);
+
+  const deviceId = 'vps';
+  await addTarget({
+    vaultPath: vault,
+    deviceId,
+    name: 'hermes',
+    targetPath: projectionTarget,
+    scanPath: scanRoot,
+    mode: 'symlink',
+  });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'bog-hyperframes', targets: ['hermes'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  const device = await scanTargets({ vaultPath: vault, deviceId });
+
+  assert.equal(device.detected.hermes.length, 2);
+  assert.deepEqual(
+    device.detected.hermes.map((skill) => [skill.name, skill.path, skill.in_vault]).sort(),
+    [
+      ['bog-hyperframes', 'personal/bog-hyperframes', true],
+      ['systematic-debugging', 'software-development/systematic-debugging', false],
+    ],
+  );
+  assert.deepEqual(device.installed['bog-hyperframes'], ['hermes']);
 });
 
 test('deleteSkillFromVault removes the skill from registry and every device manifest', async () => {
