@@ -1,0 +1,21 @@
+{
+  "name": "skillsync",
+  "version": "0.1.0",
+  "description": "Local-first GitHub-backed skill vault sync client for AI agent skills.",
+  "type": "module",
+  "bin": {
+    "skillsync": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/cli.js"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.3.2"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
