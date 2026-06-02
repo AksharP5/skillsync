@@ -18,6 +18,42 @@ devices/*.json       # generated, do not edit
 
 User-owned files are the skill folders under `skills/`. SkillSync owns `registry.json` and `devices/*.json`.
 
+## Install on another device
+
+SkillSync is an npm-style CLI package, but it is not published to the public npm registry yet. Install it from the private GitHub repo for now:
+
+```bash
+# macOS
+brew install gh git node
+
+gh auth login
+npm install -g git+ssh://git@github.com/AksharP5/skillsync.git
+```
+
+If SSH is not set up on that device yet, use the clone/link fallback:
+
+```bash
+mkdir -p ~/projects
+gh repo clone AksharP5/skillsync ~/projects/skillsync
+cd ~/projects/skillsync
+npm install
+npm link
+```
+
+Connect to an existing vault:
+
+```bash
+skillsync setup --repo AksharP5/skills
+```
+
+Or create/select a different private vault repo name:
+
+```bash
+skillsync setup --name my-skills
+```
+
+`setup --name` creates `OWNER/my-skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
+
 ## Commands
 
 ```bash
