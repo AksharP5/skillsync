@@ -9,6 +9,7 @@ import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, load
 import { ensureDir, exists, expandHome } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { addSkillToVault, deleteSkillFromVault, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
+import { cloneSkillSource, discoverSkillFolders, isRemoteSkillSource, selectDiscoveredSkills } from './core/source.js';
 import { syncVault } from './core/sync.js';
 
 const args = process.argv.slice(2);
@@ -68,6 +69,15 @@ function flagValue(rest, flag, fallback = undefined) {
   const index = rest.indexOf(flag);
   if (index === -1) return fallback;
   return rest[index + 1] ?? fallback;
+}
+
+function flagList(rest, flags) {
+  const values = [];
+  for (const flag of flags) {
+    const value = flagValue(rest, flag);
+    if (value) values.push(...value.split(',').map((item) => item.trim()).filter(Boolean));
+  }
+  return [...new Set(values)];
 }
 
 function hasFlag(rest, flag) {
@@ -245,12 +255,69 @@ async function listSkills() {
 }
 
 async function addSkill(rest) {
-  const sourcePath = rest[0];
-  if (!sourcePath) throw new Error('Usage: skillsync add <skill-folder>');
+  const source = rest[0];
+  if (!source) throw new Error('Usage: skillsync add <skill-folder-or-git-url> [--skill name] [--target target]');
   const config = await configured();
-  await addSkillToVault({ vaultPath: config.repoPath, sourcePath: expandHome(sourcePath), name: flagValue(rest, '--name') });
+
+  if (isRemoteSkillSource(source)) {
+    return addRemoteSkills(source, rest, config);
+  }
+
+  const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath: expandHome(source), name: flagValue(rest, '--name') });
+  const targets = await chooseInstallTargets(config, rest);
+  if (targets.length) {
+    await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName: added.name, targets });
+    await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
-  console.log(`Added ${sourcePath} to the vault.`);
+  console.log(`Added ${added.name} to the vault${targets.length ? ` and installed to ${targets.join(', ')}` : ''}.`);
+}
+
+async function addRemoteSkills(source, rest, config) {
+  const wanted = flagList(rest, ['--skill', '-s']);
+  const listOnly = hasFlag(rest, '--list') || hasFlag(rest, '-l');
+  const fullDepth = hasFlag(rest, '--full-depth');
+  const cloned = await cloneSkillSource(source);
+  try {
+    const discovered = await discoverSkillFolders(cloned.path, { fullDepth });
+    if (!discovered.length) throw new Error(`No SKILL.md files found in ${source}`);
+    const matching = selectDiscoveredSkills(discovered, wanted);
+
+    if (listOnly) {
+      console.log(`Found ${matching.length} skill${matching.length === 1 ? '' : 's'} in ${source}:`);
+      for (const skill of matching) console.log(`- ${skill.name} (${skill.relative})`);
+      return;
+    }
+
+    let selected = matching;
+    if (!wanted.length && matching.length > 1 && process.stdin.isTTY) {
+      selected = await checkbox({
+        message: `Select skills to add from ${source}`,
+        choices: matching.map((skill) => ({ name: `${skill.name} (${skill.relative})`, value: skill })),
+      });
+    }
+    if (!selected.length) {
+      console.log('No skills selected.');
+      return;
+    }
+
+    const targets = await chooseInstallTargets(config, rest);
+    const added = [];
+    for (const skill of selected) {
+      const result = await addSkillToVault({ vaultPath: config.repoPath, sourcePath: skill.path, name: skill.name });
+      added.push(result.name);
+      if (targets.length) {
+        await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName: result.name, targets });
+      }
+    }
+    if (targets.length) await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+    await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+
+    console.log(`Added ${added.length} skill${added.length === 1 ? '' : 's'} to the vault: ${added.join(', ')}`);
+    if (targets.length) console.log(`Installed on this device: ${targets.join(', ')}`);
+  } finally {
+    await cloned.cleanup();
+  }
 }
 
 async function importSkills(rest) {
@@ -336,6 +403,21 @@ function parseTargets(rest) {
   const raw = flagValue(rest, '--target') || flagValue(rest, '-t');
   if (!raw) return undefined;
   return raw.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+async function chooseInstallTargets(config, rest) {
+  const explicit = parseTargets(rest);
+  const device = await loadDevice(config.repoPath, config.deviceId);
+  const available = Object.keys(device.targets || {}).sort();
+  if (explicit?.includes('*') || hasFlag(rest, '--all-targets')) return available;
+  if (explicit) return explicit;
+  if (hasFlag(rest, '--no-install') || hasFlag(rest, '--yes') || hasFlag(rest, '-y') || !process.stdin.isTTY || !available.length) return [];
+  const shouldInstall = await confirm({ message: 'Install on this device now?', default: true });
+  if (!shouldInstall) return [];
+  return checkbox({
+    message: 'Choose local targets',
+    choices: available.map((target) => ({ name: target, value: target, checked: true })),
+  });
 }
 
 async function target(rest) {
@@ -563,5 +645,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync add <skill-folder>\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target]\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }
