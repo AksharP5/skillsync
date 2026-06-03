@@ -30,11 +30,12 @@ Add a skill from a GitHub repository:
 skillsync add https://github.com/example-org/example-skill --skill example-skill
 ```
 
-Install a vaulted skill into a local agent target:
+Install a vaulted skill into a local agent target, or mark it installed globally on this device without projecting into a specific agent folder:
 
 ```bash
 skillsync target add codex ~/.codex/skills
 skillsync install my-skill --target codex
+skillsync install my-skill --global
 ```
 
 Open the interactive UI:
@@ -132,7 +133,7 @@ Browse and install multiple vault skills at once:
 skillsync
 ```
 
-Choose `Browse/install skills`, press Space to select every skill you want installed on this device, then press Enter to apply the changes.
+Choose `Browse/install skills`, press Space to select every skill you want installed on this device, then press Enter to apply the changes. When prompted for destinations, choose `global` for a device-level install that does not create a Codex/OpenCode/etc. projection, or choose one or more configured agent targets.
 
 View skills installed on this device:
 
@@ -190,7 +191,9 @@ Install or uninstall a vaulted skill on this device:
 
 ```bash
 skillsync install my-skill --target codex
+skillsync install my-skill --global
 skillsync uninstall my-skill
+skillsync uninstall my-skill --global
 ```
 
 Sync the vault and reapply local links:
@@ -199,7 +202,7 @@ Sync the vault and reapply local links:
 skillsync sync
 ```
 
-If an installed skill changes in the vault, `skillsync sync` pulls the vault and reapplies local projections. Symlink targets point at the current vault copy automatically; copy targets are refreshed when links are reapplied. Vault skills that already exist locally but were not installed by SkillSync are shown as local vault-backed skills and checked in Browse/install. Sync them from the `Installed on this device` screen to replace the same-named local folder with the vault-managed projection.
+If an installed skill changes in the vault, `skillsync sync` pulls the vault and reapplies local projections. Symlink targets point at the current vault copy automatically; copy targets are refreshed when links are reapplied. Device-global installs are counted as installed on the device but do not create or scan an agent folder. Vault skills that already exist locally but were not installed by SkillSync are shown as local vault-backed skills and checked in Browse/install. Sync them from the `Installed on this device` screen to replace the same-named local folder with the vault-managed projection.
 
 Scan configured target folders for already-installed local skills:
 
@@ -217,11 +220,12 @@ skillsync
 skillsync status
 skillsync list
 skillsync installed
-skillsync add <skill-folder-or-git-url> --skill <name> [--conflict skip|use-vault|overwrite-vault|rename]
+skillsync add <skill-folder-or-git-url> --skill <name> [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync add https://github.com/example-org/example-skill --skill example-skill
 skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync install <skill> --target codex
-skillsync uninstall <skill>
+skillsync install <skill> --global
+skillsync uninstall <skill> [--target codex] [--global]
 skillsync delete <skill>
 skillsync target add codex ~/.codex/skills
 skillsync target add opencode ~/.config/opencode/skills
@@ -234,7 +238,8 @@ skillsync daemon
 
 ## Removal model
 
-- `skillsync uninstall <skill>` removes the skill from the current device only.
+- `skillsync uninstall <skill>` removes the skill from the current device only, including any device-global marker and SkillSync-managed target projections.
+- `skillsync uninstall <skill> --global` removes only the device-global marker.
 - `skillsync delete <skill>` removes the skill from the vault and all device manifests.
 
 ## Skill names

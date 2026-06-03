@@ -279,12 +279,19 @@ async function status() {
   console.log(`Vault: ${config.repoPath}`);
   console.log(`Device: ${device.display_name} (${device.device_id})`);
   console.log(`Available skills: ${Object.keys(registry.skills).length}`);
-  console.log(`Installed here: ${detectedCount} local detected, ${Object.keys(device.installed).length} SkillSync-managed`);
+  console.log(`Installed here: ${detectedCount} local detected, ${countManagedSkills(device)} SkillSync-managed`);
   console.log(`Targets: ${Object.keys(device.targets).join(', ') || 'none'}`);
 }
 
 function countDetectedSkills(device) {
   return Object.values(device.detected || {}).reduce((count, skills) => count + (Array.isArray(skills) ? skills.length : 0), 0);
+}
+
+function countManagedSkills(device) {
+  return new Set([
+    ...Object.keys(device.installed || {}),
+    ...(Array.isArray(device.global_installed) ? device.global_installed : []),
+  ]).size;
 }
 
 async function listSkills() {
@@ -301,7 +308,7 @@ async function listSkills() {
   for (const name of names) {
     const localSkill = localByName.get(name);
     const targetSummary = localSkill ? localSkillTargetSummary(localSkill) : '';
-    const state = localSkill?.managedTargets.length ? 'managed' : 'local';
+    const state = localSkill?.globalInstalled || localSkill?.managedTargets.length ? 'managed' : 'local';
     console.log(`${targetSummary ? '✓' : '○'} ${name}${targetSummary ? `  [${state}: ${targetSummary}]` : ''}`);
   }
 }
@@ -313,6 +320,7 @@ function localSkillEntries(device, registry) {
       byName.set(name, {
         name,
         managedTargets: new Set(),
+        globalInstalled: false,
         detectedTargets: [],
         inVault: Boolean(registry.skills[name]),
       });
@@ -323,6 +331,10 @@ function localSkillEntries(device, registry) {
   for (const [name, targets] of Object.entries(device.installed || {})) {
     const entry = entryFor(name);
     for (const target of Array.isArray(targets) ? targets : []) entry.managedTargets.add(target);
+  }
+
+  for (const name of Array.isArray(device.global_installed) ? device.global_installed : []) {
+    entryFor(name).globalInstalled = true;
   }
 
   for (const [targetName, skills] of Object.entries(device.detected || {})) {
@@ -354,7 +366,9 @@ function localSkillLabel(skill) {
     return `${target.targetName}/${target.path}`;
   }))];
   const parts = [];
-  if (skill.managedTargets.length) parts.push(`managed: ${skill.managedTargets.join(', ')}`);
+  const managedTargets = [...skill.managedTargets];
+  if (skill.globalInstalled) managedTargets.unshift('global');
+  if (managedTargets.length) parts.push(`managed: ${managedTargets.join(', ')}`);
   if (localTargets.length) parts.push(`local: ${localTargets.join(', ')}`);
   parts.push(skill.inVault ? 'in vault' : 'local only');
   return `${skill.name}  [${parts.join(' | ')}]`;
@@ -362,6 +376,7 @@ function localSkillLabel(skill) {
 
 function localSkillTargetSummary(skill) {
   const targets = new Set([
+    ...(skill.globalInstalled ? ['global'] : []),
     ...skill.managedTargets,
     ...skill.detectedTargets.map((target) => target.targetName),
   ]);
@@ -670,16 +685,20 @@ async function deleteSkill(rest) {
 }
 
 function parseTargets(rest) {
+  const targets = [];
+  if (hasFlag(rest, '--global') || hasFlag(rest, '-g')) targets.push('global');
   const raw = flagValue(rest, '--target') || flagValue(rest, '-t');
-  if (!raw) return undefined;
-  return raw.split(',').map((item) => item.trim()).filter(Boolean);
+  if (raw) targets.push(...raw.split(',').map((item) => item.trim()).filter(Boolean));
+  return targets.length ? [...new Set(targets)] : undefined;
 }
 
 async function chooseInstallTargets(config, rest) {
   const explicit = parseTargets(rest);
   const device = await loadDevice(config.repoPath, config.deviceId);
   const available = Object.keys(device.targets || {}).sort();
-  if (explicit?.includes('*') || hasFlag(rest, '--all-targets')) return available;
+  if (explicit?.includes('*') || hasFlag(rest, '--all-targets')) {
+    return [...new Set([...available, ...(explicit || []).filter((target) => target !== '*')])];
+  }
   if (explicit) return explicit;
   if (hasFlag(rest, '--no-install') || hasFlag(rest, '--yes') || hasFlag(rest, '-y') || !process.stdin.isTTY || !available.length) return [];
   const shouldInstall = await confirm({ message: 'Install on this device now?', default: true });
@@ -864,7 +883,7 @@ async function skillsScreen(config) {
     choices: names.map((name) => {
       const localSkill = localByName.get(name);
       const targetSummary = localSkill ? localSkillTargetSummary(localSkill) : '';
-      const state = localSkill?.managedTargets.length ? 'managed' : 'local';
+      const state = localSkill?.globalInstalled || localSkill?.managedTargets.length ? 'managed' : 'local';
       const targetLabel = targetSummary ? `  [${state}: ${targetSummary}]` : '';
       return {
         name: `${name}${targetLabel}`,
@@ -1082,21 +1101,24 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
 async function chooseTargets(config) {
   const device = await loadDevice(config.repoPath, config.deviceId);
   const targetNames = Object.keys(device.targets);
-  if (!targetNames.length) throw new Error('No targets configured. Add one from the Targets screen.');
+  const choices = [
+    { name: 'global: mark installed on this device (no agent projection)', value: 'global', checked: !targetNames.length },
+    ...targetNames.map((name) => ({ name, value: name, checked: true })),
+  ];
   return promptWithEscape(checkbox({
-    message: 'Install into which targets?',
+    message: 'Install where?',
     loop: false,
-    pageSize: promptPageSize(targetNames.length, { min: 6, max: 18 }),
-    choices: targetNames.map((name) => ({ name, value: name, checked: true })),
+    pageSize: promptPageSize(choices.length, { min: 6, max: 18 }),
+    choices,
     required: true,
-    instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
+    instructions: 'Space toggles destinations. Enter confirms. Esc cancels.',
   }), []);
 }
 
 async function devicesScreen(config) {
   const devices = await listDevices(config.repoPath);
   const choices = devices.map((device) => {
-    const installed = Object.keys(device.installed || {}).length;
+    const installed = countManagedSkills(device);
     const detected = countDetectedSkills(device);
     const targets = Object.keys(device.targets || {}).join(', ') || 'no targets';
     return {
@@ -1141,5 +1163,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

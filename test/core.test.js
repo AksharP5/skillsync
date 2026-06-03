@@ -147,6 +147,25 @@ test('applyLinks replaces broken vault-owned symlinks instead of failing with EE
   assert.equal(resolved, path.join(vault, 'skills', 'design-taste-frontend'));
 });
 
+test('installSkill tracks device-global installs without an agent target', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'global-only', '# Global\n');
+  await rebuildRegistry(vault);
+
+  const deviceId = 'test-device';
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'global-only', targets: ['global'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  const device = await loadDevice(vault, deviceId);
+  assert.deepEqual(device.global_installed, ['global-only']);
+  assert.equal(device.installed['global-only'], undefined);
+
+  await uninstallSkill({ vaultPath: vault, deviceId, skillName: 'global-only' });
+  const uninstalled = await loadDevice(vault, deviceId);
+  assert.deepEqual(uninstalled.global_installed, []);
+});
+
 test('scanTargets records unmanaged local skills from a separate scan path', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');

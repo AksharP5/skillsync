@@ -152,8 +152,10 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
     if (!file.endsWith('.json')) continue;
     const filePath = path.join(devicesDir, file);
     const device = await readJson(filePath, null);
-    if (!device?.installed?.[skillName]) continue;
-    delete device.installed[skillName];
+    const changed = Boolean(device?.installed?.[skillName]) || (Array.isArray(device?.global_installed) && device.global_installed.includes(skillName));
+    if (!changed) continue;
+    delete device.installed?.[skillName];
+    if (Array.isArray(device.global_installed)) device.global_installed = device.global_installed.filter((name) => name !== skillName);
     await writeJson(filePath, device);
   }
 }

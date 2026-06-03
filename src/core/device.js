@@ -5,6 +5,12 @@ import path from 'node:path';
 import { ensureDir, exists, expandHome, readJson, removePath, slugifySkillName, writeJson } from './fs.js';
 import { ensureVault, loadRegistry } from './registry.js';
 
+const GLOBAL_INSTALL_TARGET = 'global';
+
+function isGlobalInstallTarget(target) {
+  return target === GLOBAL_INSTALL_TARGET || target === '@global';
+}
+
 export function defaultDeviceId() {
   return slugifySkillName(hostname()) || 'device';
 }
@@ -17,6 +23,7 @@ export function newDevice(deviceId = defaultDeviceId()) {
     last_seen: new Date().toISOString(),
     targets: {},
     installed: {},
+    global_installed: [],
     detected: {},
   };
 }
@@ -44,9 +51,38 @@ function normalizeDevice(device, deviceId) {
     display_name: device?.display_name || device?.device_id || deviceId || defaultDeviceId(),
     last_seen: device?.last_seen || new Date().toISOString(),
     targets: normalizeTargets(device?.targets),
-    installed: device?.installed && typeof device.installed === 'object' ? device.installed : {},
+    installed: normalizeInstalled(device?.installed),
+    global_installed: normalizeGlobalInstalled(device),
     detected: device?.detected && typeof device.detected === 'object' ? device.detected : {},
   };
+}
+
+function normalizeInstalled(installed) {
+  if (!installed || typeof installed !== 'object') return {};
+  return Object.fromEntries(Object.entries(installed)
+    .map(([skillName, targets]) => [
+      skillName,
+      [...new Set((Array.isArray(targets) ? targets : []).filter((target) => !isGlobalInstallTarget(target)))].sort(),
+    ])
+    .filter(([, targets]) => targets.length));
+}
+
+function normalizeGlobalInstalled(device) {
+  const names = new Set(Array.isArray(device?.global_installed) ? device.global_installed : []);
+  if (Array.isArray(device?.globalInstalled)) {
+    for (const name of device.globalInstalled) names.add(name);
+  }
+  for (const [skillName, targets] of Object.entries(device?.installed || {})) {
+    if (Array.isArray(targets) && targets.some(isGlobalInstallTarget)) names.add(skillName);
+  }
+  return [...names].sort();
+}
+
+function markGlobalInstalled(device, skillName, installed) {
+  const names = new Set(device.global_installed || []);
+  if (installed) names.add(skillName);
+  else names.delete(skillName);
+  device.global_installed = [...names].sort();
 }
 
 function normalizeTargets(targets) {
@@ -83,9 +119,10 @@ export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), na
   const device = await loadDevice(vaultPath, deviceId);
   delete device.targets[name];
   delete device.detected[name];
-  for (const targets of Object.values(device.installed)) {
+  for (const [skillName, targets] of Object.entries(device.installed)) {
     const index = targets.indexOf(name);
     if (index >= 0) targets.splice(index, 1);
+    if (!targets.length) delete device.installed[skillName];
   }
   await saveDevice(vaultPath, device);
   return device;
@@ -95,12 +132,16 @@ export async function installSkill({ vaultPath, deviceId = defaultDeviceId(), sk
   const registry = await loadRegistry(vaultPath);
   if (!registry.skills[skillName]) throw new Error(`Skill not found in vault: ${skillName}`);
   const device = await loadDevice(vaultPath, deviceId);
-  const selectedTargets = targets?.length ? targets : Object.keys(device.targets);
-  if (!selectedTargets.length) throw new Error('No targets configured. Add one with: skillsync target add <name> <path>');
+  const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
+  const wantsGlobalInstall = requestedTargets.some(isGlobalInstallTarget);
+  const selectedTargets = [...new Set(requestedTargets.filter((target) => !isGlobalInstallTarget(target)))].sort();
+  if (!selectedTargets.length && !wantsGlobalInstall) throw new Error('No targets configured. Add one with: skillsync target add <name> <path>, or use --global for a device-global install.');
   for (const target of selectedTargets) {
     if (!device.targets[target]) throw new Error(`Unknown target on this device: ${target}`);
   }
-  device.installed[skillName] = [...new Set(selectedTargets)].sort();
+  if (selectedTargets.length) device.installed[skillName] = selectedTargets;
+  else delete device.installed[skillName];
+  markGlobalInstalled(device, skillName, wantsGlobalInstall);
   device.last_seen = new Date().toISOString();
   await saveDevice(vaultPath, device);
   return device;
@@ -108,12 +149,20 @@ export async function installSkill({ vaultPath, deviceId = defaultDeviceId(), sk
 
 export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {
   const device = await loadDevice(vaultPath, deviceId);
-  if (!device.installed[skillName]) return device;
+  const hadTargetInstall = Boolean(device.installed[skillName]);
+  const hadGlobalInstall = (device.global_installed || []).includes(skillName);
+  if (!hadTargetInstall && !hadGlobalInstall) return device;
   if (!targets?.length) {
     delete device.installed[skillName];
+    markGlobalInstalled(device, skillName, false);
   } else {
-    device.installed[skillName] = device.installed[skillName].filter((target) => !targets.includes(target));
-    if (!device.installed[skillName].length) delete device.installed[skillName];
+    const removeGlobal = targets.some(isGlobalInstallTarget);
+    const targetNames = targets.filter((target) => !isGlobalInstallTarget(target));
+    if (removeGlobal) markGlobalInstalled(device, skillName, false);
+    if (device.installed[skillName] && targetNames.length) {
+      device.installed[skillName] = device.installed[skillName].filter((target) => !targetNames.includes(target));
+      if (!device.installed[skillName].length) delete device.installed[skillName];
+    }
   }
   device.last_seen = new Date().toISOString();
   await saveDevice(vaultPath, device);
