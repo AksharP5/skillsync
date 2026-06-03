@@ -15,6 +15,7 @@
     "skillsync": "src/cli.js"
   },
   "files": [
+    "LICENSE",
     "src",
     "README.md"
   ],

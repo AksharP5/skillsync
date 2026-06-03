@@ -34,6 +34,8 @@ async function main() {
       return status();
     case 'list':
       return listSkills();
+    case 'installed':
+      return installedCommand();
     case 'add':
       return addSkill(rest);
     case 'import':
@@ -100,6 +102,12 @@ async function promptWithEscape(promptPromise, escapeValue = null) {
   } finally {
     process.stdin.off('keypress', onKeypress);
   }
+}
+
+function promptPageSize(itemCount, { min = 8, max = 28, reservedRows = 6 } = {}) {
+  const rows = Number(process.stdout.rows) || 30;
+  const availableRows = Math.max(min, rows - reservedRows);
+  return Math.max(1, Math.min(itemCount, max, availableRows));
 }
 
 async function configured() {
@@ -295,6 +303,37 @@ async function listSkills() {
   }
 }
 
+function installedSkillEntries(device, registry) {
+  return Object.entries(device.installed || {})
+    .map(([name, targets]) => ({
+      name,
+      targets: Array.isArray(targets) ? targets : [],
+      inVault: Boolean(registry.skills[name]),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function installedSkillLabel(skill) {
+  const targetLabel = skill.targets.length ? skill.targets.join(', ') : 'no targets';
+  return `${skill.name}  [${targetLabel}]${skill.inVault ? '' : '  missing from vault'}`;
+}
+
+async function installedCommand() {
+  const config = await configured();
+  await refreshChangedRegistryEntries(config.repoPath);
+  const registry = await loadRegistry(config.repoPath);
+  const device = await loadDevice(config.repoPath, config.deviceId);
+  const installed = installedSkillEntries(device, registry);
+  if (!installed.length) {
+    console.log('No SkillSync-managed skills installed on this device.');
+    return;
+  }
+  console.log(`Installed on ${device.display_name}:`);
+  for (const skill of installed) {
+    console.log(`- ${installedSkillLabel(skill)}`);
+  }
+}
+
 async function addSkill(rest) {
   const source = rest[0];
   if (!source) throw new Error('Usage: skillsync add <skill-folder-or-git-url> [--skill name] [--target target]');
@@ -458,7 +497,7 @@ async function chooseInstallTargets(config, rest) {
   return promptWithEscape(checkbox({
     message: 'Choose local targets',
     loop: false,
-    pageSize: Math.min(12, available.length),
+    pageSize: promptPageSize(available.length, { min: 6, max: 18 }),
     choices: available.map((target) => ({ name: target, value: target, checked: true })),
     instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
   }), []);
@@ -585,23 +624,26 @@ async function runUi() {
 
   while (true) {
     await refreshChangedRegistryEntries(config.repoPath);
+    const menuChoices = [
+      { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
+      { name: 'Installed on this device', value: 'installed', description: 'View, update, or uninstall SkillSync-managed local skills.' },
+      { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
+      { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
+      { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
+      { name: 'Import Hermes skills', value: 'import-hermes', description: 'Import detected Hermes skills into the vault.' },
+      { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
+      { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
+      { name: 'Quit', value: 'quit' },
+    ];
     const choice = await promptWithEscape(select({
       message: 'SkillSync',
       loop: false,
-      pageSize: 8,
-      choices: [
-        { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
-        { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
-        { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
-        { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
-        { name: 'Import Hermes skills', value: 'import-hermes', description: 'Import detected Hermes skills into the vault.' },
-        { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
-        { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
-        { name: 'Quit', value: 'quit' },
-      ],
+      pageSize: promptPageSize(menuChoices.length, { min: 8, max: 12 }),
+      choices: menuChoices,
     }));
     if (!choice || choice === 'quit') return;
     if (choice === 'skills') await skillsScreen(config);
+    if (choice === 'installed') await installedScreen(config);
     if (choice === 'devices') await devicesScreen(config);
     if (choice === 'targets') await targetsScreen(config);
     if (choice === 'add') await addSkill([await input({ message: 'Skill folder path:' })]);
@@ -623,7 +665,7 @@ async function skillsScreen(config) {
   const selected = await promptWithEscape(checkbox({
     message: `Install skills on ${device.display_name}`,
     loop: false,
-    pageSize: Math.min(14, Math.max(7, names.length)),
+    pageSize: promptPageSize(names.length, { min: 10, max: 32, reservedRows: 5 }),
     instructions: 'Space toggles skills. Enter applies changes. Esc goes back.',
     choices: names.map((name) => {
       const targets = device.installed[name] || [];
@@ -633,7 +675,6 @@ async function skillsScreen(config) {
         short: name,
         value: name,
         checked: installedNames.has(name),
-        description: targets.length ? `Installed in ${targets.join(', ')}` : 'Not installed on this device',
       };
     }),
   }));
@@ -667,6 +708,62 @@ async function skillsScreen(config) {
   console.log(`\n${[installedText, removedText].filter(Boolean).join(' ')}\n`);
 }
 
+async function installedScreen(config) {
+  await refreshChangedRegistryEntries(config.repoPath);
+  const registry = await loadRegistry(config.repoPath);
+  const device = await loadDevice(config.repoPath, config.deviceId);
+  const installed = installedSkillEntries(device, registry);
+  if (!installed.length) {
+    console.log('\nNo SkillSync-managed skills installed on this device.\n');
+    return;
+  }
+
+  const selected = await promptWithEscape(checkbox({
+    message: `Installed skills on ${device.display_name}`,
+    loop: false,
+    pageSize: promptPageSize(installed.length, { min: 8, max: 28, reservedRows: 5 }),
+    instructions: 'Space selects skills. Enter chooses an action. Esc goes back.',
+    choices: installed.map((skill) => ({
+      name: installedSkillLabel(skill),
+      short: skill.name,
+      value: skill.name,
+      checked: false,
+    })),
+  }), []);
+  if (!selected.length) return;
+
+  const action = await promptWithEscape(select({
+    message: `Manage ${selected.length} selected skill${selected.length === 1 ? '' : 's'}`,
+    loop: false,
+    pageSize: 3,
+    choices: [
+      { name: 'Update from vault', value: 'update', description: 'Pull the vault and reapply local installed links.' },
+      { name: 'Uninstall from this device', value: 'uninstall', description: 'Remove selected skills from this device only.' },
+      { name: 'Back', value: 'back' },
+    ],
+  }));
+  if (!action || action === 'back') return;
+
+  if (action === 'update') {
+    await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
+    console.log(`\nUpdated installed skills from the vault. Requested: ${selected.join(', ')}.\n`);
+    return;
+  }
+
+  const confirmed = await confirm({
+    message: `Uninstall ${selected.join(', ')} from this device?`,
+    default: false,
+  });
+  if (!confirmed) return;
+
+  for (const skillName of selected) {
+    await uninstallSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName });
+  }
+  await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+  console.log(`\nRemoved ${selected.join(', ')} from this device.\n`);
+}
+
 async function chooseTargets(config) {
   const device = await loadDevice(config.repoPath, config.deviceId);
   const targetNames = Object.keys(device.targets);
@@ -674,7 +771,7 @@ async function chooseTargets(config) {
   return promptWithEscape(checkbox({
     message: 'Install into which targets?',
     loop: false,
-    pageSize: Math.min(12, targetNames.length),
+    pageSize: promptPageSize(targetNames.length, { min: 6, max: 18 }),
     choices: targetNames.map((name) => ({ name, value: name, checked: true })),
     required: true,
     instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
@@ -702,7 +799,12 @@ async function targetsScreen(config) {
     { name: 'Add target', value: 'add' },
     { name: 'Back', value: 'back' },
   ]);
-  const choice = await promptWithEscape(select({ message: 'Targets on this device', choices, loop: false, pageSize: Math.min(10, choices.length) }));
+  const choice = await promptWithEscape(select({
+    message: 'Targets on this device',
+    choices,
+    loop: false,
+    pageSize: promptPageSize(choices.length, { min: 6, max: 18 }),
+  }));
   if (!choice || choice === 'back') return;
   if (choice === 'add') {
     const name = await input({ message: 'Target name (codex, claude, hermes, custom):' });
@@ -716,5 +818,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target]\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target]\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

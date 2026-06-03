@@ -15,7 +15,7 @@ npm install -g @akshar5/skillsync
 Connect this device to an existing private skills vault:
 
 ```bash
-skillsync setup --repo AksharP5/skills
+skillsync setup --repo OWNER/skills
 ```
 
 Add a local skill folder to the vault:
@@ -88,7 +88,7 @@ npm install -g @akshar5/skillsync
 Connect to an existing vault:
 
 ```bash
-skillsync setup --repo AksharP5/skills
+skillsync setup --repo OWNER/skills
 ```
 
 Or create/select a vault repo interactively:
@@ -99,7 +99,7 @@ skillsync setup
 
 If you run plain `skillsync setup` in an interactive terminal, it first asks which vault type to use:
 
-- Choose `Use an existing GitHub repo`, then enter a repo like `AksharP5/skills`.
+- Choose `Use an existing GitHub repo`, then enter a repo like `OWNER/skills`.
 - Choose `Create or use OWNER/<name>`, then enter a repo name like `skills`.
 
 `setup --name skills` is the non-interactive form of the second option. It creates `OWNER/skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
@@ -107,7 +107,7 @@ If you run plain `skillsync setup` in an interactive terminal, it first asks whi
 You can also run commands without a global install:
 
 ```bash
-npx @akshar5/skillsync setup --repo AksharP5/skills
+npx @akshar5/skillsync setup --repo OWNER/skills
 npx @akshar5/skillsync add https://github.com/example-org/example-skill --skill example-skill
 ```
 
@@ -115,7 +115,7 @@ If an older SkillSync version failed with `git@github.com: Permission denied (pu
 
 ```bash
 npm install -g @akshar5/skillsync@latest
-skillsync setup --repo AksharP5/skills
+skillsync setup --repo OWNER/skills
 ```
 
 ## Common workflows
@@ -133,6 +133,14 @@ skillsync
 ```
 
 Choose `Browse/install skills`, press Space to select every skill you want installed on this device, then press Enter to apply the changes.
+
+View skills installed on this device:
+
+```bash
+skillsync installed
+```
+
+In the interactive UI, choose `Installed on this device` to select installed skills, update them from the vault, or uninstall them from the current device.
 
 Check current vault/device state:
 
@@ -180,6 +188,8 @@ Sync the vault and reapply local links:
 skillsync sync
 ```
 
+If an installed skill changes in the vault, `skillsync sync` pulls the vault and reapplies local projections. Symlink targets point at the current vault copy automatically; copy targets are refreshed when links are reapplied.
+
 Scan configured target folders for already-installed local skills:
 
 ```bash
@@ -195,6 +205,7 @@ skillsync setup --name skills
 skillsync
 skillsync status
 skillsync list
+skillsync installed
 skillsync add <skill-folder-or-git-url> --skill <name>
 skillsync add https://github.com/example-org/example-skill --skill example-skill
 skillsync import hermes
@@ -213,6 +224,10 @@ skillsync daemon
 
 - `skillsync uninstall <skill>` removes the skill from the current device only.
 - `skillsync delete <skill>` removes the skill from the vault and all device manifests.
+
+## Skill names
+
+Skill names are vault-wide identifiers. Installing `my-skill` on two devices means both devices refer to the same vault skill. You can install the same skill on many devices, but you should not use the same name for two different skills in one vault; adding a skill with an existing name updates/replaces that vault entry.
 
 ## Detected versus managed skills
 
