@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/AksharP5/skillsync/compare/v0.2.1...v0.3.0) (2026-06-03)
+
+
+### Features
+
+* handle same-name import conflicts ([39bb602](https://github.com/AksharP5/skillsync/commit/39bb6022d23af7068fcf02cd97f9397d4a881dc8))
+* import codex and opencode skills ([#7](https://github.com/AksharP5/skillsync/issues/7)) ([c9e39ab](https://github.com/AksharP5/skillsync/commit/c9e39ab00c7105edebcd7b6e090a1ebd85d7d9c9))
+
 ## [0.2.1](https://github.com/AksharP5/skillsync/compare/v0.2.0...v0.2.1) (2026-06-03)
 
 
