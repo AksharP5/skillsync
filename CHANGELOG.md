@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/AksharP5/skillsync/compare/v0.3.1...v0.3.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* recover existing skill projections ([83cd43c](https://github.com/AksharP5/skillsync/commit/83cd43cfc004539c0b774c983f44800a978e350d))
+
 ## [0.3.1](https://github.com/AksharP5/skillsync/compare/v0.3.0...v0.3.1) (2026-06-03)
 
 
