@@ -20,7 +20,14 @@ User-owned files are the skill folders under `skills/`. SkillSync owns `registry
 
 ## Install on another device
 
-SkillSync is an npm-style CLI package, but it is not published to the public npm registry yet. Install it from the private GitHub repo for now:
+SkillSync is an npm-style CLI package. Once published, the nice path will be:
+
+```bash
+npx @aksharp5/skillsync setup --repo AksharP5/skills
+npx @aksharp5/skillsync add https://github.com/raroque/vibe-security-skill --skill vibe-security
+```
+
+It is not published to the public npm registry yet. Install it from the private GitHub repo for now:
 
 ```bash
 # macOS
@@ -59,7 +66,8 @@ If you run plain `skillsync setup` in an interactive terminal, it asks for the r
 ```bash
 skillsync setup
 skillsync
-skillsync add <skill-folder>
+skillsync add <skill-folder-or-git-url> --skill <name>
+skillsync add https://github.com/raroque/vibe-security-skill --skill vibe-security
 skillsync import hermes
 skillsync install <skill> --target codex
 skillsync uninstall <skill>
@@ -75,6 +83,32 @@ skillsync service install
 
 - `skillsync uninstall <skill>` removes the skill from the current device only.
 - `skillsync delete <skill>` removes the skill from the vault and all device manifests.
+
+## Add from GitHub
+
+You can import a skill directly from a GitHub repo into your private vault:
+
+```bash
+skillsync add https://github.com/raroque/vibe-security-skill --skill vibe-security
+```
+
+If the repo has multiple skills, omit `--skill` in an interactive terminal and SkillSync will ask which ones to add. Add `--target codex` or `--target '*'` to install it on the current device immediately after importing.
+
+## Publishing to npm
+
+Clone the project on the machine where your npm account is configured:
+
+```bash
+gh repo clone AksharP5/skillsync ~/projects/skillsync
+cd ~/projects/skillsync
+npm install
+npm test
+npm pack --dry-run
+npm login
+npm publish --access public
+```
+
+The package name is `@aksharp5/skillsync` because `skillsync` is already taken on npm. The installed command is still `skillsync`.
 
 ## Detected versus managed skills
 
