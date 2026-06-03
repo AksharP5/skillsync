@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/AksharP5/skillsync/compare/v0.1.3...v0.1.4) (2026-06-03)
+
+
+### Bug Fixes
+
+* show denser interactive lists ([42c4935](https://github.com/AksharP5/skillsync/commit/42c4935235dedca5bba4db1e6dd82a29daa4e273))
+
 ## [0.1.3](https://github.com/AksharP5/skillsync/compare/v0.1.2...v0.1.3) (2026-06-03)
 
 
