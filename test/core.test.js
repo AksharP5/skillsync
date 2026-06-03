@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readlink, writeFile, lstat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -120,6 +120,31 @@ test('installSkill creates device state and applyLinks creates/removes safe syml
   await assert.rejects(() => lstat(link));
   const skillStillExists = await readFile(path.join(vault, 'skills', 'bog-hyperframes', 'SKILL.md'), 'utf8');
   assert.match(skillStillExists, /# Bog/);
+});
+
+test('applyLinks replaces broken vault-owned symlinks instead of failing with EEXIST', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'opencode-skills');
+  await mkdir(target, { recursive: true });
+  await makeSkill(path.join(vault, 'skills'), 'design-taste-frontend', '# Design\n');
+  await rebuildRegistry(vault);
+
+  const deviceId = 'test-device';
+  await addTarget({ vaultPath: vault, deviceId, name: 'opencode', targetPath: target, mode: 'symlink' });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'design-taste-frontend', targets: ['opencode'] });
+
+  const link = path.join(target, 'design-taste-frontend');
+  const brokenOwnedTarget = path.join(vault, 'skills', 'missing-skill');
+  await symlink(path.relative(target, brokenOwnedTarget), link, 'dir');
+
+  await applyLinks({ vaultPath: vault, deviceId });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  const stat = await lstat(link);
+  assert.equal(stat.isSymbolicLink(), true);
+  const resolved = path.resolve(path.dirname(link), await readlink(link));
+  assert.equal(resolved, path.join(vault, 'skills', 'design-taste-frontend'));
 });
 
 test('scanTargets records unmanaged local skills from a separate scan path', async () => {

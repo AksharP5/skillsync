@@ -227,20 +227,42 @@ async function removeStaleOwnedProjections({ vaultPath, targetPath, desired }) {
 }
 
 async function createSymlinkProjection(source, destination) {
-  if (await exists(destination)) {
-    if (await isOwnedSymlink(destination, path.dirname(path.dirname(source))) || await isOwnedCopy(destination)) {
+  const vaultPath = path.dirname(path.dirname(source));
+  const existing = await projectionInfo(destination, vaultPath);
+  if (existing.exists) {
+    if (existing.ownedSymlink) {
+      if (existing.resolved === path.resolve(source)) return;
+      await removePath(destination);
+    } else if (existing.ownedCopy) {
       await removePath(destination);
     } else {
       throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
     }
   }
+  await writeSymlinkProjection(source, destination, vaultPath);
+}
+
+async function writeSymlinkProjection(source, destination, vaultPath) {
   const relativeSource = path.relative(path.dirname(destination), source);
-  await symlink(relativeSource, destination, 'dir');
+  try {
+    await symlink(relativeSource, destination, 'dir');
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const existing = await projectionInfo(destination, vaultPath);
+    if (existing.ownedSymlink && existing.resolved === path.resolve(source)) return;
+    if (existing.ownedSymlink || existing.ownedCopy) {
+      await removePath(destination);
+      await symlink(relativeSource, destination, 'dir');
+      return;
+    }
+    throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
+  }
 }
 
 async function createCopyProjection(source, destination, skillName, vaultPath) {
-  if (await exists(destination)) {
-    if (await isOwnedCopy(destination) || await isOwnedSymlink(destination, vaultPath)) {
+  const existing = await projectionInfo(destination, vaultPath);
+  if (existing.exists) {
+    if (existing.ownedCopy || existing.ownedSymlink) {
       await removePath(destination);
     } else {
       throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
@@ -250,17 +272,41 @@ async function createCopyProjection(source, destination, skillName, vaultPath) {
   await writeFile(path.join(destination, '.skillsync-owned.json'), JSON.stringify({ skill: skillName, vault: vaultPath }, null, 2));
 }
 
-async function isOwnedSymlink(targetPath, vaultPath) {
+async function symlinkInfo(targetPath, vaultPath) {
   try {
     const info = await lstat(targetPath);
-    if (!info.isSymbolicLink()) return false;
+    if (!info.isSymbolicLink()) return null;
     const linked = await readlink(targetPath);
     const resolved = path.resolve(path.dirname(targetPath), linked);
-    return resolved.startsWith(path.join(vaultPath, 'skills') + path.sep);
+    return {
+      resolved,
+      owned: resolved.startsWith(path.join(vaultPath, 'skills') + path.sep),
+    };
   } catch (error) {
-    if (error.code === 'ENOENT') return false;
+    if (error.code === 'ENOENT') return null;
     throw error;
   }
+}
+
+async function projectionInfo(targetPath, vaultPath) {
+  try {
+    await lstat(targetPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { exists: false, ownedSymlink: false, ownedCopy: false, resolved: null };
+    throw error;
+  }
+  const link = await symlinkInfo(targetPath, vaultPath);
+  return {
+    exists: true,
+    ownedSymlink: Boolean(link?.owned),
+    ownedCopy: link ? false : await isOwnedCopy(targetPath),
+    resolved: link?.resolved || null,
+  };
+}
+
+async function isOwnedSymlink(targetPath, vaultPath) {
+  const link = await symlinkInfo(targetPath, vaultPath);
+  return Boolean(link?.owned);
 }
 
 async function isOwnedCopy(targetPath) {
