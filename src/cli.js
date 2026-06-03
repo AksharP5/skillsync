@@ -97,10 +97,29 @@ async function resolveRepoCloneUrl(repo) {
   if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return repo;
   if (!repo.includes('/')) return repo;
   if (!await commandExists('gh')) return repo;
+  return verifiedRepoCloneUrl(repo);
+}
+
+async function verifiedRepoCloneUrl(repo) {
   const { stdout } = await gh(['repo', 'view', repo, '--json', 'isPrivate,url', '--jq', '.']);
   const view = JSON.parse(stdout);
   if (!view.isPrivate) throw new Error(`${repo} exists but is not private. Make it private before using it as a skill vault.`);
   return view.url;
+}
+
+async function ensureOwnedVaultRepo(owner, name) {
+  const repo = `${owner}/${name}`;
+  let repoExists = true;
+  try {
+    await gh(['repo', 'view', repo]);
+  } catch {
+    repoExists = false;
+  }
+  if (!repoExists) {
+    console.log(`Creating private GitHub repo ${repo}...`);
+    await gh(['repo', 'create', repo, '--private', '--description', 'Private AI agent skills vault'], undefined, { inherit: true });
+  }
+  return verifiedRepoCloneUrl(repo);
 }
 
 async function setup(rest) {
@@ -119,24 +138,25 @@ async function setup(rest) {
   if (!repo) {
     const { stdout: ownerOut } = await gh(['api', 'user', '--jq', '.login']);
     const owner = ownerOut.trim();
-    const name = flagValue(rest, '--name') || (yes || !process.stdin.isTTY
-      ? 'skills'
-      : await input({ message: 'GitHub skills vault repo name:', default: 'skills' }));
-    repo = `${owner}/${name}`;
-    let repoExists = true;
-    try {
-      await gh(['repo', 'view', repo]);
-    } catch {
-      repoExists = false;
+    const nameArg = flagValue(rest, '--name');
+    if (nameArg || yes || !process.stdin.isTTY) {
+      repo = await ensureOwnedVaultRepo(owner, nameArg || 'skills');
+    } else {
+      const setupMode = await select({
+        message: 'Which skills vault do you want to use?',
+        choices: [
+          { name: 'Use an existing GitHub repo', value: 'existing' },
+          { name: `Create or use ${owner}/<name>`, value: 'owned' },
+        ],
+      });
+      if (setupMode === 'existing') {
+        const existingRepo = await input({ message: 'Existing vault repo (owner/repo or URL):', default: `${owner}/skills` });
+        repo = await resolveRepoCloneUrl(existingRepo);
+      } else {
+        const name = await input({ message: `Vault repo name under ${owner}:`, default: 'skills' });
+        repo = await ensureOwnedVaultRepo(owner, name);
+      }
     }
-    if (!repoExists) {
-      console.log(`Creating private GitHub repo ${repo}...`);
-      await gh(['repo', 'create', repo, '--private', '--description', 'Private AI agent skills vault'], undefined, { inherit: true });
-    }
-    const { stdout: viewOut } = await gh(['repo', 'view', repo, '--json', 'isPrivate,url', '--jq', '.']);
-    const view = JSON.parse(viewOut);
-    if (!view.isPrivate) throw new Error(`${repo} exists but is not private. Make it private before using it as a skill vault.`);
-    repo = view.url;
   } else {
     repo = await resolveRepoCloneUrl(repo);
   }

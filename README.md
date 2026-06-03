@@ -89,13 +89,18 @@ Connect to an existing vault:
 skillsync setup --repo AksharP5/skills
 ```
 
-Or create/select a vault repo under your GitHub account:
+Or create/select a vault repo interactively:
 
 ```bash
-skillsync setup --name skills
+skillsync setup
 ```
 
-If you run plain `skillsync setup` in an interactive terminal, it asks for the repo name and defaults to `skills`. `setup --name` creates `OWNER/skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
+If you run plain `skillsync setup` in an interactive terminal, it first asks which vault type to use:
+
+- Choose `Use an existing GitHub repo`, then enter a repo like `AksharP5/skills`.
+- Choose `Create or use OWNER/<name>`, then enter a repo name like `skills`.
+
+`setup --name skills` is the non-interactive form of the second option. It creates `OWNER/skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
 
 You can also run commands without a global install:
 
