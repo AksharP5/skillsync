@@ -152,9 +152,20 @@ Add local agent targets:
 
 ```bash
 skillsync target add codex ~/.codex/skills
+skillsync target add opencode ~/.config/opencode/skills
 skillsync target add claude ~/.claude/skills
 skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
 ```
+
+Import existing local agent skills into the vault:
+
+```bash
+skillsync import hermes
+skillsync import codex
+skillsync import opencode
+```
+
+`import` scans the default skill folder for that agent (`~/.hermes/skills`, `~/.codex/skills`, or `~/.config/opencode/skills`), copies each `SKILL.md` folder into the vault, and pushes the vault update.
 
 Add a skill folder to the vault:
 
@@ -208,11 +219,12 @@ skillsync list
 skillsync installed
 skillsync add <skill-folder-or-git-url> --skill <name>
 skillsync add https://github.com/example-org/example-skill --skill example-skill
-skillsync import hermes
+skillsync import <hermes|codex|opencode>
 skillsync install <skill> --target codex
 skillsync uninstall <skill>
 skillsync delete <skill>
 skillsync target add codex ~/.codex/skills
+skillsync target add opencode ~/.config/opencode/skills
 skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
 skillsync scan
 skillsync sync
