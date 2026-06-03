@@ -102,6 +102,12 @@ async function promptWithEscape(promptPromise, escapeValue = null) {
   }
 }
 
+function promptPageSize(itemCount, { min = 8, max = 28, reservedRows = 6 } = {}) {
+  const rows = Number(process.stdout.rows) || 30;
+  const availableRows = Math.max(min, rows - reservedRows);
+  return Math.max(1, Math.min(itemCount, max, availableRows));
+}
+
 async function configured() {
   const config = await loadConfig();
   if (!config.repoPath || !await exists(config.repoPath)) {
@@ -458,7 +464,7 @@ async function chooseInstallTargets(config, rest) {
   return promptWithEscape(checkbox({
     message: 'Choose local targets',
     loop: false,
-    pageSize: Math.min(12, available.length),
+    pageSize: promptPageSize(available.length, { min: 6, max: 18 }),
     choices: available.map((target) => ({ name: target, value: target, checked: true })),
     instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
   }), []);
@@ -585,20 +591,21 @@ async function runUi() {
 
   while (true) {
     await refreshChangedRegistryEntries(config.repoPath);
+    const menuChoices = [
+      { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
+      { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
+      { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
+      { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
+      { name: 'Import Hermes skills', value: 'import-hermes', description: 'Import detected Hermes skills into the vault.' },
+      { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
+      { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
+      { name: 'Quit', value: 'quit' },
+    ];
     const choice = await promptWithEscape(select({
       message: 'SkillSync',
       loop: false,
-      pageSize: 8,
-      choices: [
-        { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
-        { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
-        { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
-        { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
-        { name: 'Import Hermes skills', value: 'import-hermes', description: 'Import detected Hermes skills into the vault.' },
-        { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
-        { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
-        { name: 'Quit', value: 'quit' },
-      ],
+      pageSize: promptPageSize(menuChoices.length, { min: 8, max: 12 }),
+      choices: menuChoices,
     }));
     if (!choice || choice === 'quit') return;
     if (choice === 'skills') await skillsScreen(config);
@@ -623,7 +630,7 @@ async function skillsScreen(config) {
   const selected = await promptWithEscape(checkbox({
     message: `Install skills on ${device.display_name}`,
     loop: false,
-    pageSize: Math.min(14, Math.max(7, names.length)),
+    pageSize: promptPageSize(names.length, { min: 10, max: 32, reservedRows: 5 }),
     instructions: 'Space toggles skills. Enter applies changes. Esc goes back.',
     choices: names.map((name) => {
       const targets = device.installed[name] || [];
@@ -633,7 +640,6 @@ async function skillsScreen(config) {
         short: name,
         value: name,
         checked: installedNames.has(name),
-        description: targets.length ? `Installed in ${targets.join(', ')}` : 'Not installed on this device',
       };
     }),
   }));
@@ -674,7 +680,7 @@ async function chooseTargets(config) {
   return promptWithEscape(checkbox({
     message: 'Install into which targets?',
     loop: false,
-    pageSize: Math.min(12, targetNames.length),
+    pageSize: promptPageSize(targetNames.length, { min: 6, max: 18 }),
     choices: targetNames.map((name) => ({ name, value: name, checked: true })),
     required: true,
     instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
@@ -702,7 +708,12 @@ async function targetsScreen(config) {
     { name: 'Add target', value: 'add' },
     { name: 'Back', value: 'back' },
   ]);
-  const choice = await promptWithEscape(select({ message: 'Targets on this device', choices, loop: false, pageSize: Math.min(10, choices.length) }));
+  const choice = await promptWithEscape(select({
+    message: 'Targets on this device',
+    choices,
+    loop: false,
+    pageSize: promptPageSize(choices.length, { min: 6, max: 18 }),
+  }));
   if (!choice || choice === 'back') return;
   if (choice === 'add') {
     const name = await input({ message: 'Target name (codex, claude, hermes, custom):' });
