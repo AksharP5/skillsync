@@ -48,6 +48,40 @@ test('addSkillToVault copies a SKILL.md folder and updates registry', async () =
   assert.match(copied, /# Bog/);
 });
 
+test('addSkillToVault skips identical same-name skills already in the vault', async () => {
+  const root = await tempDir();
+  const source = await makeSkill(root, 'shared-skill', '# Shared\n');
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
+  await rebuildRegistry(vault);
+
+  const result = await addSkillToVault({ vaultPath: vault, sourcePath: source });
+
+  assert.equal(result.name, 'shared-skill');
+  assert.equal(result.status, 'identical');
+  const copied = await readFile(path.join(vault, 'skills', 'shared-skill', 'SKILL.md'), 'utf8');
+  assert.equal(copied, '# Shared\n');
+});
+
+test('addSkillToVault refuses different same-name skills unless overwrite is explicit', async () => {
+  const root = await tempDir();
+  const source = await makeSkill(root, 'shared-skill', '# Local\n');
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Vault\n');
+  await rebuildRegistry(vault);
+
+  await assert.rejects(
+    () => addSkillToVault({ vaultPath: vault, sourcePath: source }),
+    /Skill already exists in vault with different content: shared-skill/,
+  );
+
+  const result = await addSkillToVault({ vaultPath: vault, sourcePath: source, overwrite: true });
+
+  assert.equal(result.status, 'overwritten');
+  const copied = await readFile(path.join(vault, 'skills', 'shared-skill', 'SKILL.md'), 'utf8');
+  assert.equal(copied, '# Local\n');
+});
+
 test('rebuildRegistry removes stale entries and adds folders from skills directory', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');

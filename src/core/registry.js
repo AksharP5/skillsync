@@ -49,17 +49,56 @@ export async function validateSkillFolder(sourcePath) {
   }
 }
 
-export async function addSkillToVault({ vaultPath, sourcePath, name }) {
+export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   await ensureVault(vaultPath);
   await validateSkillFolder(sourcePath);
   const skillName = name || await readSkillName(sourcePath);
   if (!skillName) throw new Error(`Could not derive a skill name from ${sourcePath}`);
   const destination = path.join(vaultPath, 'skills', skillName);
-  await copyDir(sourcePath, destination);
+  const sourceHash = await hashDirectory(sourcePath);
+  if (!await exists(destination)) {
+    return { name: skillName, path: destination, status: 'new', sourceHash };
+  }
+  await validateSkillFolder(destination);
+  const vaultHash = await hashDirectory(destination);
+  return {
+    name: skillName,
+    path: destination,
+    status: sourceHash === vaultHash ? 'identical' : 'different',
+    sourceHash,
+    vaultHash,
+  };
+}
+
+export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite = false }) {
+  const comparison = await compareSkillToVault({ vaultPath, sourcePath, name });
+  if (comparison.status === 'different' && !overwrite) {
+    throw new Error(`Skill already exists in vault with different content: ${comparison.name}`);
+  }
+  if (comparison.status === 'identical') {
+    const registry = await loadRegistry(vaultPath);
+    if (!registry.skills[comparison.name] || registry.skills[comparison.name].hash !== comparison.vaultHash) {
+      registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+      await saveRegistry(vaultPath, registry);
+    }
+    return { name: comparison.name, path: comparison.path, status: 'identical' };
+  }
+  await copyDir(sourcePath, comparison.path);
+  const registry = await loadRegistry(vaultPath);
+  registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+  await saveRegistry(vaultPath, registry);
+  return {
+    name: comparison.name,
+    path: comparison.path,
+    status: comparison.status === 'different' ? 'overwritten' : 'added',
+  };
+}
+
+export async function ensureSkillInRegistry(vaultPath, skillName) {
   const registry = await loadRegistry(vaultPath);
   registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
   await saveRegistry(vaultPath, registry);
-  return { name: skillName, path: destination };
+  return registry.skills[skillName];
 }
 
 export async function registryEntryForSkill(vaultPath, skillName) {

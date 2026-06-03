@@ -165,7 +165,7 @@ skillsync import codex
 skillsync import opencode
 ```
 
-`import` scans the default skill folder for that agent (`~/.hermes/skills`, `~/.codex/skills`, or `~/.config/opencode/skills`), copies each `SKILL.md` folder into the vault, and pushes the vault update.
+`import` scans the default skill folder for that agent (`~/.hermes/skills`, `~/.codex/skills`, or `~/.config/opencode/skills`), copies each `SKILL.md` folder into the vault, and pushes the vault update. If the local folder is exactly the configured target path for that agent, SkillSync also replaces it with a vault-managed projection so future syncs keep it current.
 
 Add a skill folder to the vault:
 
@@ -217,9 +217,9 @@ skillsync
 skillsync status
 skillsync list
 skillsync installed
-skillsync add <skill-folder-or-git-url> --skill <name>
+skillsync add <skill-folder-or-git-url> --skill <name> [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync add https://github.com/example-org/example-skill --skill example-skill
-skillsync import <hermes|codex|opencode>
+skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync install <skill> --target codex
 skillsync uninstall <skill>
 skillsync delete <skill>
@@ -239,7 +239,20 @@ skillsync daemon
 
 ## Skill names
 
-Skill names are vault-wide identifiers. Installing `my-skill` on two devices means both devices refer to the same vault skill. You can install the same skill on many devices, but you should not use the same name for two different skills in one vault; adding a skill with an existing name updates/replaces that vault entry.
+Skill names are vault-wide identifiers. Installing `my-skill` on two devices means both devices refer to the same vault skill. You can install the same skill on many devices, but you should not use the same name for two different skills in one vault.
+
+When `skillsync add` or `skillsync import` sees a same-name skill:
+
+- identical content: it keeps the single vault copy. If the local folder is in a configured target path, SkillSync replaces the local folder with the vault-managed link/copy.
+- different content: it shows a diff summary and asks whether to keep the vault version, overwrite the vault with the local/source version, save the local/source version under a different name, or skip.
+
+For scripts/non-interactive runs, different same-name conflicts are skipped by default. Override with:
+
+```bash
+skillsync import codex --conflict use-vault
+skillsync import codex --conflict overwrite-vault
+skillsync import codex --conflict rename --as my-skill-mac
+```
 
 ## Detected versus managed skills
 
@@ -260,6 +273,25 @@ skillsync scan
 - Linux: systemd user service
 
 The service periodically pulls/pushes the GitHub vault and reapplies symlinks.
+
+On macOS, install and verify the LaunchAgent:
+
+```bash
+skillsync service install
+launchctl print gui/$(id -u)/dev.skillsync.daemon
+```
+
+After upgrading a linked/local CLI checkout on macOS, restart the LaunchAgent:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/dev.skillsync.daemon
+```
+
+On Linux, verify the systemd user service:
+
+```bash
+systemctl --user status skillsync.service --no-pager
+```
 
 ## Development
 

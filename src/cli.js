@@ -8,7 +8,7 @@ import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
 import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, removeTarget, scanTargets, uninstallSkill } from './core/device.js';
 import { ensureDir, exists, expandHome, removePath } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
-import { addSkillToVault, deleteSkillFromVault, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
+import { addSkillToVault, compareSkillToVault, deleteSkillFromVault, ensureSkillInRegistry, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
 import { cloneSkillSource, discoverSkillFolders, importSourceForAgent, isRemoteSkillSource, selectDiscoveredSkills, supportedImportSources } from './core/source.js';
 import { syncVault } from './core/sync.js';
 
@@ -384,6 +384,133 @@ async function installedCommand() {
   }
 }
 
+function conflictAction(rest) {
+  const action = flagValue(rest, '--conflict');
+  if (!action) return undefined;
+  const allowed = ['skip', 'use-vault', 'overwrite-vault', 'rename'];
+  if (!allowed.includes(action)) throw new Error(`Unsupported conflict action: ${action}. Use one of: ${allowed.join(', ')}`);
+  return action;
+}
+
+async function diffSummary(leftPath, rightPath) {
+  try {
+    const { stdout } = await git(['diff', '--no-index', '--stat', '--', leftPath, rightPath]);
+    return stdout.trim();
+  } catch (error) {
+    return String(error.message).replace(/^git .* failed \(\d+\)\n/, '').trim();
+  }
+}
+
+async function targetsMatchingSourcePath({ config, skillName, sourcePath, preferredTargets }) {
+  const device = await loadDevice(config.repoPath, config.deviceId);
+  const candidates = preferredTargets?.length ? preferredTargets : Object.keys(device.targets || {});
+  const resolvedSource = path.resolve(sourcePath);
+  return candidates.filter((targetName) => {
+    const targetConfig = device.targets?.[targetName];
+    if (!targetConfig) return false;
+    const expected = path.resolve(expandHome(targetConfig.path), skillName);
+    return resolvedSource === expected;
+  });
+}
+
+async function installManagedSkill({ config, skillName, targets, sourcePath }) {
+  if (!targets?.length) return { installed: false, replacedTarget: null };
+  await ensureSkillInRegistry(config.repoPath, skillName);
+  await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
+  const matchingTargets = sourcePath ? await targetsMatchingSourcePath({ config, skillName, sourcePath, preferredTargets: targets }) : [];
+  if (matchingTargets.length && await exists(sourcePath)) {
+    await removePath(sourcePath);
+  }
+  await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  return { installed: true, replacedTarget: matchingTargets[0] || null };
+}
+
+async function chooseConflictAction({ rest, skillName, canUseVault }) {
+  const explicit = conflictAction(rest);
+  if (explicit) return explicit;
+  if (!process.stdin.isTTY) return 'skip';
+  return promptWithEscape(select({
+    message: `${skillName} already exists in the vault with different content. What should SkillSync do?`,
+    loop: false,
+    pageSize: 4,
+    choices: [
+      { name: canUseVault ? 'Keep vault version and replace local with vault-managed projection' : 'Keep vault version and skip this local copy', value: 'use-vault' },
+      { name: 'Overwrite vault with this local/source version', value: 'overwrite-vault' },
+      { name: 'Save this local/source version under a different name', value: 'rename' },
+      { name: 'Skip for now', value: 'skip' },
+    ],
+  }), 'skip');
+}
+
+async function renamedSkillName({ rest, currentName }) {
+  const explicit = flagValue(rest, '--as') || flagValue(rest, '--name');
+  if (explicit && explicit !== currentName) return explicit;
+  if (!process.stdin.isTTY) throw new Error(`--conflict rename requires --as <new-name> for ${currentName}`);
+  return input({ message: `New vault name for ${currentName}:`, default: `${currentName}-local` });
+}
+
+async function addSkillWithConflictResolution({ config, sourcePath, name, rest = [], targets = [] }) {
+  const comparison = await compareSkillToVault({ vaultPath: config.repoPath, sourcePath, name });
+  if (comparison.status === 'new') {
+    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name });
+    const managed = await installManagedSkill({ config, skillName: added.name, targets, sourcePath });
+    return { name: added.name, status: managed.replacedTarget ? 'added-and-linked' : 'added' };
+  }
+
+  if (comparison.status === 'identical') {
+    const managed = await installManagedSkill({ config, skillName: comparison.name, targets, sourcePath });
+    return { name: comparison.name, status: managed.replacedTarget ? 'consolidated' : 'identical' };
+  }
+
+  console.log(`\n${comparison.name} already exists in the vault with different content.`);
+  const summary = await diffSummary(comparison.path, sourcePath);
+  if (summary) console.log(`Diff summary:\n${summary}\n`);
+  const action = await chooseConflictAction({ rest, skillName: comparison.name, canUseVault: Boolean(targets.length) });
+
+  if (action === 'skip') {
+    return { name: comparison.name, status: 'skipped-conflict' };
+  }
+
+  if (action === 'use-vault') {
+    if (!targets.length) {
+      console.log(`Keeping vault version for ${comparison.name}; local/source copy was left unchanged because no matching local target is configured.`);
+      return { name: comparison.name, status: 'kept-vault' };
+    }
+    const managed = await installManagedSkill({ config, skillName: comparison.name, targets, sourcePath });
+    return { name: comparison.name, status: managed.replacedTarget ? 'replaced-local-with-vault' : 'kept-vault' };
+  }
+
+  if (action === 'overwrite-vault') {
+    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name, overwrite: true });
+    const managed = await installManagedSkill({ config, skillName: added.name, targets, sourcePath });
+    return { name: added.name, status: managed.replacedTarget ? 'overwritten-and-linked' : 'overwritten' };
+  }
+
+  if (action === 'rename') {
+    const newName = await renamedSkillName({ rest, currentName: comparison.name });
+    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name: newName });
+    return { name: added.name, status: 'renamed' };
+  }
+
+  return { name: comparison.name, status: 'skipped-conflict' };
+}
+
+function resultSummary(result) {
+  const labels = {
+    added: 'added to vault',
+    'added-and-linked': 'added to vault and linked locally',
+    identical: 'already identical in vault',
+    consolidated: 'already identical; local folder consolidated to vault link',
+    'skipped-conflict': 'skipped because vault version differs',
+    'kept-vault': 'kept vault version',
+    'replaced-local-with-vault': 'replaced local folder with vault version',
+    overwritten: 'overwrote vault with source version',
+    'overwritten-and-linked': 'overwrote vault and linked locally',
+    renamed: 'saved under a different vault name',
+  };
+  return `${result.name}: ${labels[result.status] || result.status}`;
+}
+
 async function addSkill(rest) {
   const source = rest[0];
   if (!source) throw new Error('Usage: skillsync add <skill-folder-or-git-url> [--skill name] [--target target]');
@@ -393,14 +520,16 @@ async function addSkill(rest) {
     return addRemoteSkills(source, rest, config);
   }
 
-  const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath: expandHome(source), name: flagValue(rest, '--name') });
   const targets = await chooseInstallTargets(config, rest);
-  if (targets.length) {
-    await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName: added.name, targets });
-    await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
-  }
+  const result = await addSkillWithConflictResolution({
+    config,
+    sourcePath: expandHome(source),
+    name: flagValue(rest, '--name'),
+    rest,
+    targets,
+  });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
-  console.log(`Added ${added.name} to the vault${targets.length ? ` and installed to ${targets.join(', ')}` : ''}.`);
+  console.log(resultSummary(result));
 }
 
 async function addRemoteSkills(source, rest, config) {
@@ -432,19 +561,21 @@ async function addRemoteSkills(source, rest, config) {
     }
 
     const targets = await chooseInstallTargets(config, rest);
-    const added = [];
+    const results = [];
     for (const skill of selected) {
-      const result = await addSkillToVault({ vaultPath: config.repoPath, sourcePath: skill.path, name: skill.name });
-      added.push(result.name);
-      if (targets.length) {
-        await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName: result.name, targets });
-      }
+      const result = await addSkillWithConflictResolution({
+        config,
+        sourcePath: skill.path,
+        name: skill.name,
+        rest,
+        targets,
+      });
+      results.push(result);
     }
-    if (targets.length) await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
 
-    console.log(`Added ${added.length} skill${added.length === 1 ? '' : 's'} to the vault: ${added.join(', ')}`);
-    if (targets.length) console.log(`Installed on this device: ${targets.join(', ')}`);
+    console.log(`Processed ${results.length} skill${results.length === 1 ? '' : 's'} from ${source}:`);
+    for (const result of results) console.log(`- ${resultSummary(result)}`);
   } finally {
     await cloned.cleanup();
   }
@@ -464,9 +595,23 @@ async function importSkills(rest) {
         choices: found.map((skill) => ({ name: `${skill.name} (${skill.relative})`, value: skill })),
       })
     : found;
+  const results = [];
   for (const skill of selected) {
-    await addSkillToVault({ vaultPath: config.repoPath, sourcePath: skill.path, name: skill.name });
-    console.log(`Imported ${skill.name}`);
+    const targets = await targetsMatchingSourcePath({
+      config,
+      skillName: skill.name,
+      sourcePath: skill.path,
+      preferredTargets: [importSource.name],
+    });
+    const result = await addSkillWithConflictResolution({
+      config,
+      sourcePath: skill.path,
+      name: skill.name,
+      rest,
+      targets,
+    });
+    results.push(result);
+    console.log(resultSummary(result));
   }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
 }
@@ -996,5 +1141,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target]\n  skillsync import <hermes|codex|opencode>\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }
