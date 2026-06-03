@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/AksharP5/skillsync/compare/v0.1.2...v0.1.3) (2026-06-03)
+
+
+### Bug Fixes
+
+* improve interactive skill browser ([3d316cf](https://github.com/AksharP5/skillsync/commit/3d316cf2384dacb0aca2059f273b0072020f1e8e))
+
 ## [0.1.2](https://github.com/AksharP5/skillsync/compare/v0.1.1...v0.1.2) (2026-06-03)
 
 
