@@ -84,6 +84,24 @@ function hasFlag(rest, flag) {
   return rest.includes(flag);
 }
 
+async function promptWithEscape(promptPromise, escapeValue = null) {
+  if (!process.stdin.isTTY) return promptPromise;
+  const onKeypress = (_value, key) => {
+    if (key?.name === 'escape' && typeof promptPromise.cancel === 'function') {
+      promptPromise.cancel();
+    }
+  };
+  process.stdin.on('keypress', onKeypress);
+  try {
+    return await promptPromise;
+  } catch (error) {
+    if (error?.name === 'CancelPromptError') return escapeValue;
+    throw error;
+  } finally {
+    process.stdin.off('keypress', onKeypress);
+  }
+}
+
 async function configured() {
   const config = await loadConfig();
   if (!config.repoPath || !await exists(config.repoPath)) {
@@ -142,13 +160,16 @@ async function setup(rest) {
     if (nameArg || yes || !process.stdin.isTTY) {
       repo = await ensureOwnedVaultRepo(owner, nameArg || 'skills');
     } else {
-      const setupMode = await select({
+      const setupMode = await promptWithEscape(select({
         message: 'Which skills vault do you want to use?',
+        loop: false,
+        pageSize: 2,
         choices: [
           { name: 'Use an existing GitHub repo', value: 'existing' },
           { name: `Create or use ${owner}/<name>`, value: 'owned' },
         ],
-      });
+      }));
+      if (!setupMode) return;
       if (setupMode === 'existing') {
         const existingRepo = await input({ message: 'Existing vault repo (owner/repo or URL):', default: `${owner}/skills` });
         repo = await resolveRepoCloneUrl(existingRepo);
@@ -434,10 +455,13 @@ async function chooseInstallTargets(config, rest) {
   if (hasFlag(rest, '--no-install') || hasFlag(rest, '--yes') || hasFlag(rest, '-y') || !process.stdin.isTTY || !available.length) return [];
   const shouldInstall = await confirm({ message: 'Install on this device now?', default: true });
   if (!shouldInstall) return [];
-  return checkbox({
+  return promptWithEscape(checkbox({
     message: 'Choose local targets',
+    loop: false,
+    pageSize: Math.min(12, available.length),
     choices: available.map((target) => ({ name: target, value: target, checked: true })),
-  });
+    instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
+  }), []);
 }
 
 async function target(rest) {
@@ -561,20 +585,22 @@ async function runUi() {
 
   while (true) {
     await refreshChangedRegistryEntries(config.repoPath);
-    const choice = await select({
+    const choice = await promptWithEscape(select({
       message: 'SkillSync',
+      loop: false,
+      pageSize: 8,
       choices: [
-        { name: 'Browse/install skills', value: 'skills' },
-        { name: 'Devices', value: 'devices' },
-        { name: 'Targets', value: 'targets' },
-        { name: 'Add skill from folder', value: 'add' },
-        { name: 'Import Hermes skills', value: 'import-hermes' },
-        { name: 'Scan local targets', value: 'scan' },
-        { name: 'Sync now', value: 'sync' },
+        { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
+        { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
+        { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
+        { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
+        { name: 'Import Hermes skills', value: 'import-hermes', description: 'Import detected Hermes skills into the vault.' },
+        { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
+        { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
         { name: 'Quit', value: 'quit' },
       ],
-    });
-    if (choice === 'quit') return;
+    }));
+    if (!choice || choice === 'quit') return;
     if (choice === 'skills') await skillsScreen(config);
     if (choice === 'devices') await devicesScreen(config);
     if (choice === 'targets') await targetsScreen(config);
@@ -593,41 +619,66 @@ async function skillsScreen(config) {
     console.log('\nNo skills in vault yet. Use Add/import first.\n');
     return;
   }
-  const skill = await select({
-    message: `Available skills on ${device.display_name}`,
-    choices: names.map((name) => ({
-      name: `${device.installed[name] ? '✓' : '○'} ${name}${device.installed[name] ? ` [${device.installed[name].join(', ')}]` : ''}`,
-      value: name,
-    })).concat([{ name: 'Back', value: null }]),
-  });
-  if (!skill) return;
-  const action = await select({
-    message: skill,
-    choices: [
-      { name: device.installed[skill] ? 'Remove from this device' : 'Install on this device', value: 'toggle' },
-      { name: 'Delete from vault', value: 'delete' },
-      { name: 'Back', value: 'back' },
-    ],
-  });
-  if (action === 'toggle') {
-    if (device.installed[skill]) await uninstall([skill]);
-    else {
-      const targets = await chooseTargets(config);
-      await install([skill, '--target', targets.join(',')]);
-    }
+  const installedNames = new Set(Object.keys(device.installed || {}));
+  const selected = await promptWithEscape(checkbox({
+    message: `Install skills on ${device.display_name}`,
+    loop: false,
+    pageSize: Math.min(14, Math.max(7, names.length)),
+    instructions: 'Space toggles skills. Enter applies changes. Esc goes back.',
+    choices: names.map((name) => {
+      const targets = device.installed[name] || [];
+      const targetLabel = targets.length ? `  [${targets.join(', ')}]` : '';
+      return {
+        name: `${name}${targetLabel}`,
+        short: name,
+        value: name,
+        checked: installedNames.has(name),
+        description: targets.length ? `Installed in ${targets.join(', ')}` : 'Not installed on this device',
+      };
+    }),
+  }));
+  if (!selected) return;
+
+  const selectedNames = new Set(selected);
+  const toInstall = names.filter((name) => selectedNames.has(name) && !installedNames.has(name));
+  const toUninstall = names.filter((name) => !selectedNames.has(name) && installedNames.has(name));
+  if (!toInstall.length && !toUninstall.length) {
+    console.log('\nNo install changes.\n');
+    return;
   }
-  if (action === 'delete') await deleteSkill([skill]);
+
+  let targets = [];
+  if (toInstall.length) {
+    targets = await chooseTargets(config);
+    if (!targets.length) return;
+  }
+
+  for (const skillName of toInstall) {
+    await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
+  }
+  for (const skillName of toUninstall) {
+    await uninstallSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName });
+  }
+  await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+
+  const installedText = toInstall.length ? `Installed ${toInstall.join(', ')} to ${targets.join(', ')}.` : '';
+  const removedText = toUninstall.length ? `Removed ${toUninstall.join(', ')} from this device.` : '';
+  console.log(`\n${[installedText, removedText].filter(Boolean).join(' ')}\n`);
 }
 
 async function chooseTargets(config) {
   const device = await loadDevice(config.repoPath, config.deviceId);
   const targetNames = Object.keys(device.targets);
   if (!targetNames.length) throw new Error('No targets configured. Add one from the Targets screen.');
-  return checkbox({
+  return promptWithEscape(checkbox({
     message: 'Install into which targets?',
+    loop: false,
+    pageSize: Math.min(12, targetNames.length),
     choices: targetNames.map((name) => ({ name, value: name, checked: true })),
     required: true,
-  });
+    instructions: 'Space toggles targets. Enter confirms. Esc cancels.',
+  }), []);
 }
 
 async function devicesScreen(config) {
@@ -651,8 +702,8 @@ async function targetsScreen(config) {
     { name: 'Add target', value: 'add' },
     { name: 'Back', value: 'back' },
   ]);
-  const choice = await select({ message: 'Targets on this device', choices });
-  if (choice === 'back') return;
+  const choice = await promptWithEscape(select({ message: 'Targets on this device', choices, loop: false, pageSize: Math.min(10, choices.length) }));
+  if (!choice || choice === 'back') return;
   if (choice === 'add') {
     const name = await input({ message: 'Target name (codex, claude, hermes, custom):' });
     const targetPath = await input({ message: 'Target skill directory path:' });

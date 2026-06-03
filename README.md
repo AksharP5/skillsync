@@ -43,6 +43,8 @@ Open the interactive UI:
 skillsync
 ```
 
+In the interactive UI, use arrow keys to move, Space to toggle checklist items, Enter to apply, and Esc to go back.
+
 ## Requirements
 
 - Node.js 20 or newer
@@ -123,6 +125,14 @@ List available skills:
 ```bash
 skillsync list
 ```
+
+Browse and install multiple vault skills at once:
+
+```bash
+skillsync
+```
+
+Choose `Browse/install skills`, press Space to select every skill you want installed on this device, then press Enter to apply the changes.
 
 Check current vault/device state:
 
