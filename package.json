@@ -1,14 +1,25 @@
 {
-  "name": "@aksharp5/skillsync",
+  "name": "@akshar5/skillsync",
   "version": "0.1.0",
   "description": "Local-first GitHub-backed skill vault sync client for AI agent skills.",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/AksharP5/skillsync.git"
+    "url": "git+https://github.com/AksharP5/skillsync.git"
+  },
+  "homepage": "https://github.com/AksharP5/skillsync#readme",
+  "bugs": {
+    "url": "https://github.com/AksharP5/skillsync/issues"
   },
   "bin": {
-    "skillsync": "./src/cli.js"
+    "skillsync": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "node --test",

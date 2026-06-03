@@ -20,36 +20,30 @@ User-owned files are the skill folders under `skills/`. SkillSync owns `registry
 
 ## Install on another device
 
-SkillSync is an npm-style CLI package. Once published, the nice path will be:
+Install SkillSync from npm:
 
 ```bash
-npx @aksharp5/skillsync setup --repo AksharP5/skills
-npx @aksharp5/skillsync add https://github.com/example-org/example-skill --skill example-skill
+npm install -g @akshar5/skillsync
 ```
 
-It is not published to the public npm registry yet. Install it from the private GitHub repo for now:
+Then connect to your private skills vault:
 
 ```bash
-# macOS
+skillsync setup --repo AksharP5/skills
+```
+
+You can also run one-off commands with `npx`:
+
+```bash
+npx @akshar5/skillsync setup --repo AksharP5/skills
+npx @akshar5/skillsync add https://github.com/example-org/example-skill --skill example-skill
+```
+
+On a new macOS device, install the system prerequisites first:
+
+```bash
 brew install gh git node
-
 gh auth login
-npm install -g git+ssh://git@github.com/AksharP5/skillsync.git
-```
-
-If SSH is not set up on that device yet, use the clone/link fallback:
-
-```bash
-mkdir -p ~/projects
-gh repo clone AksharP5/skillsync ~/projects/skillsync
-cd ~/projects/skillsync
-npm install
-npm link
-```
-
-Connect to an existing vault:
-
-```bash
 skillsync setup --repo AksharP5/skills
 ```
 
@@ -96,19 +90,25 @@ If the repo has multiple skills, omit `--skill` in an interactive terminal and S
 
 ## Publishing to npm
 
-Clone the project on the machine where your npm account is configured:
+The first public version is published as `@akshar5/skillsync`. Future releases are managed by Release Please and GitHub Actions.
+
+Use conventional commits to drive release versions:
+
+- `fix:` creates a patch release.
+- `feat:` creates a minor release.
+- `feat!:` or `BREAKING CHANGE:` creates a major release.
+
+When the release PR is merged, GitHub Actions runs tests and publishes to npm through trusted publishing.
+
+Manual checks before merging release-related changes:
 
 ```bash
-gh repo clone AksharP5/skillsync ~/projects/skillsync
-cd ~/projects/skillsync
 npm install
 npm test
 npm pack --dry-run
-npm login
-npm publish --access public
 ```
 
-The package name is `@aksharp5/skillsync` because `skillsync` is already taken on npm. The installed command is still `skillsync`.
+The package name is `@akshar5/skillsync` because `skillsync` is already taken on npm. The installed command is still `skillsync`.
 
 ## Detected versus managed skills
 
