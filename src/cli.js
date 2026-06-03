@@ -727,7 +727,7 @@ async function target(rest) {
 async function syncCommand(rest) {
   const config = await configured();
   const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: !hasFlag(rest, '--no-pull') });
-  console.log(result.committed ? 'Synced and pushed changes.' : 'Synced. No local changes to push.');
+  console.log(result.pushed ? 'Synced and pushed changes.' : 'Synced. No local changes to push.');
 }
 
 async function scanCommand() {
