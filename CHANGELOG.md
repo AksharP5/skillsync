@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/AksharP5/skillsync/compare/v0.3.0...v0.3.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* retry vault push after pulling remote changes ([6d4b749](https://github.com/AksharP5/skillsync/commit/6d4b7490644be71425a5285ebaa48ddf9c266ba2))
+
 ## [0.3.0](https://github.com/AksharP5/skillsync/compare/v0.2.1...v0.3.0) (2026-06-03)
 
 
