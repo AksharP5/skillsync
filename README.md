@@ -143,6 +143,15 @@ skillsync installed
 
 In the interactive UI, choose `Installed on this device` to see both SkillSync-managed installs and detected local skills. From there you can sync vault-backed skills or uninstall selected skills from the current device. Local-only detected folders require confirmation before SkillSync deletes them.
 
+The non-interactive `skillsync installed` command also prints concrete managed projection paths, so target-backed installs are visible as symlinks/copies, for example:
+
+```text
+- bog-hyperframes  [managed: codex | in vault]
+  -> codex: ~/.codex/skills/bog-hyperframes -> ~/.skillsync/repo/skills/bog-hyperframes
+```
+
+If a managed projection is missing, it is shown as missing and `skillsync sync` will recreate it.
+
 Check current vault/device state:
 
 ```bash

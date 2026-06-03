@@ -199,6 +199,56 @@ export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
   }
 }
 
+export async function managedProjections({ vaultPath, deviceId = defaultDeviceId() }) {
+  const device = await loadDevice(vaultPath, deviceId);
+  const registry = await loadRegistry(vaultPath);
+  const projections = [];
+
+  for (const [skillName, targets] of Object.entries(device.installed || {})) {
+    const registryEntry = registry.skills[skillName];
+    for (const targetName of Array.isArray(targets) ? targets : []) {
+      const targetConfig = device.targets?.[targetName];
+      const source = registryEntry ? path.join(vaultPath, registryEntry.path) : null;
+      const destination = targetConfig ? path.join(expandHome(targetConfig.path), skillName) : null;
+      const mode = targetConfig?.mode || 'symlink';
+      let status = 'ok';
+      let resolved = null;
+
+      if (!registryEntry) {
+        status = 'not-in-vault';
+      } else if (!targetConfig) {
+        status = 'unknown-target';
+      } else {
+        const info = await projectionInfo(destination, vaultPath);
+        resolved = info.resolved;
+        if (!info.exists) {
+          status = 'missing';
+        } else if (mode === 'copy') {
+          status = info.ownedCopy ? 'ok' : 'unmanaged';
+        } else if (info.ownedSymlink && info.resolved === path.resolve(source)) {
+          status = 'ok';
+        } else if (info.ownedSymlink || info.ownedCopy) {
+          status = 'wrong-source';
+        } else {
+          status = 'unmanaged';
+        }
+      }
+
+      projections.push({
+        skillName,
+        targetName,
+        mode,
+        source,
+        destination,
+        resolved,
+        status,
+      });
+    }
+  }
+
+  return projections.sort((a, b) => a.skillName.localeCompare(b.skillName) || a.targetName.localeCompare(b.targetName));
+}
+
 export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
   const device = await loadDevice(vaultPath, deviceId);
   const registry = await loadRegistry(vaultPath);

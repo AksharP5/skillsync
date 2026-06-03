@@ -5,7 +5,7 @@ import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
 import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
-import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, removeTarget, scanTargets, uninstallSkill } from './core/device.js';
+import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, managedProjections, removeTarget, scanTargets, uninstallSkill } from './core/device.js';
 import { ensureDir, exists, expandHome, removePath } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { addSkillToVault, compareSkillToVault, deleteSkillFromVault, ensureSkillInRegistry, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
@@ -383,12 +383,41 @@ function localSkillTargetSummary(skill) {
   return [...targets].sort().join(', ');
 }
 
+function projectionDetailsBySkill(projections) {
+  const bySkill = new Map();
+  for (const projection of projections) {
+    if (!bySkill.has(projection.skillName)) bySkill.set(projection.skillName, []);
+    bySkill.get(projection.skillName).push(projection);
+  }
+  return bySkill;
+}
+
+function projectionDetailLabel(projection) {
+  const destination = projection.destination || '(unknown destination)';
+  const source = projection.source || '(not in vault)';
+  const prefix = `${projection.targetName}: ${destination}`;
+  if (projection.status === 'ok') {
+    if (projection.mode === 'copy') return `${prefix} (copy from ${source})`;
+    return `${prefix} -> ${source}`;
+  }
+  if (projection.status === 'missing') return `${prefix} (missing; run skillsync sync)`;
+  if (projection.status === 'wrong-source') {
+    const resolved = projection.resolved ? ` -> ${projection.resolved}` : '';
+    return `${prefix}${resolved} (wrong SkillSync source; run skillsync sync)`;
+  }
+  if (projection.status === 'unmanaged') return `${prefix} (unmanaged path; SkillSync will not overwrite it automatically)`;
+  if (projection.status === 'unknown-target') return `${projection.targetName}: unknown target in this device manifest`;
+  if (projection.status === 'not-in-vault') return `${projection.targetName}: ${projection.skillName} is no longer in the vault`;
+  return `${prefix} (${projection.status})`;
+}
+
 async function installedCommand() {
   const config = await configured();
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
   const device = await loadDevice(config.repoPath, config.deviceId);
   const localSkills = localSkillEntries(device, registry);
+  const projectionsBySkill = projectionDetailsBySkill(await managedProjections({ vaultPath: config.repoPath, deviceId: config.deviceId }));
   if (!localSkills.length) {
     console.log('No local skills found on this device. Run `skillsync scan` to refresh detected local skills.');
     return;
@@ -396,6 +425,9 @@ async function installedCommand() {
   console.log(`Local skills on ${device.display_name}:`);
   for (const skill of localSkills) {
     console.log(`- ${localSkillLabel(skill)}`);
+    for (const projection of projectionsBySkill.get(skill.name) || []) {
+      console.log(`  -> ${projectionDetailLabel(projection)}`);
+    }
   }
 }
 

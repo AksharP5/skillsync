@@ -1,6 +1,6 @@
 {
   "name": "@akshar5/skillsync",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Local-first GitHub-backed skill vault sync client for AI agent skills.",
   "type": "module",
   "repository": {
