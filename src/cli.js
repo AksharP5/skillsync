@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
 import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, removeTarget, scanTargets, uninstallSkill } from './core/device.js';
-import { ensureDir, exists, expandHome } from './core/fs.js';
+import { ensureDir, exists, expandHome, removePath } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { addSkillToVault, deleteSkillFromVault, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
 import { cloneSkillSource, discoverSkillFolders, isRemoteSkillSource, selectDiscoveredSkills } from './core/source.js';
@@ -297,25 +297,75 @@ async function listSkills() {
     console.log('No skills in vault yet. Add one with: skillsync add <skill-folder>');
     return;
   }
+  const localByName = new Map(localSkillEntries(device, registry).map((skill) => [skill.name, skill]));
   for (const name of names) {
-    const targets = device.installed[name]?.join(', ');
-    console.log(`${targets ? '✓' : '○'} ${name}${targets ? `  [${targets}]` : ''}`);
+    const localSkill = localByName.get(name);
+    const targetSummary = localSkill ? localSkillTargetSummary(localSkill) : '';
+    const state = localSkill?.managedTargets.length ? 'managed' : 'local';
+    console.log(`${targetSummary ? '✓' : '○'} ${name}${targetSummary ? `  [${state}: ${targetSummary}]` : ''}`);
   }
 }
 
-function installedSkillEntries(device, registry) {
-  return Object.entries(device.installed || {})
-    .map(([name, targets]) => ({
-      name,
-      targets: Array.isArray(targets) ? targets : [],
-      inVault: Boolean(registry.skills[name]),
+function localSkillEntries(device, registry) {
+  const byName = new Map();
+  const entryFor = (name) => {
+    if (!byName.has(name)) {
+      byName.set(name, {
+        name,
+        managedTargets: new Set(),
+        detectedTargets: [],
+        inVault: Boolean(registry.skills[name]),
+      });
+    }
+    return byName.get(name);
+  };
+
+  for (const [name, targets] of Object.entries(device.installed || {})) {
+    const entry = entryFor(name);
+    for (const target of Array.isArray(targets) ? targets : []) entry.managedTargets.add(target);
+  }
+
+  for (const [targetName, skills] of Object.entries(device.detected || {})) {
+    if (!Array.isArray(skills)) continue;
+    for (const skill of skills) {
+      const entry = entryFor(skill.name);
+      entry.inVault = entry.inVault || Boolean(skill.in_vault) || Boolean(registry.skills[skill.name]);
+      entry.detectedTargets.push({
+        targetName,
+        path: skill.path,
+        inVault: Boolean(skill.in_vault) || Boolean(registry.skills[skill.name]),
+        managed: entry.managedTargets.has(targetName),
+      });
+    }
+  }
+
+  return Array.from(byName.values())
+    .map((entry) => ({
+      ...entry,
+      managedTargets: [...entry.managedTargets].sort(),
+      detectedTargets: entry.detectedTargets.sort((a, b) => a.targetName.localeCompare(b.targetName) || a.path.localeCompare(b.path)),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function installedSkillLabel(skill) {
-  const targetLabel = skill.targets.length ? skill.targets.join(', ') : 'no targets';
-  return `${skill.name}  [${targetLabel}]${skill.inVault ? '' : '  missing from vault'}`;
+function localSkillLabel(skill) {
+  const localTargets = [...new Set(skill.detectedTargets.map((target) => {
+    if (!target.path || target.path === skill.name) return target.targetName;
+    return `${target.targetName}/${target.path}`;
+  }))];
+  const parts = [];
+  if (skill.managedTargets.length) parts.push(`managed: ${skill.managedTargets.join(', ')}`);
+  if (localTargets.length) parts.push(`local: ${localTargets.join(', ')}`);
+  parts.push(skill.inVault ? 'in vault' : 'local only');
+  return `${skill.name}  [${parts.join(' | ')}]`;
+}
+
+function localSkillTargetSummary(skill) {
+  const targets = new Set([
+    ...skill.managedTargets,
+    ...skill.detectedTargets.map((target) => target.targetName),
+  ]);
+  return [...targets].sort().join(', ');
 }
 
 async function installedCommand() {
@@ -323,14 +373,14 @@ async function installedCommand() {
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
   const device = await loadDevice(config.repoPath, config.deviceId);
-  const installed = installedSkillEntries(device, registry);
-  if (!installed.length) {
-    console.log('No SkillSync-managed skills installed on this device.');
+  const localSkills = localSkillEntries(device, registry);
+  if (!localSkills.length) {
+    console.log('No local skills found on this device. Run `skillsync scan` to refresh detected local skills.');
     return;
   }
-  console.log(`Installed on ${device.display_name}:`);
-  for (const skill of installed) {
-    console.log(`- ${installedSkillLabel(skill)}`);
+  console.log(`Local skills on ${device.display_name}:`);
+  for (const skill of localSkills) {
+    console.log(`- ${localSkillLabel(skill)}`);
   }
 }
 
@@ -626,7 +676,7 @@ async function runUi() {
     await refreshChangedRegistryEntries(config.repoPath);
     const menuChoices = [
       { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
-      { name: 'Installed on this device', value: 'installed', description: 'View, update, or uninstall SkillSync-managed local skills.' },
+      { name: 'Installed on this device', value: 'installed', description: 'View, sync, or uninstall local skills on this device.' },
       { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
       { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
       { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
@@ -661,28 +711,31 @@ async function skillsScreen(config) {
     console.log('\nNo skills in vault yet. Use Add/import first.\n');
     return;
   }
-  const installedNames = new Set(Object.keys(device.installed || {}));
+  const localByName = new Map(localSkillEntries(device, registry).map((skill) => [skill.name, skill]));
+  const localVaultNames = new Set([...localByName.values()].filter((skill) => skill.inVault).map((skill) => skill.name));
   const selected = await promptWithEscape(checkbox({
     message: `Install skills on ${device.display_name}`,
     loop: false,
     pageSize: promptPageSize(names.length, { min: 10, max: 32, reservedRows: 5 }),
     instructions: 'Space toggles skills. Enter applies changes. Esc goes back.',
     choices: names.map((name) => {
-      const targets = device.installed[name] || [];
-      const targetLabel = targets.length ? `  [${targets.join(', ')}]` : '';
+      const localSkill = localByName.get(name);
+      const targetSummary = localSkill ? localSkillTargetSummary(localSkill) : '';
+      const state = localSkill?.managedTargets.length ? 'managed' : 'local';
+      const targetLabel = targetSummary ? `  [${state}: ${targetSummary}]` : '';
       return {
         name: `${name}${targetLabel}`,
         short: name,
         value: name,
-        checked: installedNames.has(name),
+        checked: localVaultNames.has(name),
       };
     }),
   }));
   if (!selected) return;
 
   const selectedNames = new Set(selected);
-  const toInstall = names.filter((name) => selectedNames.has(name) && !installedNames.has(name));
-  const toUninstall = names.filter((name) => !selectedNames.has(name) && installedNames.has(name));
+  const toInstall = names.filter((name) => selectedNames.has(name) && !localVaultNames.has(name));
+  const toUninstall = names.filter((name) => !selectedNames.has(name) && localVaultNames.has(name));
   if (!toInstall.length && !toUninstall.length) {
     console.log('\nNo install changes.\n');
     return;
@@ -697,8 +750,16 @@ async function skillsScreen(config) {
   for (const skillName of toInstall) {
     await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
   }
-  for (const skillName of toUninstall) {
-    await uninstallSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName });
+  const localToRemove = toUninstall.map((name) => localByName.get(name)).filter(Boolean);
+  if (localToRemove.some(hasUnmanagedDetectedTargets)) {
+    const confirmed = await confirm({
+      message: 'Remove selected local detected skill folders from this device?',
+      default: false,
+    });
+    if (!confirmed) return;
+  }
+  for (const skill of localToRemove) {
+    await uninstallLocalSkill({ config, device, skill });
   }
   await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
@@ -712,19 +773,27 @@ async function installedScreen(config) {
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
   const device = await loadDevice(config.repoPath, config.deviceId);
-  const installed = installedSkillEntries(device, registry);
-  if (!installed.length) {
-    console.log('\nNo SkillSync-managed skills installed on this device.\n');
+  const localSkills = localSkillEntries(device, registry);
+  if (!localSkills.length) {
+    await promptWithEscape(select({
+      message: `Local skills on ${device.display_name}`,
+      loop: false,
+      pageSize: 1,
+      choices: [
+        { name: 'No local skills found. Run Scan local targets, then check again.', value: 'back' },
+      ],
+    }));
     return;
   }
+  const localByName = new Map(localSkills.map((skill) => [skill.name, skill]));
 
   const selected = await promptWithEscape(checkbox({
-    message: `Installed skills on ${device.display_name}`,
+    message: `Local skills on ${device.display_name}`,
     loop: false,
-    pageSize: promptPageSize(installed.length, { min: 8, max: 28, reservedRows: 5 }),
+    pageSize: promptPageSize(localSkills.length, { min: 8, max: 28, reservedRows: 5 }),
     instructions: 'Space selects skills. Enter chooses an action. Esc goes back.',
-    choices: installed.map((skill) => ({
-      name: installedSkillLabel(skill),
+    choices: localSkills.map((skill) => ({
+      name: localSkillLabel(skill),
       short: skill.name,
       value: skill.name,
       checked: false,
@@ -737,31 +806,134 @@ async function installedScreen(config) {
     loop: false,
     pageSize: 3,
     choices: [
-      { name: 'Update from vault', value: 'update', description: 'Pull the vault and reapply local installed links.' },
+      { name: 'Sync selected from vault', value: 'update', description: 'Replace same-named local skills with the vault version.' },
       { name: 'Uninstall from this device', value: 'uninstall', description: 'Remove selected skills from this device only.' },
       { name: 'Back', value: 'back' },
     ],
   }));
   if (!action || action === 'back') return;
 
+  const selectedSkills = selected.map((name) => localByName.get(name)).filter(Boolean);
   if (action === 'update') {
-    await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
-    console.log(`\nUpdated installed skills from the vault. Requested: ${selected.join(', ')}.\n`);
+    await updateLocalSkillsFromVault({ config, device, selectedSkills });
     return;
   }
 
+  if (selectedSkills.some(hasUnmanagedDetectedTargets)) {
+    console.log('\nLocal-only detected folders are not SkillSync-managed. Removing them deletes those local skill folders from this device only.\n');
+  }
   const confirmed = await confirm({
     message: `Uninstall ${selected.join(', ')} from this device?`,
     default: false,
   });
   if (!confirmed) return;
 
-  for (const skillName of selected) {
-    await uninstallSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName });
+  for (const skill of selectedSkills) {
+    await uninstallLocalSkill({ config, device, skill });
   }
   await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(`\nRemoved ${selected.join(', ')} from this device.\n`);
+}
+
+function hasUnmanagedDetectedTargets(skill) {
+  return skill.detectedTargets.some((target) => !target.managed);
+}
+
+function isPathInside(childPath, parentPath) {
+  const child = path.resolve(childPath);
+  const parent = path.resolve(parentPath);
+  return child === parent || child.startsWith(parent + path.sep);
+}
+
+function detectedTargetLocation(device, detectedTarget) {
+  const targetConfig = device.targets?.[detectedTarget.targetName];
+  if (!targetConfig) return { removable: false, reason: 'target is no longer configured' };
+
+  const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
+  const installRoot = path.resolve(expandHome(targetConfig.path));
+  const absolutePath = path.resolve(scanRoot, detectedTarget.path || '.');
+  if (!isPathInside(absolutePath, scanRoot)) {
+    return { removable: false, reason: 'detected path is outside the scan path' };
+  }
+  if (absolutePath === installRoot || !isPathInside(absolutePath, installRoot)) {
+    return { removable: false, reason: 'detected path is outside the configured install folder' };
+  }
+  return { removable: true, absolutePath };
+}
+
+function removableDetectedTargets(device, skill, { onlyInVault = false } = {}) {
+  return skill.detectedTargets
+    .filter((target) => !target.managed)
+    .filter((target) => !onlyInVault || target.inVault)
+    .map((target) => ({ ...target, ...detectedTargetLocation(device, target) }));
+}
+
+async function removeDetectedTargetPaths(targets) {
+  const removed = [];
+  const skipped = [];
+  const seen = new Set();
+  for (const target of targets) {
+    if (!target.removable) {
+      skipped.push(target);
+      continue;
+    }
+    if (seen.has(target.absolutePath)) continue;
+    seen.add(target.absolutePath);
+    if (!await exists(path.join(target.absolutePath, 'SKILL.md'))) {
+      skipped.push({ ...target, reason: 'SKILL.md was not found' });
+      continue;
+    }
+    await removePath(target.absolutePath);
+    removed.push(target);
+  }
+  return { removed, skipped };
+}
+
+async function uninstallLocalSkill({ config, device, skill }) {
+  await uninstallSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName: skill.name });
+  return removeDetectedTargetPaths(removableDetectedTargets(device, skill));
+}
+
+async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
+  const updatable = selectedSkills.filter((skill) => skill.inVault);
+  const skipped = selectedSkills.filter((skill) => !skill.inVault).map((skill) => skill.name);
+  if (!updatable.length) {
+    console.log(`\nNo selected skills are in the vault.${skipped.length ? ` Skipped: ${skipped.join(', ')}.` : ''}\n`);
+    return;
+  }
+
+  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
+
+  const replacements = updatable.flatMap((skill) => removableDetectedTargets(device, skill, { onlyInVault: true }).filter((target) => target.removable));
+  if (replacements.length) {
+    const confirmed = await confirm({
+      message: `Replace ${replacements.length} local detected skill folder${replacements.length === 1 ? '' : 's'} with vault-managed links/copies?`,
+      default: false,
+    });
+    if (!confirmed) return;
+    await removeDetectedTargetPaths(replacements);
+  }
+
+  for (const skill of updatable) {
+    const targets = new Set(skill.managedTargets);
+    for (const detectedTarget of skill.detectedTargets) {
+      const location = detectedTargetLocation(device, detectedTarget);
+      if (detectedTarget.inVault && location.removable) targets.add(detectedTarget.targetName);
+    }
+    if (targets.size) {
+      await installSkill({
+        vaultPath: config.repoPath,
+        deviceId: config.deviceId,
+        skillName: skill.name,
+        targets: [...targets].sort(),
+      });
+    }
+  }
+
+  await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+  console.log(`\nUpdated from vault: ${updatable.map((skill) => skill.name).join(', ')}.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
 }
 
 async function chooseTargets(config) {
@@ -780,14 +952,22 @@ async function chooseTargets(config) {
 
 async function devicesScreen(config) {
   const devices = await listDevices(config.repoPath);
-  console.log('\nDevices');
-  for (const device of devices) {
+  const choices = devices.map((device) => {
     const installed = Object.keys(device.installed || {}).length;
     const detected = countDetectedSkills(device);
     const targets = Object.keys(device.targets || {}).join(', ') || 'no targets';
-    console.log(`- ${device.display_name} (${device.device_id}) — ${detected} local, ${installed} managed — ${targets} — last seen ${device.last_seen || 'never'}`);
-  }
-  console.log('');
+    return {
+      name: `${device.display_name} (${device.device_id})  [${detected} local, ${installed} managed]`,
+      value: device.device_id,
+      description: `${targets} — last seen ${device.last_seen || 'never'}`,
+    };
+  }).concat([{ name: 'Back', value: 'back' }]);
+  await promptWithEscape(select({
+    message: 'Devices',
+    choices,
+    loop: false,
+    pageSize: promptPageSize(choices.length, { min: 6, max: 18 }),
+  }));
 }
 
 async function targetsScreen(config) {

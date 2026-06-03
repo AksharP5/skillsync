@@ -140,7 +140,7 @@ View skills installed on this device:
 skillsync installed
 ```
 
-In the interactive UI, choose `Installed on this device` to select installed skills, update them from the vault, or uninstall them from the current device.
+In the interactive UI, choose `Installed on this device` to see both SkillSync-managed installs and detected local skills. From there you can sync vault-backed skills or uninstall selected skills from the current device. Local-only detected folders require confirmation before SkillSync deletes them.
 
 Check current vault/device state:
 
@@ -188,7 +188,7 @@ Sync the vault and reapply local links:
 skillsync sync
 ```
 
-If an installed skill changes in the vault, `skillsync sync` pulls the vault and reapplies local projections. Symlink targets point at the current vault copy automatically; copy targets are refreshed when links are reapplied.
+If an installed skill changes in the vault, `skillsync sync` pulls the vault and reapplies local projections. Symlink targets point at the current vault copy automatically; copy targets are refreshed when links are reapplied. Vault skills that already exist locally but were not installed by SkillSync are shown as local vault-backed skills and checked in Browse/install. Sync them from the `Installed on this device` screen to replace the same-named local folder with the vault-managed projection.
 
 Scan configured target folders for already-installed local skills:
 
@@ -231,7 +231,7 @@ Skill names are vault-wide identifiers. Installing `my-skill` on two devices mea
 
 ## Detected versus managed skills
 
-`installed` skills are SkillSync-managed projections into a target folder. `detected` skills are already present in a local agent's skill tree, such as bundled Hermes skills under `~/.hermes/skills`.
+`managed` skills are SkillSync-owned projections into a target folder. `detected` skills are already present in a local agent's skill tree, such as bundled Hermes skills under `~/.hermes/skills` or skills you installed before setting up SkillSync.
 
 For Hermes, use a separate scan path so SkillSync installs personal synced skills into `~/.hermes/skills/personal` while still showing the full Hermes skill inventory from `~/.hermes/skills`:
 
