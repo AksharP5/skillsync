@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/AksharP5/skillsync/compare/v0.3.2...v0.4.0) (2026-06-03)
+
+
+### Features
+
+* show managed projection paths ([5c40162](https://github.com/AksharP5/skillsync/commit/5c40162899d5f2e2528f37170f33abc797973845))
+* support device-global skill installs ([5056970](https://github.com/AksharP5/skillsync/commit/505697018bc62708a5181c9bf49f9146ea2b066f))
+
 ## [0.3.2](https://github.com/AksharP5/skillsync/compare/v0.3.1...v0.3.2) (2026-06-03)
 
 
