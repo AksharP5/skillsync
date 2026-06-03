@@ -97,10 +97,10 @@ async function resolveRepoCloneUrl(repo) {
   if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return repo;
   if (!repo.includes('/')) return repo;
   if (!await commandExists('gh')) return repo;
-  const { stdout } = await gh(['repo', 'view', repo, '--json', 'isPrivate,sshUrl', '--jq', '.']);
+  const { stdout } = await gh(['repo', 'view', repo, '--json', 'isPrivate,url', '--jq', '.']);
   const view = JSON.parse(stdout);
   if (!view.isPrivate) throw new Error(`${repo} exists but is not private. Make it private before using it as a skill vault.`);
-  return view.sshUrl;
+  return view.url;
 }
 
 async function setup(rest) {
@@ -133,10 +133,10 @@ async function setup(rest) {
       console.log(`Creating private GitHub repo ${repo}...`);
       await gh(['repo', 'create', repo, '--private', '--description', 'Private AI agent skills vault'], undefined, { inherit: true });
     }
-    const { stdout: viewOut } = await gh(['repo', 'view', repo, '--json', 'isPrivate,sshUrl', '--jq', '.']);
+    const { stdout: viewOut } = await gh(['repo', 'view', repo, '--json', 'isPrivate,url', '--jq', '.']);
     const view = JSON.parse(viewOut);
     if (!view.isPrivate) throw new Error(`${repo} exists but is not private. Make it private before using it as a skill vault.`);
-    repo = view.sshUrl;
+    repo = view.url;
   } else {
     repo = await resolveRepoCloneUrl(repo);
   }

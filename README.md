@@ -75,6 +75,8 @@ brew install gh git node
 gh auth login
 ```
 
+SkillSync clones vault repos over HTTPS using your GitHub CLI authentication, so a GitHub SSH key is not required.
+
 Install SkillSync:
 
 ```bash
@@ -100,6 +102,13 @@ You can also run commands without a global install:
 ```bash
 npx @akshar5/skillsync setup --repo AksharP5/skills
 npx @akshar5/skillsync add https://github.com/example-org/example-skill --skill example-skill
+```
+
+If an older SkillSync version failed with `git@github.com: Permission denied (publickey)`, update the CLI and rerun setup:
+
+```bash
+npm install -g @akshar5/skillsync@latest
+skillsync setup --repo AksharP5/skills
 ```
 
 ## Common workflows
