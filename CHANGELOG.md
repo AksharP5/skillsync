@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/AksharP5/skillsync/compare/v0.1.3...v0.2.0) (2026-06-03)
+
+
+### Features
+
+* add installed skills management ([2ffbf8a](https://github.com/AksharP5/skillsync/commit/2ffbf8aea5c6b89c8e95df6ab006308480ccb2c0))
+
 ## [0.1.3](https://github.com/AksharP5/skillsync/compare/v0.1.2...v0.1.3) (2026-06-03)
 
 
