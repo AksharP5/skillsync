@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/AksharP5/skillsync/compare/v0.2.0...v0.2.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* reconcile detected local skills in ui ([9d3bd2e](https://github.com/AksharP5/skillsync/commit/9d3bd2e611527381d7359cb6acc319c1dc0b045f))
+
 ## [0.2.0](https://github.com/AksharP5/skillsync/compare/v0.1.3...v0.2.0) (2026-06-03)
 
 
