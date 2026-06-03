@@ -7,6 +7,23 @@ import { git } from './git.js';
 
 const OWNER_REPO = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*(?:#.+)?$/;
 
+const IMPORT_SOURCES = {
+  hermes: { name: 'hermes', label: 'Hermes', root: '~/.hermes/skills' },
+  codex: { name: 'codex', label: 'Codex', root: '~/.codex/skills' },
+  opencode: { name: 'opencode', label: 'OpenCode', root: '~/.config/opencode/skills' },
+};
+
+export function supportedImportSources() {
+  return Object.keys(IMPORT_SOURCES);
+}
+
+export function importSourceForAgent(source) {
+  const normalized = source?.toLowerCase();
+  const importSource = IMPORT_SOURCES[normalized];
+  if (!importSource) throw new Error(`Usage: skillsync import ${supportedImportSources().join('|')}`);
+  return { ...importSource };
+}
+
 export function isRemoteSkillSource(source) {
   if (!source) return false;
   return /^(https?:\/\/|git@|ssh:\/\/)/.test(source) || OWNER_REPO.test(source);

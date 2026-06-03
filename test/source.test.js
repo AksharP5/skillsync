@@ -7,9 +7,11 @@ import path from 'node:path';
 import {
   cloneUrlForSource,
   discoverSkillFolders,
+  importSourceForAgent,
   isRemoteSkillSource,
   selectDiscoveredSkills,
   splitSourceRef,
+  supportedImportSources,
 } from '../src/core/source.js';
 
 async function tempDir() {
@@ -22,6 +24,26 @@ async function makeSkill(parent, name, body = '# Skill\n') {
   await writeFile(path.join(dir, 'SKILL.md'), body);
   return dir;
 }
+
+test('resolves supported local agent import sources', () => {
+  assert.deepEqual(supportedImportSources(), ['hermes', 'codex', 'opencode']);
+  assert.deepEqual(importSourceForAgent('hermes'), {
+    name: 'hermes',
+    label: 'Hermes',
+    root: '~/.hermes/skills',
+  });
+  assert.deepEqual(importSourceForAgent('codex'), {
+    name: 'codex',
+    label: 'Codex',
+    root: '~/.codex/skills',
+  });
+  assert.deepEqual(importSourceForAgent('opencode'), {
+    name: 'opencode',
+    label: 'OpenCode',
+    root: '~/.config/opencode/skills',
+  });
+  assert.throws(() => importSourceForAgent('cursor'), /Usage: skillsync import hermes\|codex\|opencode/);
+});
 
 test('detects remote skill sources and parses refs', () => {
   assert.equal(isRemoteSkillSource('example-org/example-skill'), true);

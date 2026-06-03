@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
@@ -9,7 +9,7 @@ import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, load
 import { ensureDir, exists, expandHome, removePath } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { addSkillToVault, deleteSkillFromVault, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
-import { cloneSkillSource, discoverSkillFolders, isRemoteSkillSource, selectDiscoveredSkills } from './core/source.js';
+import { cloneSkillSource, discoverSkillFolders, importSourceForAgent, isRemoteSkillSource, selectDiscoveredSkills, supportedImportSources } from './core/source.js';
 import { syncVault } from './core/sync.js';
 
 const args = process.argv.slice(2);
@@ -451,17 +451,16 @@ async function addRemoteSkills(source, rest, config) {
 }
 
 async function importSkills(rest) {
-  const source = rest[0];
-  if (source !== 'hermes') throw new Error('Usage: skillsync import hermes');
+  const importSource = importSourceForAgent(rest[0]);
   const config = await configured();
-  const found = await findSkills(expandHome('~/.hermes/skills'));
+  const found = await discoverSkillFolders(expandHome(importSource.root));
   if (!found.length) {
-    console.log('No Hermes skills found under ~/.hermes/skills');
+    console.log(`No ${importSource.label} skills found under ${importSource.root}`);
     return;
   }
   const selected = process.stdin.isTTY
     ? await checkbox({
-        message: 'Select Hermes skills to import into the vault',
+        message: `Select ${importSource.label} skills to import into the vault`,
         choices: found.map((skill) => ({ name: `${skill.name} (${skill.relative})`, value: skill })),
       })
     : found;
@@ -472,21 +471,17 @@ async function importSkills(rest) {
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
 }
 
-async function findSkills(root) {
-  const results = [];
-  if (!await exists(root)) return results;
-  async function walk(dir) {
-    if (await exists(path.join(dir, 'SKILL.md'))) {
-      results.push({ name: path.basename(dir), path: dir, relative: path.relative(root, dir) });
-      return;
-    }
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (entry.isDirectory() && !entry.name.startsWith('.')) await walk(path.join(dir, entry.name));
-    }
-  }
-  await walk(root);
-  return results.sort((a, b) => a.name.localeCompare(b.name));
+async function chooseImportSource() {
+  const names = supportedImportSources();
+  return promptWithEscape(select({
+    message: 'Import skills from which local agent?',
+    loop: false,
+    pageSize: names.length,
+    choices: names.map((name) => {
+      const source = importSourceForAgent(name);
+      return { name: `${source.label} (${source.root})`, value: source.name };
+    }),
+  }));
 }
 
 async function install(rest) {
@@ -680,7 +675,7 @@ async function runUi() {
       { name: 'Devices', value: 'devices', description: 'Show devices known to the vault.' },
       { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
       { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
-      { name: 'Import Hermes skills', value: 'import-hermes', description: 'Import detected Hermes skills into the vault.' },
+      { name: 'Import local agent skills', value: 'import-local', description: 'Import detected Hermes, Codex, or OpenCode skills into the vault.' },
       { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
       { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
       { name: 'Quit', value: 'quit' },
@@ -697,7 +692,10 @@ async function runUi() {
     if (choice === 'devices') await devicesScreen(config);
     if (choice === 'targets') await targetsScreen(config);
     if (choice === 'add') await addSkill([await input({ message: 'Skill folder path:' })]);
-    if (choice === 'import-hermes') await importSkills(['hermes']);
+    if (choice === 'import-local') {
+      const source = await chooseImportSource();
+      if (source) await importSkills([source]);
+    }
     if (choice === 'scan') await scanCommand();
     if (choice === 'sync') await syncCommand([]);
   }
@@ -998,5 +996,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target]\n  skillsync import hermes\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target]\n  skillsync import <hermes|codex|opencode>\n  skillsync install <skill> [--target codex,claude]\n  skillsync uninstall <skill>\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }
