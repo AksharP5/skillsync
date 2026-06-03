@@ -24,15 +24,15 @@ async function makeSkill(parent, name, body = '# Skill\n') {
 }
 
 test('detects remote skill sources and parses refs', () => {
-  assert.equal(isRemoteSkillSource('raroque/vibe-security-skill'), true);
-  assert.equal(isRemoteSkillSource('https://github.com/raroque/vibe-security-skill'), true);
+  assert.equal(isRemoteSkillSource('example-org/example-skill'), true);
+  assert.equal(isRemoteSkillSource('https://github.com/example-org/example-skill'), true);
   assert.equal(isRemoteSkillSource('./local-skill'), false);
-  assert.deepEqual(splitSourceRef('raroque/vibe-security-skill#main'), {
-    source: 'raroque/vibe-security-skill',
+  assert.deepEqual(splitSourceRef('example-org/example-skill#main'), {
+    source: 'example-org/example-skill',
     ref: 'main',
   });
-  assert.deepEqual(cloneUrlForSource('raroque/vibe-security-skill#main'), {
-    cloneUrl: 'https://github.com/raroque/vibe-security-skill.git',
+  assert.deepEqual(cloneUrlForSource('example-org/example-skill#main'), {
+    cloneUrl: 'https://github.com/example-org/example-skill.git',
     ref: 'main',
   });
 });
@@ -51,12 +51,12 @@ test('discovers skill folders and respects root SKILL.md stopping behavior', asy
 
 test('selectDiscoveredSkills filters by requested skill names', async () => {
   const root = await tempDir();
-  const vibe = await makeSkill(root, 'vibe-security', '# Vibe\n');
+  const vibe = await makeSkill(root, 'example-skill', '# Vibe\n');
   await makeSkill(root, 'other-skill', '# Other\n');
   const skills = await discoverSkillFolders(root);
 
-  assert.deepEqual(selectDiscoveredSkills(skills, ['vibe-security']), [
-    { name: 'vibe-security', path: vibe, relative: 'vibe-security' },
+  assert.deepEqual(selectDiscoveredSkills(skills, ['example-skill']), [
+    { name: 'example-skill', path: vibe, relative: 'example-skill' },
   ]);
   assert.throws(() => selectDiscoveredSkills(skills, ['missing']), /Skill not found/);
 });

@@ -24,7 +24,7 @@ SkillSync is an npm-style CLI package. Once published, the nice path will be:
 
 ```bash
 npx @aksharp5/skillsync setup --repo AksharP5/skills
-npx @aksharp5/skillsync add https://github.com/raroque/vibe-security-skill --skill vibe-security
+npx @aksharp5/skillsync add https://github.com/example-org/example-skill --skill example-skill
 ```
 
 It is not published to the public npm registry yet. Install it from the private GitHub repo for now:
@@ -67,7 +67,7 @@ If you run plain `skillsync setup` in an interactive terminal, it asks for the r
 skillsync setup
 skillsync
 skillsync add <skill-folder-or-git-url> --skill <name>
-skillsync add https://github.com/raroque/vibe-security-skill --skill vibe-security
+skillsync add https://github.com/example-org/example-skill --skill example-skill
 skillsync import hermes
 skillsync install <skill> --target codex
 skillsync uninstall <skill>
@@ -89,7 +89,7 @@ skillsync service install
 You can import a skill directly from a GitHub repo into your private vault:
 
 ```bash
-skillsync add https://github.com/raroque/vibe-security-skill --skill vibe-security
+skillsync add https://github.com/example-org/example-skill --skill example-skill
 ```
 
 If the repo has multiple skills, omit `--skill` in an interactive terminal and SkillSync will ask which ones to add. Add `--target codex` or `--target '*'` to install it on the current device immediately after importing.
