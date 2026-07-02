@@ -321,7 +321,7 @@ function packPage(pack) {
     `skillsync pack install ${pack.name} --target codex`,
     '```',
     '',
-    skillList(pack.skills),
+    skillList(pack.skills, '../skills'),
     '',
   ].join('\n');
 }
@@ -342,9 +342,9 @@ function countBySource(sourceMap) {
   return counts;
 }
 
-function skillList(names) {
+function skillList(names, skillsPrefix = 'skills') {
   if (!names.length) return '_None._';
-  return names.map((name) => `- [${name}](skills/${name}/SKILL.md)`).join('\n');
+  return names.map((name) => `- [${name}](${skillsPrefix}/${name}/SKILL.md)`).join('\n');
 }
 
 function titleCase(value) {
