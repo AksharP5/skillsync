@@ -6,8 +6,9 @@ import path from 'node:path';
 
 import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
 import { addTarget, applyLinks, defaultDeviceId, installSkill, listDevices, loadDevice, managedProjections, removeTarget, scanTargets, uninstallSkill } from './core/device.js';
-import { ensureDir, exists, expandHome, removePath } from './core/fs.js';
+import { ensureDir, exists, expandHome, readJson, removePath } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
+import { generateGroups } from './core/groups.js';
 import { addSkillToVault, compareSkillToVault, deleteSkillFromVault, ensureSkillInRegistry, ensureVault, loadRegistry, rebuildRegistry, refreshChangedRegistryEntries, validateSkillFolder } from './core/registry.js';
 import { cloneSkillSource, discoverSkillFolders, importSourceForAgent, isRemoteSkillSource, selectDiscoveredSkills, supportedImportSources } from './core/source.js';
 import { syncVault } from './core/sync.js';
@@ -36,6 +37,11 @@ async function main() {
       return listSkills();
     case 'installed':
       return installedCommand();
+    case 'groups':
+      return groupsCommand(rest);
+    case 'pack':
+    case 'packs':
+      return packCommand(rest);
     case 'add':
       return addSkill(rest);
     case 'import':
@@ -381,6 +387,76 @@ function localSkillTargetSummary(skill) {
     ...skill.detectedTargets.map((target) => target.targetName),
   ]);
   return [...targets].sort().join(', ');
+}
+
+async function groupsCommand(rest) {
+  const config = await configured();
+  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
+  await refreshChangedRegistryEntries(config.repoPath);
+  const result = await generateGroups({ vaultPath: config.repoPath, write: true });
+  await commitAllIfChanged(config.repoPath, 'docs: update skill groups');
+  await push(config.repoPath);
+  console.log(`Generated skill groups for ${result.skillCount} skills across ${result.packCount} packs.`);
+  console.log(`Files: ${result.files.join(', ')}`);
+  if (hasFlag(rest, '--summary')) {
+    console.log(`Sources: ${Object.entries(result.sourceCounts).map(([source, count]) => `${source}=${count}`).join(', ')}`);
+  }
+}
+
+async function loadPack(config, packName) {
+  const packPath = path.join(config.repoPath, 'packs', `${packName}.json`);
+  if (!await exists(packPath)) {
+    throw new Error(`Pack not found: ${packName}. Run: skillsync groups`);
+  }
+  const pack = await readJson(packPath);
+  if (!pack?.name || !Array.isArray(pack.skills)) {
+    throw new Error(`Invalid pack manifest: ${packPath}`);
+  }
+  return pack;
+}
+
+async function listPacks(config) {
+  await generateGroups({ vaultPath: config.repoPath, write: true });
+  const packsDir = path.join(config.repoPath, 'packs');
+  const entries = await import('node:fs/promises').then(({ readdir }) => readdir(packsDir).catch(() => []));
+  return entries.filter((name) => name.endsWith('.json')).sort();
+}
+
+async function packCommand(rest) {
+  const sub = rest[0] || 'list';
+  const config = await configured();
+  if (sub === 'list') {
+    const packs = await listPacks(config);
+    for (const file of packs) {
+      const pack = await readJson(path.join(config.repoPath, 'packs', file));
+      console.log(`${pack.name}\t${pack.skills.length} skills\t${pack.title || ''}`);
+    }
+    return;
+  }
+  if (sub === 'show') {
+    const packName = rest[1];
+    if (!packName) throw new Error('Usage: skillsync pack show <pack>');
+    const pack = await loadPack(config, packName);
+    console.log(`${pack.title || pack.name} (${pack.skills.length} skills)`);
+    if (pack.description) console.log(pack.description);
+    for (const skill of pack.skills) console.log(`- ${skill}`);
+    return;
+  }
+  if (sub === 'install') {
+    const packName = rest[1];
+    if (!packName) throw new Error('Usage: skillsync pack install <pack> [--target codex,claude] [--global]');
+    const pack = await loadPack(config, packName);
+    const targets = parseTargets(rest.slice(2));
+    for (const skillName of pack.skills) {
+      await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
+      console.log(`Installed ${skillName}${targets ? ` -> ${targets.join(', ')}` : ''}`);
+    }
+    await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+    await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+    console.log(`Installed pack ${pack.name} (${pack.skills.length} skills).`);
+    return;
+  }
+  throw new Error('Usage: skillsync pack list|show <pack>|install <pack> [--target codex,claude] [--global]');
 }
 
 function projectionDetailsBySkill(projections) {
@@ -1195,5 +1271,5 @@ async function targetsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path]\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

@@ -100,7 +100,7 @@ export async function statusPorcelain(repoPath) {
 export async function commitAllIfChanged(repoPath, message) {
   if (!await isGitRepo(repoPath)) return false;
   if (!await statusPorcelain(repoPath)) return false;
-  await git(['add', 'skills', 'devices', 'registry.json', 'README.md'], repoPath);
+  await git(['add', '-A'], repoPath);
   if (!await statusPorcelain(repoPath)) return false;
   await git(['commit', '-m', message], repoPath);
   return true;
