@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/AksharP5/skillsync/compare/v0.4.0...v0.5.0) (2026-07-02)
+
+
+### Features
+
+* generate visual skill groups and packs ([449698e](https://github.com/AksharP5/skillsync/commit/449698e7f9826cdc383f406bab8a68839eac62cb))
+
+
+### Bug Fixes
+
+* use correct relative links in group pages ([72e78e6](https://github.com/AksharP5/skillsync/commit/72e78e6306c1bb9313a4ee7fcdaa164d53de8de5))
+
 ## [0.4.0](https://github.com/AksharP5/skillsync/compare/v0.3.2...v0.4.0) (2026-06-03)
 
 
