@@ -912,13 +912,9 @@ async function daemon(rest) {
   const interval = Number(flagValue(rest, '--interval', '120')) * 1000;
   const config = await configured();
   console.log(`SkillSync daemon started for ${config.repoPath}; interval ${interval / 1000}s`);
-  let lastHeartbeat = Date.now();
   while (true) {
     try {
-      const now = Date.now();
-      const heartbeat = now - lastHeartbeat > 15 * 60 * 1000;
-      await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, heartbeat });
-      if (heartbeat) lastHeartbeat = now;
+      await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId });
       console.log(`[${new Date().toISOString()}] synced`);
     } catch (error) {
       console.error(`[${new Date().toISOString()}] sync failed: ${error.message}`);

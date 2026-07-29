@@ -1,13 +1,12 @@
-import { applyLinks, scanTargets, touchDevice } from './device.js';
+import { applyLinks, scanTargets } from './device.js';
 import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
 import { refreshChangedRegistryEntries } from './registry.js';
 
-export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true, heartbeat = false } = {}) {
+export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
   if (pull && await isGitRepo(vaultPath)) {
     await pullRebase(vaultPath);
   }
   await refreshChangedRegistryEntries(vaultPath);
-  if (deviceId && heartbeat) await touchDevice({ vaultPath, deviceId });
   if (deviceId) await applyLinks({ vaultPath, deviceId });
   if (deviceId) await scanTargets({ vaultPath, deviceId });
   let committed = false;
