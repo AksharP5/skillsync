@@ -97,13 +97,6 @@ function normalizeTargets(targets) {
   ]));
 }
 
-export async function touchDevice({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadDevice(vaultPath, deviceId);
-  device.last_seen = new Date().toISOString();
-  await saveDevice(vaultPath, device);
-  return device;
-}
-
 export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name, targetPath, mode = 'symlink', scanPath }) {
   if (!name) throw new Error('Target name is required');
   if (!targetPath) throw new Error('Target path is required');

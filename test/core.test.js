@@ -19,6 +19,7 @@ import {
   scanTargets,
   uninstallSkill,
 } from '../src/core/device.js';
+import { syncVault } from '../src/core/sync.js';
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-test-'));
@@ -218,7 +219,7 @@ test('scanTargets deduplicates duplicate local skills by name', async () => {
   ]);
 });
 
-test('scanTargets preserves last_seen so scans do not create heartbeat churn', async () => {
+test('background sync preserves last_seen even if an older caller requests a heartbeat', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const scanRoot = path.join(root, 'hermes-skills');
@@ -230,7 +231,8 @@ test('scanTargets preserves last_seen so scans do not create heartbeat churn', a
   device.last_seen = '2026-01-01T00:00:00.000Z';
   await saveDevice(vault, device);
 
-  const scanned = await scanTargets({ vaultPath: vault, deviceId });
+  await syncVault({ vaultPath: vault, deviceId, pull: false, pushChanges: false, heartbeat: true });
+  const scanned = await loadDevice(vault, deviceId);
 
   assert.equal(scanned.last_seen, '2026-01-01T00:00:00.000Z');
 });
