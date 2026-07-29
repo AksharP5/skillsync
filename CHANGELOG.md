@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/AksharP5/skillsync/compare/v0.5.0...v0.5.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* stop daemon heartbeat commits ([#14](https://github.com/AksharP5/skillsync/issues/14)) ([5aae857](https://github.com/AksharP5/skillsync/commit/5aae8575db8f60c821a2050b9f0bdf61322de8f6))
+
 ## [0.5.0](https://github.com/AksharP5/skillsync/compare/v0.4.0...v0.5.0) (2026-07-02)
 
 
