@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release version to publish to npm
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: release
+        if: ${{ github.event_name == 'push' }}
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
@@ -22,19 +29,31 @@ jobs:
           manifest-file: release-please-manifest.json
 
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
+        with:
+          fetch-depth: 0
+
+      - name: Verify recovery release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
+          git rev-parse --verify "refs/tags/v$VERSION^{commit}" >/dev/null
+          git diff --quiet "v$VERSION" -- LICENSE README.md package.json src
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - run: npm ci
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
 
       - run: npm test
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
 
       - run: npm publish --access public
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
