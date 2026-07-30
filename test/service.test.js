@@ -48,11 +48,16 @@ test('service definitions execute the stable CLI directly', () => {
   };
   const plist = renderLaunchAgent({
     label: 'dev.skillsync.daemon',
+    pathValue: '/usr/bin:/bin',
     ...invocation,
   });
   const unit = renderSystemdUserService(invocation);
 
   assert.match(plist, /<string>\/home\/user\/\.local\/bin\/skillsync<\/string><string>daemon<\/string>/);
+  assert.match(
+    plist,
+    /<key>PATH<\/key><string>\/home\/user\/\.local\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin<\/string>/,
+  );
   assert.match(unit, /ExecStart="\/home\/user\/\.local\/bin\/skillsync" "daemon"/);
   assert.doesNotMatch(unit, /content-addressed/);
 });
