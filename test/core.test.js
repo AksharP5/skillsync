@@ -39,7 +39,13 @@ import {
   uninstallSkillAndPrune,
 } from '../src/core/device.js';
 import { generateGroups } from '../src/core/groups.js';
-import { renderSkillDeviceMatrix } from '../src/core/matrix.js';
+import {
+  matrixAssignmentChanges,
+  renderSkillDeviceMatrix,
+  setDraftSkillAssignmentTargets,
+  skillDeviceMarker,
+  skillDeviceState,
+} from '../src/core/matrix.js';
 import { syncVault } from '../src/core/sync.js';
 
 async function tempDir() {
@@ -441,6 +447,52 @@ test('skill matrix distinguishes assigned, detected, and absent skills', () => {
   assert.match(output, /product-video\s+\| ·\s+\| ○/);
   assert.match(output, /✓ assigned\s+○ detected locally\s+· absent/);
   assert.match(output, /Pending sync: devbox/);
+});
+
+test('editable matrix stages exact device assignment changes without mutating the initial state', () => {
+  const initial = [
+    {
+      device_id: 'macbook',
+      display_name: 'MacBook',
+      installed: { 'paper-mcp': ['codex'] },
+      global_installed: [],
+      detected: { codex: [{ name: 'paper-mcp', path: 'paper-mcp' }] },
+    },
+    {
+      device_id: 'linux',
+      display_name: 'Linux',
+      installed: {},
+      global_installed: [],
+      detected: { claude: [{ name: 'paper-mcp', path: 'paper-mcp' }] },
+    },
+  ];
+  const draft = structuredClone(initial);
+
+  assert.equal(skillDeviceState(initial[0], 'paper-mcp'), 'assigned');
+  assert.equal(skillDeviceState(initial[1], 'paper-mcp'), 'detected');
+  assert.equal(skillDeviceMarker(initial[1], 'paper-mcp'), '○');
+
+  setDraftSkillAssignmentTargets(draft[0], 'paper-mcp', []);
+  setDraftSkillAssignmentTargets(draft[1], 'paper-mcp', ['global']);
+
+  assert.deepEqual(matrixAssignmentChanges(initial, draft), [
+    {
+      deviceId: 'linux',
+      displayName: 'Linux',
+      skillName: 'paper-mcp',
+      before: [],
+      after: ['global'],
+    },
+    {
+      deviceId: 'macbook',
+      displayName: 'MacBook',
+      skillName: 'paper-mcp',
+      before: ['codex'],
+      after: [],
+    },
+  ]);
+  assert.deepEqual(initial[0].installed, { 'paper-mcp': ['codex'] });
+  assert.deepEqual(initial[1].global_installed, []);
 });
 
 test('auto-import baselines existing local skills and adopts only newly detected skills', async () => {

@@ -12,6 +12,65 @@ function detectedSkillNames(device) {
     .filter(Boolean));
 }
 
+export function skillDeviceState(device, skillName) {
+  if (assignedSkillNames(device).has(skillName)) return 'assigned';
+  if (detectedSkillNames(device).has(skillName)) return 'detected';
+  return 'absent';
+}
+
+export function skillDeviceMarker(device, skillName) {
+  const state = skillDeviceState(device, skillName);
+  if (state === 'assigned') return '✓';
+  if (state === 'detected') return '○';
+  return '·';
+}
+
+export function skillAssignmentTargets(device, skillName) {
+  return [
+    ...(device?.global_installed?.includes(skillName) ? ['global'] : []),
+    ...(device?.installed?.[skillName] || []),
+  ].sort();
+}
+
+export function setDraftSkillAssignmentTargets(device, skillName, targets) {
+  const targetNames = [...new Set(targets.filter((target) => target !== 'global'))].sort();
+  if (targetNames.length) device.installed[skillName] = targetNames;
+  else delete device.installed[skillName];
+  const global = new Set(device.global_installed || []);
+  if (targets.includes('global')) global.add(skillName);
+  else global.delete(skillName);
+  device.global_installed = [...global].sort();
+}
+
+export function matrixAssignmentChanges(initialDevices, draftDevices) {
+  const initialById = new Map(initialDevices.map((device) => [device.device_id, device]));
+  const changes = [];
+  for (const draft of draftDevices) {
+    const initial = initialById.get(draft.device_id);
+    const skillNames = new Set([
+      ...Object.keys(initial?.installed || {}),
+      ...(initial?.global_installed || []),
+      ...Object.keys(draft.installed || {}),
+      ...(draft.global_installed || []),
+    ]);
+    for (const skillName of skillNames) {
+      const before = skillAssignmentTargets(initial, skillName);
+      const after = skillAssignmentTargets(draft, skillName);
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        changes.push({
+          deviceId: draft.device_id,
+          displayName: draft.display_name,
+          skillName,
+          before,
+          after,
+        });
+      }
+    }
+  }
+  return changes.sort((a, b) => a.skillName.localeCompare(b.skillName)
+    || a.deviceId.localeCompare(b.deviceId));
+}
+
 function truncate(value, width) {
   const text = String(value);
   if (text.length <= width) return text;
@@ -52,15 +111,8 @@ export function renderSkillDeviceMatrix({ skills, devices, maxWidth = 120 }) {
   const sections = chunks.map((columns) => {
     const header = `${pad('Skill', skillWidth)} | ${columns.map(({ device, width }) => pad(device.device_id, width)).join(' | ')}`;
     const separator = `${'-'.repeat(skillWidth)}-+-${columns.map(({ width }) => '-'.repeat(width)).join('-+-')}`;
-    const assigned = new Map(columns.map(({ device }) => [device.device_id, assignedSkillNames(device)]));
-    const detected = new Map(columns.map(({ device }) => [device.device_id, detectedSkillNames(device)]));
     const rows = names.map((name) => `${pad(name, skillWidth)} | ${columns.map(({ device, width }) => {
-      const marker = assigned.get(device.device_id).has(name)
-        ? '✓'
-        : detected.get(device.device_id).has(name)
-          ? '○'
-          : '·';
-      return marker.padEnd(width);
+      return skillDeviceMarker(device, name).padEnd(width);
     }).join(' | ')}`);
     return [header, separator, ...rows].join('\n');
   });

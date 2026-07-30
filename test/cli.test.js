@@ -205,6 +205,24 @@ test('matrix shows cross-device assignments and device auto-adoption can be disa
   assert.equal((await loadDevice(vault, 'macbook')).targets.codex.auto_import, false);
 });
 
+test('matrix --edit requires an interactive terminal', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  await mkdir(vault, { recursive: true });
+  await writeConfig(home, vault, 'macbook');
+
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'matrix', '--edit'], {
+      cwd: path.resolve('.'),
+      env: { ...process.env, HOME: home },
+    }),
+    (error) => {
+      assert.match(error.stderr, /matrix editor needs an interactive terminal/);
+      return true;
+    },
+  );
+});
+
 test('daemon rejects a non-positive interval instead of entering a tight loop', async () => {
   await assert.rejects(
     () => execFileAsync(process.execPath, [
