@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/AksharP5/skillsync/compare/v0.7.0...v0.7.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* make unused skill cleanup presence aware ([#26](https://github.com/AksharP5/skillsync/issues/26)) ([a6e2437](https://github.com/AksharP5/skillsync/commit/a6e2437b4b75923b124bfc5091faeea1706dcd2a))
+
 ## [0.7.0](https://github.com/AksharP5/skillsync/compare/v0.6.1...v0.7.0) (2026-07-30)
 
 
