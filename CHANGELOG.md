@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/AksharP5/skillsync/compare/v0.6.1...v0.7.0) (2026-07-30)
+
+
+### Features
+
+* add clean device state and skill matrix ([#24](https://github.com/AksharP5/skillsync/issues/24)) ([4c83cec](https://github.com/AksharP5/skillsync/commit/4c83cec1f9b3fddfb1380caf1da1849ccd23bc75))
+
 ## [0.6.1](https://github.com/AksharP5/skillsync/compare/v0.6.0...v0.6.1) (2026-07-30)
 
 
