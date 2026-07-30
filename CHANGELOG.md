@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/AksharP5/skillsync/compare/v0.6.0...v0.6.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* include executable path in macOS service environment ([#22](https://github.com/AksharP5/skillsync/issues/22)) ([a584957](https://github.com/AksharP5/skillsync/commit/a58495702784b6a1f46ec0b41f39af39c274c880))
+
 ## [0.6.0](https://github.com/AksharP5/skillsync/compare/v0.5.1...v0.6.0) (2026-07-30)
 
 
