@@ -44,4 +44,5 @@ SkillSync manages user-authored directories and private Git repositories. Change
 - preserve a recoverable copy before replacing user-owned content;
 - avoid periodic repository writes when no meaningful state changed;
 - keep destructive vault deletion explicit or policy-controlled and covered by tests;
-- protect a vault skill from automatic cleanup when any device assigns it or reports a detected local copy.
+- protect a vault skill from automatic cleanup when any device assigns it or reports a detected local copy;
+- never replace an unmanaged global instructions file without explicit conflict resolution and a recoverable backup.

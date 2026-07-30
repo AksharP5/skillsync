@@ -43,6 +43,7 @@ export function newDevice(deviceId = defaultDeviceId()) {
     installed: {},
     global_installed: [],
     detected: {},
+    instructions: {},
   };
 }
 
@@ -127,6 +128,7 @@ function isLegacyDeviceManifest(value) {
     'applied_generation',
     'targets',
     'detected',
+    'instructions',
   ].some((key) => Object.hasOwn(value, key)));
 }
 
@@ -148,6 +150,7 @@ function normalizeReportedState(value, deviceId, { legacy = false } = {}) {
     applied_generation: nonNegativeInteger(value?.applied_generation),
     targets: normalizeTargets(value?.targets, { defaultAutoImport: !legacy }),
     detected: value?.detected && typeof value.detected === 'object' ? value.detected : {},
+    instructions: normalizeInstructions(value?.instructions),
   };
 }
 
@@ -165,6 +168,7 @@ function reportedStateFromDevice(device) {
     applied_generation: device.applied_generation,
     targets: device.targets,
     detected: device.detected,
+    instructions: device.instructions,
   }, device.device_id);
   return {
     ...reported,
@@ -187,6 +191,7 @@ function normalizeDevice(device, deviceId) {
     installed: normalizeInstalled(device?.installed),
     global_installed: normalizeGlobalInstalled(device),
     detected: device?.detected && typeof device.detected === 'object' ? device.detected : {},
+    instructions: normalizeInstructions(device?.instructions),
   };
 }
 
@@ -254,6 +259,35 @@ function serializeReportedTargets(targets) {
       auto_adopt: Boolean(target.auto_import),
     },
   ]));
+}
+
+function normalizeInstructions(instructions) {
+  const agents = instructions?.agents;
+  if (!agents || typeof agents !== 'object') return {};
+  const targetPath = typeof agents.path === 'string' && agents.path
+    ? agents.path
+    : '~/.codex/AGENTS.md';
+  return {
+    agents: {
+      path: targetPath,
+      enabled: Boolean(agents.enabled),
+    },
+  };
+}
+
+export async function configureGlobalInstructions({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  targetPath = '~/.codex/AGENTS.md',
+  enabled,
+}) {
+  const device = await loadDevice(vaultPath, deviceId);
+  device.instructions.agents = {
+    path: targetPath,
+    enabled: Boolean(enabled),
+  };
+  await saveReportedDevice(vaultPath, device);
+  return device;
 }
 
 export async function addTarget({

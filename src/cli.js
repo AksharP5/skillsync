@@ -38,6 +38,14 @@ import {
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { generateGroups } from './core/groups.js';
 import {
+  DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
+  disableGlobalInstructions,
+  enableGlobalInstructions,
+  globalInstructionsHash,
+  globalInstructionsVaultPath,
+  inspectGlobalInstructions,
+} from './core/instructions.js';
+import {
   addSkillToVault,
   compareSkillToVault,
   deleteSkillFromVault,
@@ -80,6 +88,9 @@ async function main() {
       return installedCommand(rest);
     case 'matrix':
       return matrixCommand(rest);
+    case 'instructions':
+    case 'agents':
+      return instructionsCommand(rest);
     case 'devices':
     case 'device':
       return deviceCommand(rest);
@@ -631,6 +642,113 @@ async function matrixCommand(rest = []) {
     devices,
     maxWidth: process.stdout.columns || 120,
   }));
+}
+
+async function instructionsCommand(rest = []) {
+  const subcommand = rest[0] || 'status';
+  const config = await configured();
+  if (subcommand === 'status') {
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: true,
+    });
+    const canonical = globalInstructionsVaultPath(config.repoPath);
+    const canonicalExists = await exists(canonical);
+    const hash = canonicalExists ? await globalInstructionsHash(canonical) : null;
+    console.log(canonicalExists
+      ? `Canonical global instructions: ${canonical} (${hash})`
+      : 'Canonical global instructions: not configured');
+    const devices = await listDevices(config.repoPath);
+    for (const device of devices) {
+      const agents = device.instructions.agents;
+      if (!agents?.enabled) {
+        console.log(`- ${device.device_id}: off`);
+        continue;
+      }
+      let state = 'enabled';
+      if (device.device_id === config.deviceId) {
+        const inspected = await inspectGlobalInstructions({
+          vaultPath: config.repoPath,
+          targetPath: agents.path,
+        });
+        state = inspected.destinationOwned ? 'synced' : 'needs repair';
+      }
+      console.log(`- ${device.device_id}: ${state} -> ${agents.path}`);
+    }
+    return;
+  }
+  if (subcommand === 'enable') {
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: true,
+    });
+    const targetPath = flagValue(rest, '--path', DEFAULT_GLOBAL_INSTRUCTIONS_PATH);
+    const fromLocal = hasFlag(rest, '--from-local');
+    const useVault = hasFlag(rest, '--use-vault');
+    if (fromLocal && useVault) {
+      throw new Error('Choose only one: --from-local or --use-vault');
+    }
+    let strategy = fromLocal ? 'from-local' : useVault ? 'use-vault' : undefined;
+    const inspected = await inspectGlobalInstructions({
+      vaultPath: config.repoPath,
+      targetPath,
+    });
+    if (!strategy
+      && inspected.canonicalExists
+      && inspected.destinationExists
+      && !inspected.destinationOwned
+      && !inspected.sameContents
+      && process.stdin.isTTY) {
+      strategy = await promptWithEscape(select({
+        message: 'Your local and vault AGENTS.md files differ. Which should become canonical?',
+        loop: false,
+        choices: [
+          { name: 'Use this device’s local AGENTS.md', value: 'from-local' },
+          { name: 'Use the vault AGENTS.md on this device', value: 'use-vault' },
+          { name: 'Cancel', value: 'cancel' },
+        ],
+      }), 'cancel');
+      if (strategy === 'cancel') return;
+    }
+    const result = await enableGlobalInstructions({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      targetPath,
+      strategy,
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    console.log(`Global AGENTS.md sync enabled: ${result.destination}`);
+    console.log(`Canonical file: ${result.source}`);
+    if (result.backup) console.log(`Preserved previous local path: ${result.backup}`);
+    return;
+  }
+  if (subcommand === 'disable') {
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: true,
+    });
+    const result = await disableGlobalInstructions({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    console.log(result.disabled
+      ? `Global AGENTS.md sync disabled. A local copy remains at ${result.destination}.`
+      : 'Global AGENTS.md sync was not configured on this device.');
+    return;
+  }
+  throw new Error('Usage: skillsync instructions <status|enable|disable> [--path path] [--from-local|--use-vault]');
 }
 
 function conflictAction(rest) {
@@ -2067,6 +2185,11 @@ async function settingsScreen(config) {
         value: 'toggle-prune',
         description: 'Full syncs remove skills with no assignments and no detected local copies.',
       },
+      {
+        name: `Sync global AGENTS.md on this device: ${device.instructions.agents?.enabled ? 'on' : 'off'}`,
+        value: 'toggle-instructions',
+        description: `Keeps ${device.instructions.agents?.path || DEFAULT_GLOBAL_INSTRUCTIONS_PATH} linked to the canonical vault file.`,
+      },
       { name: 'Back', value: 'back' },
     ],
   }));
@@ -2084,6 +2207,22 @@ async function settingsScreen(config) {
     });
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
     console.log(`\nAuto-adoption on ${device.display_name}: ${next ? 'on' : 'off'}\n`);
+    return;
+  }
+  if (choice === 'toggle-instructions') {
+    if (device.instructions.agents?.enabled) {
+      const confirmed = await confirm({
+        message: 'Disable global AGENTS.md sync and leave a standalone local copy?',
+        default: false,
+      });
+      if (confirmed) await instructionsCommand(['disable']);
+    } else {
+      const confirmed = await confirm({
+        message: `Enable global AGENTS.md sync at ${DEFAULT_GLOBAL_INSTRUCTIONS_PATH}?`,
+        default: true,
+      });
+      if (confirmed) await instructionsCommand(['enable']);
+    }
     return;
   }
   if (choice !== 'toggle-prune') return;
@@ -2107,5 +2246,5 @@ async function settingsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions <status|enable|disable> [--path path] [--from-local|--use-vault]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

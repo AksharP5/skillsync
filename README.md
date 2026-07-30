@@ -88,6 +88,38 @@ Choose a skill, check or uncheck the devices that should have it, and select des
 
 Remote changes apply automatically when those devices next sync. If a skill is removed from every device and `delete-unassigned-skills` is enabled, SkillSync waits until every device reports the local copy gone and then removes it from the vault.
 
+## Sync your global AGENTS.md
+
+SkillSync can optionally keep Codex’s global `~/.codex/AGENTS.md` synchronized through the same private vault.
+
+On the device whose instructions you want to keep:
+
+```bash
+skillsync instructions enable --from-local
+```
+
+On each additional device:
+
+```bash
+skillsync instructions enable --use-vault
+```
+
+SkillSync preserves the previous local path as a timestamped backup, then links `~/.codex/AGENTS.md` to the canonical `globals/AGENTS.md` in the vault. Editing the normal global file therefore updates the vault and propagates through the background service. Only the content change needs a commit; devices do not write separate heartbeat or applied-hash commits. Project-specific `AGENTS.md` files are not affected.
+
+Check every device:
+
+```bash
+skillsync instructions status
+```
+
+To stop syncing on one device:
+
+```bash
+skillsync instructions disable
+```
+
+Disabling removes the managed link and leaves a standalone local copy with the current instructions. You can also toggle this under **Settings** in the interactive UI.
+
 ## Add and install skills
 
 Add a local skill folder to the vault:
@@ -255,6 +287,7 @@ skillsync status
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]
+skillsync instructions <status|enable|disable> [--path path] [--from-local|--use-vault]
 skillsync device list
 skillsync device show <id>
 skillsync add <folder-or-git-url> [--skill name] [--target target] [--global]

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -221,6 +221,55 @@ test('matrix --edit requires an interactive terminal', async () => {
       return true;
     },
   );
+});
+
+test('instructions enable adopts the global AGENTS.md and disable leaves a local copy', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const destination = path.join(home, '.codex', 'AGENTS.md');
+  await mkdir(vault, { recursive: true });
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, '# Shared instructions\n');
+  await writeConfig(home, vault, 'macbook');
+
+  const enabled = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'enable',
+    '--from-local',
+  ], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(enabled.stdout, /Global AGENTS\.md sync enabled/);
+  assert.match(enabled.stdout, /Preserved previous local path/);
+  assert.equal((await lstat(destination)).isSymbolicLink(), true);
+  assert.equal(
+    await readFile(path.join(vault, 'globals', 'AGENTS.md'), 'utf8'),
+    '# Shared instructions\n',
+  );
+
+  const status = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'status',
+  ], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(status.stdout, /macbook: synced/);
+
+  const disabled = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'disable',
+  ], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(disabled.stdout, /A local copy remains/);
+  assert.equal((await lstat(destination)).isFile(), true);
+  assert.equal(await readFile(destination, 'utf8'), '# Shared instructions\n');
 });
 
 test('daemon rejects a non-positive interval instead of entering a tight loop', async () => {

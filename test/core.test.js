@@ -7,6 +7,7 @@ import {
   readFile,
   readlink,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -39,6 +40,13 @@ import {
   uninstallSkillAndPrune,
 } from '../src/core/device.js';
 import { generateGroups } from '../src/core/groups.js';
+import {
+  applyGlobalInstructions,
+  disableGlobalInstructions,
+  enableGlobalInstructions,
+  globalInstructionsHash,
+  globalInstructionsVaultPath,
+} from '../src/core/instructions.js';
 import {
   matrixAssignmentChanges,
   renderSkillDeviceMatrix,
@@ -395,7 +403,7 @@ test('legacy device manifests migrate into controller-owned desired state and de
   assert.deepEqual(Object.keys(desired).sort(), ['device_id', 'generation', 'global_installed', 'installed', 'version']);
   assert.equal(desired.generation, 4);
   assert.deepEqual(desired.installed, { 'paper-mcp': ['codex'] });
-  assert.deepEqual(Object.keys(reported).sort(), ['applied_generation', 'detected', 'device_id', 'display_name', 'targets', 'version']);
+  assert.deepEqual(Object.keys(reported).sort(), ['applied_generation', 'detected', 'device_id', 'display_name', 'instructions', 'targets', 'version']);
   assert.equal(reported.applied_generation, 3);
   assert.equal(reported.targets.codex.auto_adopt, false);
   assert.equal(reported.targets.codex.auto_import, undefined);
@@ -416,6 +424,83 @@ test('desired assignment edits and reported device scans do not overwrite each o
   const desiredBeforeScan = await readFile(path.join(vault, 'devices', 'linux.json'), 'utf8');
   await scanTargets({ vaultPath: vault, deviceId: 'linux' });
   assert.equal(await readFile(path.join(vault, 'devices', 'linux.json'), 'utf8'), desiredBeforeScan);
+});
+
+test('global instructions adopt a local AGENTS.md, stay linked to the vault, and disable to a local copy', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const destination = path.join(root, 'device', '.codex', 'AGENTS.md');
+  const originalSource = path.join(root, 'dotfiles', 'AGENTS.md');
+  await mkdir(path.dirname(destination), { recursive: true });
+  await mkdir(path.dirname(originalSource), { recursive: true });
+  await writeFile(originalSource, '# Device instructions\n');
+  await symlink(originalSource, destination, 'file');
+
+  const enabled = await enableGlobalInstructions({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    targetPath: destination,
+    strategy: 'from-local',
+  });
+
+  const canonical = globalInstructionsVaultPath(vault);
+  assert.equal(await readFile(canonical, 'utf8'), '# Device instructions\n');
+  assert.equal((await lstat(destination)).isSymbolicLink(), true);
+  assert.equal(path.resolve(path.dirname(destination), await readlink(destination)), canonical);
+  assert.equal((await lstat(enabled.backup)).isSymbolicLink(), true);
+  assert.equal(await readFile(enabled.backup, 'utf8'), '# Device instructions\n');
+  let device = await loadDevice(vault, 'macbook');
+  assert.equal(device.instructions.agents.enabled, true);
+  assert.equal(device.instructions.agents.path, destination);
+
+  await writeFile(destination, '# Updated everywhere\n');
+  const applied = await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal(applied.hash, await globalInstructionsHash(canonical));
+  assert.equal(await readFile(canonical, 'utf8'), '# Updated everywhere\n');
+
+  await disableGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal((await lstat(destination)).isFile(), true);
+  assert.equal(await readFile(destination, 'utf8'), '# Updated everywhere\n');
+  assert.equal(await readFile(originalSource, 'utf8'), '# Device instructions\n');
+  device = await loadDevice(vault, 'macbook');
+  assert.equal(device.instructions.agents.enabled, false);
+});
+
+test('global instructions require explicit conflict resolution and never overwrite an unmanaged replacement', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const canonical = globalInstructionsVaultPath(vault);
+  const destination = path.join(root, 'device', '.codex', 'AGENTS.md');
+  await mkdir(path.dirname(canonical), { recursive: true });
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(canonical, '# Vault\n');
+  await writeFile(destination, '# Local\n');
+
+  await assert.rejects(
+    () => enableGlobalInstructions({
+      vaultPath: vault,
+      deviceId: 'linux',
+      targetPath: destination,
+    }),
+    /Choose --from-local or --use-vault/,
+  );
+
+  const enabled = await enableGlobalInstructions({
+    vaultPath: vault,
+    deviceId: 'linux',
+    targetPath: destination,
+    strategy: 'use-vault',
+  });
+  assert.equal(await readFile(enabled.backup, 'utf8'), '# Local\n');
+  assert.equal(await readFile(destination, 'utf8'), '# Vault\n');
+
+  await unlink(destination);
+  await writeFile(destination, '# Unmanaged replacement\n');
+  await assert.rejects(
+    () => applyGlobalInstructions({ vaultPath: vault, deviceId: 'linux' }),
+    /Refusing to overwrite unmanaged global instructions/,
+  );
+  assert.equal(await readFile(destination, 'utf8'), '# Unmanaged replacement\n');
 });
 
 test('skill matrix distinguishes assigned, detected, and absent skills', () => {
