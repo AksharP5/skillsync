@@ -6,7 +6,10 @@ import {
   sweepUnusedSkills,
 } from './device.js';
 import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
-import { applyGlobalInstructions } from './instructions.js';
+import {
+  applyGlobalInstructions,
+  reconcileGlobalInstructionProviders,
+} from './instructions.js';
 import { refreshChangedRegistryEntries } from './registry.js';
 
 export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
@@ -15,11 +18,15 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
   }
   await refreshChangedRegistryEntries(vaultPath);
   let autoImport = { adopted: [], conflicts: [] };
+  let instructionProviders = { changed: false, conflicts: [], backups: [] };
+  let prunedInstructionProfiles = [];
   let prunedSkills = [];
   if (deviceId) {
     autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
     await applyLinks({ vaultPath, deviceId });
-    await applyGlobalInstructions({ vaultPath, deviceId });
+    instructionProviders = await reconcileGlobalInstructionProviders({ vaultPath, deviceId });
+    const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
+    prunedInstructionProfiles = instructions.prunedProfiles || [];
     await markDeviceApplied({ vaultPath, deviceId });
     await scanTargets({ vaultPath, deviceId });
     if (pull) {
@@ -43,6 +50,9 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
     rebasedBeforePush,
     autoImported: autoImport.adopted,
     autoImportConflicts: autoImport.conflicts,
+    instructionProviderConflicts: instructionProviders.conflicts,
+    instructionProviderBackups: instructionProviders.backups || [],
+    prunedInstructionProfiles,
     prunedSkills,
   };
 }

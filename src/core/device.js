@@ -63,11 +63,29 @@ export function deviceStatePath(vaultPath, deviceId) {
   );
 }
 
+export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
+  return path.join(
+    vaultPath,
+    'globals',
+    'assignments',
+    `${assertSafePathSegment(deviceId, 'Device ID')}.json`,
+  );
+}
+
 export async function loadDevice(vaultPath, deviceId = defaultDeviceId()) {
   await ensureVault(vaultPath);
   const desired = await readJson(devicePath(vaultPath, deviceId), null);
   const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
-  return composeDevice({ desired, reported, deviceId });
+  const instructionSelection = await readJson(
+    globalInstructionsAssignmentPath(vaultPath, deviceId),
+    null,
+  );
+  return composeDevice({
+    desired,
+    reported,
+    instructionSelection,
+    deviceId,
+  });
 }
 
 export async function saveDevice(vaultPath, device) {
@@ -100,23 +118,39 @@ async function saveReportedDevice(vaultPath, device) {
   return normalized;
 }
 
-function composeDevice({ desired, reported, deviceId }) {
+function composeDevice({
+  desired,
+  reported,
+  instructionSelection,
+  deviceId,
+}) {
   const normalizedDeviceId = assertSafePathSegment(
     deviceId || desired?.device_id || reported?.device_id || defaultDeviceId(),
     'Device ID',
   );
   const legacy = isLegacyDeviceManifest(desired) ? desired : null;
-  const desiredState = normalizeDesiredState(desired, normalizedDeviceId);
   const reportedState = normalizeReportedState(
     reported || legacy,
     normalizedDeviceId,
     { legacy: Boolean(legacy && !reported) },
   );
+  const desiredState = normalizeDesiredState(desired, normalizedDeviceId);
+  const selectedProfile = instructionSelection
+    && Object.hasOwn(instructionSelection, 'profile')
+    ? normalizeInstructionProfile(instructionSelection.profile)
+    : reportedState.instructions.agents?.applied_profile || null;
   return normalizeDevice({
     ...reportedState,
     desired_generation: desiredState.generation,
     installed: desiredState.installed,
     global_installed: desiredState.global_installed,
+    instructions: {
+      version: reportedState.instructions.version,
+      agents: composeInstructionState(
+        { profile: selectedProfile },
+        reportedState.instructions.agents,
+      ),
+    },
   }, normalizedDeviceId);
 }
 
@@ -128,7 +162,6 @@ function isLegacyDeviceManifest(value) {
     'applied_generation',
     'targets',
     'detected',
-    'instructions',
   ].some((key) => Object.hasOwn(value, key)));
 }
 
@@ -150,7 +183,7 @@ function normalizeReportedState(value, deviceId, { legacy = false } = {}) {
     applied_generation: nonNegativeInteger(value?.applied_generation),
     targets: normalizeTargets(value?.targets, { defaultAutoImport: !legacy }),
     detected: value?.detected && typeof value.detected === 'object' ? value.detected : {},
-    instructions: normalizeInstructions(value?.instructions),
+    instructions: normalizeReportedInstructions(value?.instructions),
   };
 }
 
@@ -168,7 +201,7 @@ function reportedStateFromDevice(device) {
     applied_generation: device.applied_generation,
     targets: device.targets,
     detected: device.detected,
-    instructions: device.instructions,
+    instructions: reportedInstructionsFromDevice(device.instructions),
   }, device.device_id);
   return {
     ...reported,
@@ -191,7 +224,7 @@ function normalizeDevice(device, deviceId) {
     installed: normalizeInstalled(device?.installed),
     global_installed: normalizeGlobalInstalled(device),
     detected: device?.detected && typeof device.detected === 'object' ? device.detected : {},
-    instructions: normalizeInstructions(device?.instructions),
+    instructions: normalizeInstructionState(device?.instructions),
   };
 }
 
@@ -261,31 +294,126 @@ function serializeReportedTargets(targets) {
   ]));
 }
 
-function normalizeInstructions(instructions) {
+function normalizeInstructionProfile(profile) {
+  if (profile === null || profile === undefined || profile === '') return null;
+  return assertSafePathSegment(profile, 'Instruction profile');
+}
+
+function normalizeInstructionPaths(agents) {
+  const values = Array.isArray(agents?.paths)
+    ? agents.paths
+    : typeof agents?.path === 'string' && agents.path
+      ? [agents.path]
+      : [];
+  return [...new Set(values.filter((value) => typeof value === 'string' && value))];
+}
+
+function normalizeAutomaticInstructionPaths(agents) {
+  const paths = Array.isArray(agents?.auto_paths) ? agents.auto_paths : [];
+  return [...new Set(paths.filter((value) => typeof value === 'string' && value))];
+}
+
+function normalizeReportedInstructions(instructions) {
   const agents = instructions?.agents;
-  if (!agents || typeof agents !== 'object') return {};
-  const targetPath = typeof agents.path === 'string' && agents.path
-    ? agents.path
-    : '~/.codex/AGENTS.md';
+  const version = nonNegativeInteger(instructions?.version);
+  if (!agents || typeof agents !== 'object') {
+    return version ? { version } : {};
+  }
+  const paths = normalizeInstructionPaths(agents);
+  const automaticPaths = normalizeAutomaticInstructionPaths(agents)
+    .filter((value) => paths.includes(value));
+  const appliedProfile = normalizeInstructionProfile(
+    agents.applied_profile ?? (agents.enabled ? 'shared' : null),
+  );
+  if (!paths.length && !appliedProfile) return version ? { version } : {};
   return {
+    version,
     agents: {
-      path: targetPath,
-      enabled: Boolean(agents.enabled),
+      paths,
+      ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
+      applied_profile: appliedProfile,
     },
   };
+}
+
+function composeInstructionState(desiredAgents, reportedAgents) {
+  const profile = normalizeInstructionProfile(desiredAgents?.profile);
+  const paths = normalizeInstructionPaths(reportedAgents);
+  const automaticPaths = normalizeAutomaticInstructionPaths(reportedAgents)
+    .filter((value) => paths.includes(value));
+  const appliedProfile = normalizeInstructionProfile(reportedAgents?.applied_profile);
+  if (!profile && !paths.length && !appliedProfile) return undefined;
+  return {
+    profile,
+    paths,
+    ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
+    path: paths[0] || '~/.codex/AGENTS.md',
+    applied_profile: appliedProfile,
+    enabled: Boolean(profile),
+  };
+}
+
+function normalizeInstructionState(instructions) {
+  const agents = instructions?.agents;
+  const version = nonNegativeInteger(instructions?.version);
+  if (!agents || typeof agents !== 'object') return version ? { version } : {};
+  const composed = composeInstructionState(agents, agents);
+  return composed ? { version, agents: composed } : version ? { version } : {};
+}
+
+function reportedInstructionsFromDevice(instructions) {
+  const agents = instructions?.agents;
+  const version = nonNegativeInteger(instructions?.version);
+  if (!agents || typeof agents !== 'object') return version ? { version } : {};
+  const paths = normalizeInstructionPaths(agents);
+  const automaticPaths = normalizeAutomaticInstructionPaths(agents)
+    .filter((value) => paths.includes(value));
+  const appliedProfile = normalizeInstructionProfile(agents.applied_profile);
+  if (!paths.length && !appliedProfile) return version ? { version } : {};
+  return {
+    version,
+    agents: {
+      paths,
+      ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
+      applied_profile: appliedProfile,
+    },
+  };
+}
+
+export async function setGlobalInstructionsProfile({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  profile,
+}) {
+  const device = await loadDevice(vaultPath, deviceId);
+  const nextProfile = normalizeInstructionProfile(profile);
+  if (device.instructions.agents?.profile === nextProfile) return device;
+  await writeJson(globalInstructionsAssignmentPath(vaultPath, deviceId), {
+    version: 1,
+    device_id: device.device_id,
+    profile: nextProfile,
+  });
+  return loadDevice(vaultPath, deviceId);
 }
 
 export async function configureGlobalInstructions({
   vaultPath,
   deviceId = defaultDeviceId(),
-  targetPath = '~/.codex/AGENTS.md',
-  enabled,
+  targetPaths,
+  targetPath,
+  automaticPaths,
+  appliedProfile,
 }) {
   const device = await loadDevice(vaultPath, deviceId);
+  const paths = targetPaths || (targetPath ? [targetPath] : device.instructions.agents?.paths || []);
+  const autoPaths = automaticPaths || device.instructions.agents?.auto_paths || [];
   device.instructions.agents = {
-    path: targetPath,
-    enabled: Boolean(enabled),
+    ...(device.instructions.agents || {}),
+    paths: [...new Set(paths)],
+    auto_paths: [...new Set(autoPaths)].filter((value) => paths.includes(value)),
+    applied_profile: normalizeInstructionProfile(appliedProfile),
   };
+  device.instructions.version = 1;
   await saveReportedDevice(vaultPath, device);
   return device;
 }
@@ -891,9 +1019,11 @@ async function isOwnedCopy(targetPath, vaultPath) {
 export async function listDevices(vaultPath) {
   await mkdir(path.join(vaultPath, 'devices'), { recursive: true });
   await mkdir(path.join(vaultPath, 'state'), { recursive: true });
+  await mkdir(path.join(vaultPath, 'globals', 'assignments'), { recursive: true });
   const desiredFiles = await readdir(path.join(vaultPath, 'devices')).catch(() => []);
   const reportedFiles = await readdir(path.join(vaultPath, 'state')).catch(() => []);
-  const deviceIds = new Set([...desiredFiles, ...reportedFiles]
+  const instructionFiles = await readdir(path.join(vaultPath, 'globals', 'assignments')).catch(() => []);
+  const deviceIds = new Set([...desiredFiles, ...reportedFiles, ...instructionFiles]
     .filter((file) => file.endsWith('.json'))
     .map((file) => file.slice(0, -'.json'.length)));
   const devices = [];
