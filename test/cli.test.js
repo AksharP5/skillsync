@@ -116,7 +116,7 @@ test('install --device records a pending assignment without touching remote path
   await assert.rejects(() => lstat(path.join(remoteTarget, 'paper-mcp')));
 });
 
-test('uninstall --device prunes the last assignment when the vault policy is enabled', async () => {
+test('uninstall --device defers cleanup until the remote device reports the removal', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
   const localTarget = path.join(home, '.codex', 'skills');
@@ -128,6 +128,8 @@ test('uninstall --device prunes the last assignment when the vault policy is ena
   await addTarget({ vaultPath: vault, deviceId: 'controller', name: 'codex', targetPath: localTarget });
   await addTarget({ vaultPath: vault, deviceId: 'remote', name: 'codex', targetPath: remoteTarget });
   await installSkill({ vaultPath: vault, deviceId: 'remote', skillName: 'temporary-skill', targets: ['codex'] });
+  await applyLinks({ vaultPath: vault, deviceId: 'remote' });
+  await scanTargets({ vaultPath: vault, deviceId: 'remote' });
   await setVaultPolicy({ vaultPath: vault, name: 'delete_unassigned_skills', enabled: true });
 
   const { stdout } = await execFileAsync(process.execPath, [
@@ -141,8 +143,8 @@ test('uninstall --device prunes the last assignment when the vault policy is ena
     env: { ...process.env, HOME: home },
   });
 
-  assert.match(stdout, /deleted it from the vault because no device still uses it/);
-  assert.equal((await loadRegistry(vault)).skills['temporary-skill'], undefined);
+  assert.match(stdout, /will apply on that device's next sync/);
+  assert.ok((await loadRegistry(vault)).skills['temporary-skill']);
 });
 
 test('scan adopts a newly detected skill when target auto-adoption is enabled', async () => {
