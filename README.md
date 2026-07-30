@@ -70,10 +70,13 @@ The matrix gives you one clean view of your vault:
 Skill             | archlinux | devbox | macbook
 ------------------+-----------+--------+--------
 paper-mcp         | ✓         | ·      | ✓
+product-video     | ○         | ·      | ·
 terminal-control  | ✓         | ✓      | ✓
 
-✓ assigned  · off
+✓ assigned  ○ detected locally  · absent
 ```
+
+`○` means SkillSync found a local copy even though the skill is not assigned to that device. This distinction prevents cleanup from deleting skills that are still present somewhere.
 
 You can also open **Skill matrix** in the interactive UI and jump directly to a device to edit its assignments.
 
@@ -197,13 +200,13 @@ Delete it from the vault and every device:
 skillsync delete my-skill
 ```
 
-By default, a skill remains in the vault when its last device assignment is removed. To delete a skill automatically when an uninstall removes its final assignment:
+By default, unused skills remain in the vault. To clean them up automatically during full syncs:
 
 ```bash
 skillsync policy set delete-unassigned-skills on
 ```
 
-This policy reacts to a removal. Turning it on does not immediately delete skills that were already unassigned. Those stay in the vault until you delete them explicitly with `skillsync delete`.
+A full `skillsync sync` then removes a vault skill only when it has no assignment on any device and no device reports a detected local copy. Existing unassigned skills are included, while detected local skills are protected. Changes made for another device remain protected until that device syncs and reports its updated local state.
 
 ## Sync and status
 

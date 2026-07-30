@@ -3,6 +3,7 @@ import {
   autoImportNewLocalSkills,
   markDeviceApplied,
   scanTargets,
+  sweepUnusedSkills,
 } from './device.js';
 import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
 import { refreshChangedRegistryEntries } from './registry.js';
@@ -13,11 +14,15 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
   }
   await refreshChangedRegistryEntries(vaultPath);
   let autoImport = { adopted: [], conflicts: [] };
+  let prunedSkills = [];
   if (deviceId) {
     autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
     await applyLinks({ vaultPath, deviceId });
     await markDeviceApplied({ vaultPath, deviceId });
     await scanTargets({ vaultPath, deviceId });
+    if (pull) {
+      prunedSkills = await sweepUnusedSkills({ vaultPath });
+    }
   }
   let committed = false;
   let pushed = false;
@@ -36,5 +41,6 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
     rebasedBeforePush,
     autoImported: autoImport.adopted,
     autoImportConflicts: autoImport.conflicts,
+    prunedSkills,
   };
 }

@@ -890,7 +890,7 @@ async function uninstall(rest) {
   const deviceId = requestedDeviceId(config, rest);
   await pullBeforeRemoteEdit(config, deviceId);
   await requireKnownDevice(config.repoPath, deviceId);
-  const result = await uninstallSkillAndPrune({
+  await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId,
     skillName,
@@ -900,13 +900,9 @@ async function uninstall(rest) {
     await applyLinks({ vaultPath: config.repoPath, deviceId });
   }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
-  if (result.pruned) {
-    console.log(`Removed ${skillName} from ${deviceId} and deleted it from the vault because no device still uses it.`);
-  } else {
-    console.log(deviceId === config.deviceId
-      ? `Removed ${skillName} from this device.`
-      : `Removed the ${skillName} assignment from ${deviceId}; it will apply on that device's next sync.`);
-  }
+  console.log(deviceId === config.deviceId
+    ? `Removed ${skillName} from this device.`
+    : `Removed the ${skillName} assignment from ${deviceId}; it will apply on that device's next sync.`);
 }
 
 async function deleteSkill(rest) {
@@ -1008,14 +1004,14 @@ async function target(rest) {
     const [, name] = rest;
     if (!name) throw new Error('Usage: skillsync target remove <name>');
     const config = await configured();
-    const result = await removeTargetAndPrune({
+    await removeTargetAndPrune({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       name,
     });
     await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
-    console.log(`Removed target ${name}${result.pruned.length ? ` and pruned ${result.pruned.join(', ')}` : ''}`);
+    console.log(`Removed target ${name}`);
     return;
   }
   if (sub === 'auto-adopt' || sub === 'auto-import') {
@@ -1107,6 +1103,9 @@ async function syncCommand(rest) {
   for (const conflict of result.autoImportConflicts || []) {
     console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.`);
   }
+  if (result.prunedSkills?.length) {
+    console.log(`Removed unused vault skills: ${result.prunedSkills.join(', ')}.`);
+  }
   console.log(result.pushed ? 'Synced and pushed changes.' : 'Synced. No local changes to push.');
 }
 
@@ -1196,6 +1195,9 @@ async function daemon(rest) {
       }
       for (const conflict of result.autoImportConflicts || []) {
         console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}`);
+      }
+      if (result.prunedSkills?.length) {
+        console.log(`[${new Date().toISOString()}] removed unused vault skills: ${result.prunedSkills.join(', ')}`);
       }
       console.log(`[${new Date().toISOString()}] synced`);
     } catch (error) {
@@ -1467,13 +1469,13 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
 }
 
 async function uninstallLocalSkill({ config, device, skill }) {
-  const result = await uninstallSkillAndPrune({
+  await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
     skillName: skill.name,
   });
   const removed = await removeDetectedTargetPaths(removableDetectedTargets(device, skill));
-  return { ...removed, pruned: result.pruned };
+  return removed;
 }
 
 async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
@@ -1625,7 +1627,6 @@ async function chooseTargetsForDevice(device, selected = null) {
 }
 
 async function applyDeviceAssignmentChanges({ config, deviceId, toInstall, toUninstall, targets }) {
-  const pruned = [];
   for (const skillName of toInstall) {
     await installSkill({
       vaultPath: config.repoPath,
@@ -1635,22 +1636,21 @@ async function applyDeviceAssignmentChanges({ config, deviceId, toInstall, toUni
     });
   }
   for (const skillName of toUninstall) {
-    const result = await uninstallSkillAndPrune({
+    await uninstallSkillAndPrune({
       vaultPath: config.repoPath,
       deviceId,
       skillName,
     });
-    if (result.pruned) pruned.push(skillName);
   }
   if (deviceId === config.deviceId) {
     await applyLinks({ vaultPath: config.repoPath, deviceId });
   }
-  await syncVault({
+  const syncResult = await syncVault({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
     pull: false,
   });
-  return pruned;
+  return syncResult.prunedSkills || [];
 }
 
 async function deviceDetailScreen(config, deviceId) {
@@ -1750,7 +1750,6 @@ async function deviceSkillDestinationsScreen(config, deviceId) {
     instructions: 'Space toggles destinations. Enter applies. Clear all to uninstall.',
   }), null);
   if (targets === null) return;
-  let pruned = false;
   if (targets.length) {
     await setSkillTargets({
       vaultPath: config.repoPath,
@@ -1759,22 +1758,21 @@ async function deviceSkillDestinationsScreen(config, deviceId) {
       targets,
     });
   } else {
-    const result = await uninstallSkillAndPrune({
+    await uninstallSkillAndPrune({
       vaultPath: config.repoPath,
       deviceId,
       skillName,
     });
-    pruned = result.pruned;
   }
   if (deviceId === config.deviceId) {
     await applyLinks({ vaultPath: config.repoPath, deviceId });
   }
-  await syncVault({
+  const syncResult = await syncVault({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
     pull: false,
   });
-  console.log(`\nUpdated ${skillName} on ${device.display_name}.${deviceId === config.deviceId ? '' : ' It will apply on the next sync.'}${pruned ? ' The skill was deleted from the vault because no device still uses it.' : ''}\n`);
+  console.log(`\nUpdated ${skillName} on ${device.display_name}.${deviceId === config.deviceId ? '' : ' It will apply on the next sync.'}${syncResult.prunedSkills?.length ? ` Deleted from vault: ${syncResult.prunedSkills.join(', ')}.` : ''}\n`);
 }
 
 async function targetsScreen(config) {
@@ -1848,9 +1846,9 @@ async function settingsScreen(config) {
         description: 'Applies to every configured target; individual targets can still be changed under Targets.',
       },
       {
-        name: `Delete a skill from the vault after its last assignment is removed: ${enabled ? 'on' : 'off'}`,
+        name: `Delete skills unused across every device: ${enabled ? 'on' : 'off'}`,
         value: 'toggle-prune',
-        description: 'Existing unassigned skills stay until they are explicitly deleted.',
+        description: 'Full syncs remove skills with no assignments and no detected local copies.',
       },
       { name: 'Back', value: 'back' },
     ],
@@ -1874,7 +1872,7 @@ async function settingsScreen(config) {
   if (choice !== 'toggle-prune') return;
   const next = !enabled;
   const confirmed = await confirm({
-    message: `${next ? 'Enable' : 'Disable'} delete-on-last-uninstall?`,
+    message: `${next ? 'Enable' : 'Disable'} presence-aware cleanup during full sync?`,
     default: false,
   });
   if (!confirmed) return;

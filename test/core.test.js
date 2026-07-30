@@ -25,6 +25,7 @@ import {
   applyLinks,
   installSkill,
   listDevices,
+  listUnusedSkills,
   loadDevice,
   markDeviceApplied,
   removeTargetAndPrune,
@@ -33,6 +34,7 @@ import {
   setSkillTargets,
   setTargetAutoImport,
   skillAssignmentCount,
+  sweepUnusedSkills,
   uninstallSkill,
   uninstallSkillAndPrune,
 } from '../src/core/device.js';
@@ -410,14 +412,15 @@ test('desired assignment edits and reported device scans do not overwrite each o
   assert.equal(await readFile(path.join(vault, 'devices', 'linux.json'), 'utf8'), desiredBeforeScan);
 });
 
-test('skill matrix shows assignments and pending devices', () => {
+test('skill matrix distinguishes assigned, detected, and absent skills', () => {
   const output = renderSkillDeviceMatrix({
-    skills: ['paper-mcp', 'bog-hyperframes'],
+    skills: ['paper-mcp', 'bog-hyperframes', 'product-video'],
     devices: [
       {
         device_id: 'macbook',
         installed: { 'paper-mcp': ['codex'] },
         global_installed: [],
+        detected: { claude: [{ name: 'product-video', path: 'product-video' }] },
         desired_generation: 2,
         applied_generation: 2,
       },
@@ -435,6 +438,8 @@ test('skill matrix shows assignments and pending devices', () => {
   assert.match(output, /Skill\s+\| devbox\s+\| macbook/);
   assert.match(output, /bog-hyperframes\s+\| ✓\s+\| ·/);
   assert.match(output, /paper-mcp\s+\| ·\s+\| ✓/);
+  assert.match(output, /product-video\s+\| ·\s+\| ○/);
+  assert.match(output, /✓ assigned\s+○ detected locally\s+· absent/);
   assert.match(output, /Pending sync: devbox/);
 });
 
@@ -562,54 +567,70 @@ test('copy projection ownership requires a matching vault marker', async () => {
   assert.equal(await readFile(path.join(unmanaged, 'SKILL.md'), 'utf8'), '# Keep\n');
 });
 
-test('delete-on-last-uninstall prunes only the skill that transitions from assigned to unassigned', async () => {
-  const root = await tempDir();
-  const vault = path.join(root, 'vault');
-  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
-  await makeSkill(path.join(vault, 'skills'), 'unassigned-library-skill', '# Keep\n');
-  await rebuildRegistry(vault);
-  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: path.join(root, 'mac') });
-  await addTarget({ vaultPath: vault, deviceId: 'linux', name: 'codex', targetPath: path.join(root, 'linux') });
-  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'shared-skill', targets: ['codex'] });
-  await installSkill({ vaultPath: vault, deviceId: 'linux', skillName: 'shared-skill', targets: ['codex'] });
-  await setVaultPolicy({ vaultPath: vault, name: 'delete_unassigned_skills', enabled: true });
-
-  const first = await uninstallSkillAndPrune({
-    vaultPath: vault,
-    deviceId: 'macbook',
-    skillName: 'shared-skill',
-  });
-  assert.equal(first.pruned, false);
-  assert.equal(await skillAssignmentCount(vault, 'shared-skill'), 1);
-
-  const second = await uninstallSkillAndPrune({
-    vaultPath: vault,
-    deviceId: 'linux',
-    skillName: 'shared-skill',
-  });
-  assert.equal(second.pruned, true);
-  const registry = await loadRegistry(vault);
-  assert.equal(registry.skills['shared-skill'], undefined);
-  assert.ok(registry.skills['unassigned-library-skill']);
-});
-
-test('delete-on-last-uninstall is disabled by default and never sweeps an already-unassigned skill', async () => {
+test('unused-skill sweep is disabled by default', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   await makeSkill(path.join(vault, 'skills'), 'library-skill', '# Library\n');
   await rebuildRegistry(vault);
 
-  const defaultConfig = await loadVaultConfig(vault);
-  assert.equal(defaultConfig.policies.delete_unassigned_skills, false);
+  assert.equal((await loadVaultConfig(vault)).policies.delete_unassigned_skills, false);
+  assert.deepEqual(await listUnusedSkills(vault), ['library-skill']);
+  assert.deepEqual(await sweepUnusedSkills({ vaultPath: vault }), []);
+  assert.ok((await loadRegistry(vault)).skills['library-skill']);
+});
+
+test('unused-skill sweep removes fully absent skills and protects assigned or detected skills', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex');
+  await makeSkill(path.join(vault, 'skills'), 'assigned-skill', '# Assigned\n');
+  await makeSkill(path.join(vault, 'skills'), 'detected-skill', '# Detected vault\n');
+  await makeSkill(path.join(vault, 'skills'), 'absent-skill', '# Absent\n');
+  await makeSkill(target, 'detected-skill', '# Detected local\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'assigned-skill', targets: ['codex'] });
+  await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
   await setVaultPolicy({ vaultPath: vault, name: 'delete_unassigned_skills', enabled: true });
+
+  assert.deepEqual(await listUnusedSkills(vault), ['absent-skill']);
+  assert.deepEqual(await sweepUnusedSkills({ vaultPath: vault }), ['absent-skill']);
+  const registry = await loadRegistry(vault);
+  assert.ok(registry.skills['assigned-skill']);
+  assert.ok(registry.skills['detected-skill']);
+  assert.equal(registry.skills['absent-skill'], undefined);
+});
+
+test('remote uninstall defers cleanup until that device applies and reports the removal', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const remoteTarget = path.join(root, 'remote');
+  await makeSkill(path.join(vault, 'skills'), 'temporary-skill', '# Temporary\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'remote', name: 'codex', targetPath: remoteTarget });
+  await installSkill({ vaultPath: vault, deviceId: 'remote', skillName: 'temporary-skill', targets: ['codex'] });
+  await applyLinks({ vaultPath: vault, deviceId: 'remote' });
+  await markDeviceApplied({ vaultPath: vault, deviceId: 'remote' });
+  await scanTargets({ vaultPath: vault, deviceId: 'remote' });
+  await setVaultPolicy({ vaultPath: vault, name: 'delete_unassigned_skills', enabled: true });
+
   const result = await uninstallSkillAndPrune({
     vaultPath: vault,
-    deviceId: 'macbook',
-    skillName: 'library-skill',
+    deviceId: 'remote',
+    skillName: 'temporary-skill',
   });
-
   assert.equal(result.pruned, false);
-  assert.ok((await loadRegistry(vault)).skills['library-skill']);
+  assert.deepEqual(await sweepUnusedSkills({ vaultPath: vault }), []);
+  assert.ok((await loadRegistry(vault)).skills['temporary-skill']);
+
+  const syncResult = await syncVault({
+    vaultPath: vault,
+    deviceId: 'remote',
+    pull: true,
+    pushChanges: false,
+  });
+  assert.deepEqual(syncResult.prunedSkills, ['temporary-skill']);
+  assert.equal((await loadRegistry(vault)).skills['temporary-skill'], undefined);
 });
 
 test('background sync does not persist heartbeat timestamps', async () => {

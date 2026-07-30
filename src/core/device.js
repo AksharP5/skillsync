@@ -453,44 +453,48 @@ export async function skillAssignmentCount(vaultPath, skillName) {
   }, 0);
 }
 
-export async function uninstallSkillAndPrune(options) {
-  const { vaultPath, skillName } = options;
-  const before = await skillAssignmentCount(vaultPath, skillName);
-  const device = await uninstallSkill(options);
-  const after = await skillAssignmentCount(vaultPath, skillName);
-  const config = await loadVaultConfig(vaultPath);
-  const shouldPrune = before > 0
-    && after === 0
-    && config.policies.delete_unassigned_skills;
-  if (shouldPrune) {
-    await deleteSkillFromVault({ vaultPath, skillName });
-  }
-  return { device, pruned: shouldPrune };
-}
-
-export async function removeTargetAndPrune(options) {
-  const { vaultPath, deviceId = defaultDeviceId(), name } = options;
-  const beforeDevice = await loadDevice(vaultPath, deviceId);
-  const affectedSkills = Object.entries(beforeDevice.installed || {})
-    .filter(([, targets]) => Array.isArray(targets) && targets.includes(name))
-    .map(([skillName]) => skillName);
-  const beforeCounts = new Map();
-  for (const skillName of affectedSkills) {
-    beforeCounts.set(skillName, await skillAssignmentCount(vaultPath, skillName));
-  }
-  const device = await removeTarget(options);
-  const config = await loadVaultConfig(vaultPath);
-  const pruned = [];
-  if (config.policies.delete_unassigned_skills) {
-    for (const skillName of affectedSkills) {
-      if ((beforeCounts.get(skillName) || 0) > 0
-        && await skillAssignmentCount(vaultPath, skillName) === 0) {
-        await deleteSkillFromVault({ vaultPath, skillName });
-        pruned.push(skillName);
+function presentSkillNames(devices) {
+  const present = new Set();
+  for (const device of devices) {
+    for (const skillName of Object.keys(device.installed || {})) present.add(skillName);
+    for (const skillName of device.global_installed || []) present.add(skillName);
+    for (const skills of Object.values(device.detected || {})) {
+      for (const skill of Array.isArray(skills) ? skills : []) {
+        if (skill?.name) present.add(skill.name);
       }
     }
   }
-  return { device, pruned };
+  return present;
+}
+
+export async function listUnusedSkills(vaultPath) {
+  const registry = await loadRegistry(vaultPath);
+  const present = presentSkillNames(await listDevices(vaultPath));
+  return Object.keys(registry.skills)
+    .filter((skillName) => !present.has(skillName))
+    .sort();
+}
+
+export async function sweepUnusedSkills({ vaultPath, requirePolicy = true }) {
+  if (requirePolicy) {
+    const config = await loadVaultConfig(vaultPath);
+    if (!config.policies.delete_unassigned_skills) return [];
+  }
+  const unused = await listUnusedSkills(vaultPath);
+  for (const skillName of unused) {
+    await deleteSkillFromVault({ vaultPath, skillName });
+  }
+  return unused;
+}
+
+export async function uninstallSkillAndPrune(options) {
+  const device = await uninstallSkill(options);
+  return { device, pruned: false };
+}
+
+export async function removeTargetAndPrune(options) {
+  const device = await removeTarget(options);
+  return { device, pruned: [] };
 }
 
 export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
