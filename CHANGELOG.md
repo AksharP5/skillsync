@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.11.0](https://github.com/AksharP5/skillsync/compare/v0.10.1...v0.11.0) (2026-07-30)
+
+
+### Features
+
+* add clean device state and skill matrix ([#24](https://github.com/AksharP5/skillsync/issues/24)) ([4c83cec](https://github.com/AksharP5/skillsync/commit/4c83cec1f9b3fddfb1380caf1da1849ccd23bc75))
+* add cross-device skill management ([#16](https://github.com/AksharP5/skillsync/issues/16)) ([51b5525](https://github.com/AksharP5/skillsync/commit/51b55254a0462cd34391ce46d962d5cba8329738))
+* add editable skill matrix ([#28](https://github.com/AksharP5/skillsync/issues/28)) ([5ddee44](https://github.com/AksharP5/skillsync/commit/5ddee441da4f86fd261929de6a32433d2fd055d1))
+* add installed skills management ([2ffbf8a](https://github.com/AksharP5/skillsync/commit/2ffbf8aea5c6b89c8e95df6ab006308480ccb2c0))
+* add per-device instruction profiles ([#33](https://github.com/AksharP5/skillsync/issues/33)) ([1ac7f9e](https://github.com/AksharP5/skillsync/commit/1ac7f9ec0e50e894ba3789a6b5d71cae201f02b8)), closes [#32](https://github.com/AksharP5/skillsync/issues/32)
+* add skills from git urls ([3652676](https://github.com/AksharP5/skillsync/commit/365267691374e6cd602bc0bd1dd15c4651f470a4))
+* build initial skillsync cli ([a330ab1](https://github.com/AksharP5/skillsync/commit/a330ab141703437219ac2a6a0b396547edc7a71d))
+* discover skills from git sources ([2036226](https://github.com/AksharP5/skillsync/commit/20362262d5420799f8dce63e59e54cbda15a8783))
+* generate visual skill groups and packs ([449698e](https://github.com/AksharP5/skillsync/commit/449698e7f9826cdc383f406bab8a68839eac62cb))
+* handle same-name import conflicts ([39bb602](https://github.com/AksharP5/skillsync/commit/39bb6022d23af7068fcf02cd97f9397d4a881dc8))
+* import codex and opencode skills ([#7](https://github.com/AksharP5/skillsync/issues/7)) ([c9e39ab](https://github.com/AksharP5/skillsync/commit/c9e39ab00c7105edebcd7b6e090a1ebd85d7d9c9))
+* prompt for vault repo name ([c5d9f64](https://github.com/AksharP5/skillsync/commit/c5d9f64a8160af6b06b7a4263c7b7048e6cff538))
+* scan local target skills ([1575bf6](https://github.com/AksharP5/skillsync/commit/1575bf658e4ad6da72d178e270f79fe3891dacf5))
+* show managed projection paths ([5c40162](https://github.com/AksharP5/skillsync/commit/5c40162899d5f2e2528f37170f33abc797973845))
+* support device-global skill installs ([5056970](https://github.com/AksharP5/skillsync/commit/505697018bc62708a5181c9bf49f9146ea2b066f))
+* sync global AGENTS.md ([#30](https://github.com/AksharP5/skillsync/issues/30)) ([6577e7f](https://github.com/AksharP5/skillsync/commit/6577e7fb5de4e7e107a51f5559c633d9ac2d888f))
+
+
+### Bug Fixes
+
+* accept owner repo clone shorthand ([1a608a5](https://github.com/AksharP5/skillsync/commit/1a608a5add20b558e4b60f7813b245f456e04f93))
+* avoid daemon heartbeat on startup ([8614ffa](https://github.com/AksharP5/skillsync/commit/8614ffa5ed69e9a3d722cfabea76e2c87260a6db))
+* avoid scan heartbeat churn ([1913a05](https://github.com/AksharP5/skillsync/commit/1913a051924f3947722c2a33db5981d71eacdf66))
+* choose vault mode during interactive setup ([fafb3f5](https://github.com/AksharP5/skillsync/commit/fafb3f56e72be9f6fb9e1c8e1f8c284446b7c3c3))
+* clarify local skill counts ([bbbcee1](https://github.com/AksharP5/skillsync/commit/bbbcee145de1019e4a093690e0f0941cc3de5846))
+* clone vault repositories over https ([538df7e](https://github.com/AksharP5/skillsync/commit/538df7ec4320ac81b2a11d40c4cf30f27b1499d0))
+* dedupe scanned local skills ([aca27d6](https://github.com/AksharP5/skillsync/commit/aca27d6075231ea2d672621cf50e6da4f33f4291))
+* detect Claude from executable only ([#35](https://github.com/AksharP5/skillsync/issues/35)) ([678b146](https://github.com/AksharP5/skillsync/commit/678b146aa82a265e1fd5b712039965785ae9b03e))
+* improve interactive skill browser ([3d316cf](https://github.com/AksharP5/skillsync/commit/3d316cf2384dacb0aca2059f273b0072020f1e8e))
+* include executable path in macOS service environment ([#22](https://github.com/AksharP5/skillsync/issues/22)) ([a584957](https://github.com/AksharP5/skillsync/commit/a58495702784b6a1f46ec0b41f39af39c274c880))
+* keep device filesystem paths private ([#37](https://github.com/AksharP5/skillsync/issues/37)) ([627be0d](https://github.com/AksharP5/skillsync/commit/627be0d3e7b923353821ec077d145286e583444b)), closes [#36](https://github.com/AksharP5/skillsync/issues/36)
+* make unused skill cleanup presence aware ([#26](https://github.com/AksharP5/skillsync/issues/26)) ([a6e2437](https://github.com/AksharP5/skillsync/commit/a6e2437b4b75923b124bfc5091faeea1706dcd2a))
+* reconcile detected local skills in ui ([9d3bd2e](https://github.com/AksharP5/skillsync/commit/9d3bd2e611527381d7359cb6acc319c1dc0b045f))
+* recover existing skill projections ([83cd43c](https://github.com/AksharP5/skillsync/commit/83cd43cfc004539c0b774c983f44800a978e350d))
+* retry vault push after pulling remote changes ([6d4b749](https://github.com/AksharP5/skillsync/commit/6d4b7490644be71425a5285ebaa48ddf9c266ba2))
+* stop daemon heartbeat commits ([#14](https://github.com/AksharP5/skillsync/issues/14)) ([5aae857](https://github.com/AksharP5/skillsync/commit/5aae8575db8f60c821a2050b9f0bdf61322de8f6))
+* use correct relative links in group pages ([72e78e6](https://github.com/AksharP5/skillsync/commit/72e78e6306c1bb9313a4ee7fcdaa164d53de8de5))
+* verify repo shorthand privacy ([e8d004a](https://github.com/AksharP5/skillsync/commit/e8d004a305e08332f09574a9d980b506497817e4))
+
 ## [0.10.1](https://github.com/AksharP5/skillsync/compare/v0.10.0...v0.10.1) (2026-07-30)
 
 
