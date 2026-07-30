@@ -6,6 +6,7 @@ import {
   sweepUnusedSkills,
 } from './device.js';
 import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
+import { applyGlobalInstructions } from './instructions.js';
 import { refreshChangedRegistryEntries } from './registry.js';
 
 export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
@@ -18,6 +19,7 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
   if (deviceId) {
     autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
     await applyLinks({ vaultPath, deviceId });
+    await applyGlobalInstructions({ vaultPath, deviceId });
     await markDeviceApplied({ vaultPath, deviceId });
     await scanTargets({ vaultPath, deviceId });
     if (pull) {
