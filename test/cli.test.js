@@ -145,7 +145,7 @@ test('uninstall --device prunes the last assignment when the vault policy is ena
   assert.equal((await loadRegistry(vault)).skills['temporary-skill'], undefined);
 });
 
-test('scan adopts a newly detected skill when target auto-import is enabled', async () => {
+test('scan adopts a newly detected skill when target auto-adoption is enabled', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
   const target = path.join(home, '.codex', 'skills');
@@ -170,9 +170,37 @@ test('scan adopts a newly detected skill when target auto-import is enabled', as
     env: { ...process.env, HOME: home },
   });
 
-  assert.match(stdout, /Auto-imported new-local from codex/);
+  assert.match(stdout, /Auto-adopted new-local from codex/);
   assert.ok((await loadRegistry(vault)).skills['new-local']);
   assert.equal((await lstat(path.join(target, 'new-local'))).isSymbolicLink(), true);
+});
+
+test('matrix shows cross-device assignments and device auto-adoption can be disabled', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const localTarget = path.join(home, '.codex', 'skills');
+  const remoteTarget = path.join(home, 'remote-codex');
+  await writeConfig(home, vault, 'macbook');
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: localTarget });
+  await addTarget({ vaultPath: vault, deviceId: 'linux', name: 'codex', targetPath: remoteTarget });
+  await installSkill({ vaultPath: vault, deviceId: 'linux', skillName: 'paper-mcp', targets: ['codex'] });
+
+  const matrix = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'matrix'], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(matrix.stdout, /Skill\s+\| linux\s+\| macbook/);
+  assert.match(matrix.stdout, /paper-mcp\s+\| ✓\s+\| ·/);
+  assert.match(matrix.stdout, /Pending sync: linux/);
+
+  const adoption = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'auto-adopt', 'off'], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(adoption.stdout, /Auto-adoption on macbook: off/);
+  assert.equal((await loadDevice(vault, 'macbook')).targets.codex.auto_import, false);
 });
 
 test('daemon rejects a non-positive interval instead of entering a tight loop', async () => {

@@ -28,8 +28,8 @@ import {
   loadDevice,
   markDeviceApplied,
   removeTargetAndPrune,
-  saveDevice,
   scanTargets,
+  setDeviceAutoImport,
   setSkillTargets,
   setTargetAutoImport,
   skillAssignmentCount,
@@ -37,6 +37,7 @@ import {
   uninstallSkillAndPrune,
 } from '../src/core/device.js';
 import { generateGroups } from '../src/core/groups.js';
+import { renderSkillDeviceMatrix } from '../src/core/matrix.js';
 import { syncVault } from '../src/core/sync.js';
 
 async function tempDir() {
@@ -157,7 +158,7 @@ test('device generations distinguish desired assignments from locally applied st
   });
 
   const pending = await loadDevice(vault, 'remote-device');
-  assert.equal(pending.desired_generation, 2);
+  assert.equal(pending.desired_generation, 1);
   assert.equal(pending.applied_generation, 0);
 
   await applyLinks({ vaultPath: vault, deviceId: 'remote-device' });
@@ -330,6 +331,111 @@ test('scanTargets deduplicates duplicate local skills by name', async () => {
   assert.deepEqual(device.detected.hermes.map((skill) => [skill.name, skill.path]), [
     ['bog-hyperframes', 'openclaw-imports/bog-hyperframes'],
   ]);
+});
+
+test('new targets auto-adopt by default and can be disabled for an entire device', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, 'codex');
+  const claude = path.join(root, 'claude');
+  await makeSkill(codex, 'existing-codex', '# Existing\n');
+  await makeSkill(claude, 'existing-claude', '# Existing\n');
+
+  await addTarget({ vaultPath: vault, deviceId: 'linux', name: 'codex', targetPath: codex });
+  await addTarget({ vaultPath: vault, deviceId: 'linux', name: 'claude', targetPath: claude });
+  let device = await loadDevice(vault, 'linux');
+  assert.equal(device.targets.codex.auto_import, true);
+  assert.equal(device.targets.claude.auto_import, true);
+
+  await setDeviceAutoImport({ vaultPath: vault, deviceId: 'linux', enabled: false });
+  device = await loadDevice(vault, 'linux');
+  assert.equal(device.targets.codex.auto_import, false);
+  assert.equal(device.targets.claude.auto_import, false);
+
+  await setDeviceAutoImport({ vaultPath: vault, deviceId: 'linux', enabled: true });
+  device = await loadDevice(vault, 'linux');
+  assert.equal(device.targets.codex.auto_import, true);
+  assert.equal(device.targets.claude.auto_import, true);
+  assert.deepEqual(device.detected.codex.map((skill) => skill.name), ['existing-codex']);
+  assert.deepEqual(device.detected.claude.map((skill) => skill.name), ['existing-claude']);
+});
+
+test('legacy device manifests migrate into controller-owned desired state and device-owned reported state', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex');
+  await mkdir(path.join(vault, 'devices'), { recursive: true });
+  await writeFile(path.join(vault, 'devices', 'macbook.json'), JSON.stringify({
+    version: 1,
+    device_id: 'macbook',
+    display_name: 'MacBook',
+    last_seen: '2026-07-01T00:00:00.000Z',
+    desired_generation: 4,
+    applied_generation: 3,
+    targets: {
+      codex: { path: target, mode: 'symlink', auto_import: false },
+    },
+    installed: { 'paper-mcp': ['codex'] },
+    global_installed: [],
+    detected: { codex: [] },
+  }));
+
+  await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
+
+  const desired = JSON.parse(await readFile(path.join(vault, 'devices', 'macbook.json'), 'utf8'));
+  const reported = JSON.parse(await readFile(path.join(vault, 'state', 'macbook.json'), 'utf8'));
+  assert.deepEqual(Object.keys(desired).sort(), ['device_id', 'generation', 'global_installed', 'installed', 'version']);
+  assert.equal(desired.generation, 4);
+  assert.deepEqual(desired.installed, { 'paper-mcp': ['codex'] });
+  assert.deepEqual(Object.keys(reported).sort(), ['applied_generation', 'detected', 'device_id', 'display_name', 'targets', 'version']);
+  assert.equal(reported.applied_generation, 3);
+  assert.equal(reported.targets.codex.auto_adopt, false);
+  assert.equal(reported.targets.codex.auto_import, undefined);
+});
+
+test('desired assignment edits and reported device scans do not overwrite each other', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex');
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'linux', name: 'codex', targetPath: target });
+
+  const reportedBeforeInstall = await readFile(path.join(vault, 'state', 'linux.json'), 'utf8');
+  await installSkill({ vaultPath: vault, deviceId: 'linux', skillName: 'paper-mcp', targets: ['codex'] });
+  assert.equal(await readFile(path.join(vault, 'state', 'linux.json'), 'utf8'), reportedBeforeInstall);
+
+  const desiredBeforeScan = await readFile(path.join(vault, 'devices', 'linux.json'), 'utf8');
+  await scanTargets({ vaultPath: vault, deviceId: 'linux' });
+  assert.equal(await readFile(path.join(vault, 'devices', 'linux.json'), 'utf8'), desiredBeforeScan);
+});
+
+test('skill matrix shows assignments and pending devices', () => {
+  const output = renderSkillDeviceMatrix({
+    skills: ['paper-mcp', 'bog-hyperframes'],
+    devices: [
+      {
+        device_id: 'macbook',
+        installed: { 'paper-mcp': ['codex'] },
+        global_installed: [],
+        desired_generation: 2,
+        applied_generation: 2,
+      },
+      {
+        device_id: 'devbox',
+        installed: {},
+        global_installed: ['bog-hyperframes'],
+        desired_generation: 3,
+        applied_generation: 2,
+      },
+    ],
+    maxWidth: 120,
+  });
+
+  assert.match(output, /Skill\s+\| devbox\s+\| macbook/);
+  assert.match(output, /bog-hyperframes\s+\| ✓\s+\| ·/);
+  assert.match(output, /paper-mcp\s+\| ·\s+\| ✓/);
+  assert.match(output, /Pending sync: devbox/);
 });
 
 test('auto-import baselines existing local skills and adopts only newly detected skills', async () => {
@@ -506,7 +612,7 @@ test('delete-on-last-uninstall is disabled by default and never sweeps an alread
   assert.ok((await loadRegistry(vault)).skills['library-skill']);
 });
 
-test('background sync preserves last_seen even if an older caller requests a heartbeat', async () => {
+test('background sync does not persist heartbeat timestamps', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const scanRoot = path.join(root, 'hermes-skills');
@@ -514,14 +620,10 @@ test('background sync preserves last_seen even if an older caller requests a hea
 
   const deviceId = 'vps';
   await addTarget({ vaultPath: vault, deviceId, name: 'hermes', targetPath: path.join(scanRoot, 'personal'), scanPath: scanRoot });
-  const device = await loadDevice(vault, deviceId);
-  device.last_seen = '2026-01-01T00:00:00.000Z';
-  await saveDevice(vault, device);
-
   await syncVault({ vaultPath: vault, deviceId, pull: false, pushChanges: false, heartbeat: true });
-  const scanned = await loadDevice(vault, deviceId);
+  const reported = JSON.parse(await readFile(path.join(vault, 'state', `${deviceId}.json`), 'utf8'));
 
-  assert.equal(scanned.last_seen, '2026-01-01T00:00:00.000Z');
+  assert.equal(reported.last_seen, undefined);
 });
 
 test('deleteSkillFromVault removes the skill from registry and every device manifest', async () => {

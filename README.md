@@ -1,97 +1,17 @@
 # SkillSync
 
-Local-first skill manager for AI agent skills.
+Keep the same AI agent skills available across all of your devices.
 
-SkillSync uses a private GitHub repo as your cloud vault, then keeps selected skills linked into local agent skill folders on each device. Install it once with npm, connect it to your vault, and use the `skillsync` command anywhere.
-
-The public SkillSync source and npm package are separate from your skill vault. Your skills, device assignments, and detected local inventory remain in a private repository that you own.
+SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, or any custom skill folder, and keeps every device in sync in the background.
 
 ## Quick start
 
-Install the CLI:
-
-```bash
-npm install -g @akshar5/skillsync
-```
-
-Connect this device to an existing private skills vault:
-
-```bash
-skillsync setup --repo OWNER/skills
-```
-
-Add a local skill folder to the vault:
-
-```bash
-skillsync add ~/path/to/my-skill --skill my-skill
-```
-
-Add a skill from a GitHub repository:
-
-```bash
-skillsync add https://github.com/example-org/example-skill --skill example-skill
-```
-
-Install a vaulted skill into a local agent target, or mark it installed globally on this device without projecting into a specific agent folder:
-
-```bash
-skillsync target add codex ~/.codex/skills
-skillsync install my-skill --target codex
-skillsync install my-skill --global
-```
-
-Open the interactive UI:
-
-```bash
-skillsync
-```
-
-In the interactive UI, use arrow keys to move, Space to toggle checklist items, Enter to apply, and Esc to go back.
-
-## Requirements
+Requirements:
 
 - Node.js 20 or newer
 - Git
-- GitHub CLI (`gh`) authenticated with `gh auth login`
-- A private GitHub repo for the skills vault
-
-## What it manages
-
-Vault repo layout:
-
-```text
-skills/
-  some-skill/
-    SKILL.md
-registry.json        # generated, do not edit
-devices/*.json       # generated, do not edit
-vault.json           # generated vault-wide policies
-```
-
-User-owned files are the skill folders under `skills/`. SkillSync owns `registry.json`, `vault.json`, and `devices/*.json`.
-
-Local target folders are per-device. For example, one laptop can install a skill into `~/.codex/skills`, while another can install the same vault skill into a different agent folder.
-
-Each device manifest records:
-
-- configured agent targets and their local paths;
-- desired skill assignments;
-- the desired assignment generation;
-- the most recent generation that device successfully applied;
-- detected local skills.
-
-An assignment made from another device is pending until the target device's daemon pulls and applies that generation.
-
-## Install on a new device
-
-Install prerequisites on macOS:
-
-```bash
-brew install gh git node
-gh auth login
-```
-
-SkillSync clones vault repos over HTTPS using your GitHub CLI authentication, so a GitHub SSH key is not required.
+- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`
+- A private GitHub repository for your skill vault
 
 Install SkillSync:
 
@@ -99,75 +19,147 @@ Install SkillSync:
 npm install -g @akshar5/skillsync
 ```
 
-Connect to an existing vault:
+Connect this device to an existing vault:
 
 ```bash
 skillsync setup --repo OWNER/skills
 ```
 
-Install the background service so assignments and skill updates apply automatically:
-
-```bash
-skillsync service install
-```
-
-Repeat those steps once on every device. Each device registers its own ID and local agent targets in the same private vault.
-
-Or create/select a vault repo interactively:
+Or let SkillSync create or select a private vault interactively:
 
 ```bash
 skillsync setup
 ```
 
-If you run plain `skillsync setup` in an interactive terminal, it first asks which vault type to use:
-
-- Choose `Use an existing GitHub repo`, then enter a repo like `OWNER/skills`.
-- Choose `Create or use OWNER/<name>`, then enter a repo name like `skills`.
-
-`setup --name skills` is the non-interactive form of the second option. It creates `OWNER/skills` as a private GitHub repo if it does not exist. If it exists, SkillSync verifies it is private before using it.
-
-You can also run commands without a global install:
+Add the local skill folders you want SkillSync to manage:
 
 ```bash
-npx @akshar5/skillsync setup --repo OWNER/skills
-npx @akshar5/skillsync add https://github.com/example-org/example-skill --skill example-skill
+skillsync target add codex ~/.codex/skills
+skillsync target add claude ~/.claude/skills
+skillsync target add opencode ~/.config/opencode/skills
+skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
 ```
 
-If an older SkillSync version failed with `git@github.com: Permission denied (publickey)`, update the CLI and rerun setup:
+Then install the background service:
 
 ```bash
-npm install -g @akshar5/skillsync@latest
-skillsync setup --repo OWNER/skills
+skillsync service install
 ```
 
-## Common workflows
+Repeat those steps on each device using the same private vault.
 
-List available skills:
+## Interactive UI
 
-```bash
-skillsync list
-```
-
-Browse and install multiple vault skills at once:
+Run SkillSync without a command:
 
 ```bash
 skillsync
 ```
 
-Choose `Browse/install skills`, press Space to select every skill you want installed on this device, then press Enter to apply the changes. When prompted for destinations, choose `global` for a device-level install that does not create a Codex/OpenCode/etc. projection, or choose one or more configured agent targets.
+Use the UI to browse skills, toggle installs, view the skill matrix, manage devices and targets, or change settings. Arrow keys move, Space toggles selected items, Enter applies, and Esc goes back.
 
-View skills installed on this device:
+## See every skill across every device
 
 ```bash
-skillsync installed
+skillsync matrix
 ```
 
-View another registered device:
+The matrix gives you one clean view of your vault:
+
+```text
+Skill             | archlinux | devbox | macbook
+------------------+-----------+--------+--------
+paper-mcp         | ✓         | ·      | ✓
+terminal-control  | ✓         | ✓      | ✓
+
+✓ assigned  · off
+```
+
+You can also open **Skill matrix** in the interactive UI and jump directly to a device to edit its assignments.
+
+## Add and install skills
+
+Add a local skill folder to the vault:
+
+```bash
+skillsync add ~/path/to/my-skill --skill my-skill
+```
+
+Add a skill from GitHub:
+
+```bash
+skillsync add https://github.com/example-org/example-skill --skill example-skill
+```
+
+Install a vaulted skill on this device:
+
+```bash
+skillsync install my-skill --target codex
+skillsync install my-skill --target codex,claude
+```
+
+Use `--global` to record a device-level install without projecting the skill into a particular agent folder:
+
+```bash
+skillsync install my-skill --global
+```
+
+Import skills already in a supported agent folder:
+
+```bash
+skillsync import codex
+skillsync import opencode
+skillsync import hermes
+```
+
+When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly.
+
+## Automatic skill adoption
+
+New targets automatically adopt new skills created inside their managed folder. For example, if Codex creates `~/.codex/skills/my-new-skill`, the next SkillSync run adds it to the vault, assigns it to Codex on that device, and replaces the standalone folder with a managed projection.
+
+SkillSync first records the skills that already exist when a target is added. It only auto-adopts skills that appear after that baseline, so connecting an existing folder does not unexpectedly upload everything in it.
+
+Disable auto-adoption for every target on the current device:
+
+```bash
+skillsync auto-adopt off
+```
+
+Enable it again:
+
+```bash
+skillsync auto-adopt on
+```
+
+Check the current device setting:
+
+```bash
+skillsync auto-adopt show
+```
+
+You can also override one target:
+
+```bash
+skillsync target auto-adopt codex off
+skillsync target auto-adopt codex on
+```
+
+Or create a target with adoption disabled from the start:
+
+```bash
+skillsync target add codex ~/.codex/skills --no-auto-adopt
+```
+
+If a different skill with the same name is already in the vault, SkillSync leaves both copies untouched and reports the conflict.
+
+## Manage another device
+
+List registered devices and their sync state:
 
 ```bash
 skillsync device list
 skillsync device show archlinux
-skillsync installed --device archlinux
 ```
 
 Assign or remove a skill on another device:
@@ -177,155 +169,92 @@ skillsync install my-skill --device archlinux --target codex
 skillsync uninstall my-skill --device archlinux --target codex
 ```
 
-Remote assignment changes update desired state in the private vault. They do not require SSH access. If the target device is offline, the assignment remains pending until its SkillSync service next runs.
+This changes the desired assignment in the private vault; it does not require SSH. If the other device is offline, the change remains pending. Its SkillSync service pulls and applies the assignment the next time it runs.
 
-The interactive UI exposes the same workflow: choose **Devices**, select a device, then toggle skills or edit one skill's exact destinations.
-
-In the interactive UI, choose `Installed on this device` to see both SkillSync-managed installs and detected local skills. From there you can sync vault-backed skills or uninstall selected skills from the current device. Local-only detected folders require confirmation before SkillSync deletes them.
-
-The non-interactive `skillsync installed` command also prints concrete managed projection paths, so target-backed installs are visible as symlinks/copies, for example:
+The vault keeps cross-device assignments separate from device-reported local state:
 
 ```text
-- bog-hyperframes  [managed: codex | in vault]
-  -> codex: ~/.codex/skills/bog-hyperframes -> ~/.skillsync/repo/skills/bog-hyperframes
+skills/          canonical skill folders
+devices/         desired assignments, editable from any connected device
+state/           local targets and inventory reported by each device
+registry.json    generated skill index
+vault.json       vault-wide settings
 ```
 
-If a managed projection is missing, it is shown as missing and `skillsync sync` will recreate it.
+This separation lets one device safely edit another device’s assignments without taking ownership of the other device’s paths, inventory, or applied status.
 
-Check current vault/device state:
+## Remove skills
 
-```bash
-skillsync status
-```
-
-Add local agent targets:
+Remove a skill from one device:
 
 ```bash
-skillsync target add codex ~/.codex/skills
-skillsync target add opencode ~/.config/opencode/skills
-skillsync target add claude ~/.claude/skills
-skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
-```
-
-Import existing local agent skills into the vault:
-
-```bash
-skillsync import hermes
-skillsync import codex
-skillsync import opencode
-```
-
-`import` scans the default skill folder for that agent (`~/.hermes/skills`, `~/.codex/skills`, or `~/.config/opencode/skills`), copies each `SKILL.md` folder into the vault, and pushes the vault update. If the local folder is exactly the configured target path for that agent, SkillSync also replaces it with a vault-managed projection so future syncs keep it current.
-
-Add a skill folder to the vault:
-
-```bash
-skillsync add ~/Developer/skills/my-skill --skill my-skill
-```
-
-Add from a GitHub repo:
-
-```bash
-skillsync add https://github.com/example-org/example-skill --skill example-skill
-```
-
-If the source repo contains multiple skills, omit `--skill` in an interactive terminal and SkillSync will ask which ones to add. Add `--target codex` or `--target '*'` to install immediately after importing:
-
-```bash
-skillsync add https://github.com/example-org/example-skill --target codex
-skillsync add https://github.com/example-org/example-skill --target '*'
-```
-
-Install or uninstall a vaulted skill on this device:
-
-```bash
-skillsync install my-skill --target codex
-skillsync install my-skill --global
 skillsync uninstall my-skill
-skillsync uninstall my-skill --global
 ```
 
-Sync the vault and reapply local links:
+Delete it from the vault and every device:
 
 ```bash
-skillsync sync
+skillsync delete my-skill
 ```
 
-If an installed skill changes in the vault, `skillsync sync` pulls the vault and reapplies local projections. Symlink targets point at the current vault copy automatically; copy targets are refreshed when links are reapplied. Device-global installs are counted as installed on the device but do not create or scan an agent folder. Vault skills that already exist locally but were not installed by SkillSync are shown as local vault-backed skills and checked in Browse/install. Sync them from the `Installed on this device` screen to replace the same-named local folder with the vault-managed projection.
-
-Scan configured target folders for already-installed local skills:
-
-```bash
-skillsync scan
-```
-
-## Automatically adopt newly created local skills
-
-By default, SkillSync detects new local skills but does not upload them automatically. Enable automatic import for a target when every newly created skill in that managed folder should be adopted into the vault:
-
-```bash
-skillsync target auto-import codex on
-```
-
-Enabling the setting first baselines existing local skills. Only skills detected after that baseline are automatically adopted. This prevents an initial opt-in from uploading every pre-existing Codex, Claude, Hermes, or OpenCode skill.
-
-For each newly detected skill, SkillSync:
-
-1. verifies that the folder contains `SKILL.md`;
-2. copies it into the canonical vault;
-3. assigns it to the source target;
-4. replaces the standalone folder with a SkillSync-managed projection;
-5. commits and pushes the meaningful skill addition.
-
-If a different skill with the same name already exists in the vault, automatic import leaves both copies untouched and reports a conflict for explicit resolution.
-
-Disable automatic import with:
-
-```bash
-skillsync target auto-import codex off
-```
-
-## Delete skills after their last uninstall
-
-The safe default keeps unassigned skills in the vault. A vault owner can enable event-driven deletion:
+By default, a skill remains in the vault when its last device assignment is removed. To delete a skill automatically when an uninstall removes its final assignment:
 
 ```bash
 skillsync policy set delete-unassigned-skills on
 ```
 
-When enabled, removing a skill's final assignment deletes that skill from the vault. Removing one target while another device or target still uses the skill does not delete it.
+This policy reacts to a removal. Turning it on does not immediately delete skills that were already unassigned. Those stay in the vault until you delete them explicitly with `skillsync delete`.
 
-This policy is deliberately not a garbage-collection sweep. Enabling it does not delete skills that were already unassigned. It only applies when an uninstall or target-removal operation transitions a particular skill from at least one assignment to zero.
+## Sync and status
 
-Check the current policy:
+Run a sync immediately:
 
 ```bash
-skillsync policy show
+skillsync sync
 ```
 
-## Commands
+Inspect the current configuration:
 
 ```bash
-skillsync setup
-skillsync setup --repo owner/repo
-skillsync setup --name skills
+skillsync status
+skillsync installed
+skillsync installed --device archlinux
+```
+
+The background service syncs when it starts and then checks every 120 seconds. It uses a macOS LaunchAgent or a Linux systemd user service.
+
+Verify it on macOS:
+
+```bash
+launchctl print gui/$(id -u)/dev.skillsync.daemon
+```
+
+Verify it on Linux:
+
+```bash
+systemctl --user status skillsync.service --no-pager
+```
+
+## Command reference
+
+```text
 skillsync
+skillsync setup [--name skills] [--repo owner/repo|url]
 skillsync status
 skillsync list
 skillsync installed [--device id]
+skillsync matrix
 skillsync device list
 skillsync device show <id>
-skillsync add <skill-folder-or-git-url> --skill <name> [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]
-skillsync add https://github.com/example-org/example-skill --skill example-skill
-skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]
-skillsync install <skill> [--device id] --target codex
-skillsync install <skill> --global
-skillsync uninstall <skill> [--device id] [--target codex] [--global]
+skillsync add <folder-or-git-url> [--skill name] [--target target] [--global]
+skillsync import <hermes|codex|opencode>
+skillsync install <skill> [--device id] [--target codex,claude] [--global]
+skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]
 skillsync delete <skill>
-skillsync target add codex ~/.codex/skills [--auto-import]
-skillsync target add opencode ~/.config/opencode/skills
-skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
-skillsync target auto-import codex <on|off>
+skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]
+skillsync target remove <name>
+skillsync target auto-adopt <name> <on|off>
+skillsync auto-adopt [show|on|off]
 skillsync policy show
 skillsync policy set delete-unassigned-skills <on|off>
 skillsync scan
@@ -334,93 +263,12 @@ skillsync service install
 skillsync daemon
 ```
 
-## Removal model
+## Safety
 
-- `skillsync uninstall <skill>` removes the skill from the current device, including any device-global marker and SkillSync-managed target projections.
-- `skillsync uninstall <skill> --global` removes only the device-global marker.
-- With `delete-unassigned-skills` enabled, an uninstall or target removal that removes the final assignment also removes the canonical vault skill.
-- `skillsync delete <skill>` removes the skill from the vault and all device manifests.
+- SkillSync will not silently overwrite an unmanaged local folder.
+- Symlinked content outside a configured target is not auto-adopted.
+- Different same-name skills require explicit conflict resolution.
+- Vault deletion is explicit unless you enable the last-assignment deletion policy.
+- Your skills and device configuration stay in the private GitHub vault you control.
 
-## Skill names
-
-Skill names are vault-wide identifiers. Installing `my-skill` on two devices means both devices refer to the same vault skill. You can install the same skill on many devices, but you should not use the same name for two different skills in one vault.
-
-When `skillsync add` or `skillsync import` sees a same-name skill:
-
-- identical content: it keeps the single vault copy. If the local folder is in a configured target path, SkillSync replaces the local folder with the vault-managed link/copy.
-- different content: it shows a diff summary and asks whether to keep the vault version, overwrite the vault with the local/source version, save the local/source version under a different name, or skip.
-
-For scripts/non-interactive runs, different same-name conflicts are skipped by default. Override with:
-
-```bash
-skillsync import codex --conflict use-vault
-skillsync import codex --conflict overwrite-vault
-skillsync import codex --conflict rename --as my-skill-mac
-```
-
-## Detected versus managed skills
-
-`managed` skills are SkillSync-owned projections into a target folder. `detected` skills are already present in a local agent's skill tree, such as bundled Hermes skills under `~/.hermes/skills` or skills you installed before setting up SkillSync.
-
-For Hermes, use a separate scan path so SkillSync installs personal synced skills into `~/.hermes/skills/personal` while still showing the full Hermes skill inventory from `~/.hermes/skills`:
-
-```bash
-skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
-skillsync scan
-```
-
-## Auto-sync
-
-`skillsync service install` installs a background service:
-
-- macOS: LaunchAgent
-- Linux: systemd user service
-
-The service periodically pulls/pushes the GitHub vault and reapplies symlinks.
-
-The generated service launches the stable `skillsync` executable from `PATH`, so npm or pnpm upgrades do not leave it pinned to an old content-addressed package directory. Run `skillsync service install` again if the executable location itself changes.
-
-The daemon syncs immediately when it starts, then every 120 seconds. macOS LaunchAgents normally start after login. Linux systemd user services start with the user's service manager; headless systems may require lingering if they must sync before login.
-
-On macOS, install and verify the LaunchAgent:
-
-```bash
-skillsync service install
-launchctl print gui/$(id -u)/dev.skillsync.daemon
-```
-
-Restart the LaunchAgent manually when troubleshooting:
-
-```bash
-launchctl kickstart -k gui/$(id -u)/dev.skillsync.daemon
-```
-
-On Linux, verify the systemd user service:
-
-```bash
-systemctl --user status skillsync.service --no-pager
-```
-
-## Development
-
-Clone and test locally:
-
-```bash
-git clone https://github.com/AksharP5/skillsync.git
-cd skillsync
-npm install
-npm test
-npm pack --dry-run
-```
-
-The npm package name is `@akshar5/skillsync` because `skillsync` is already taken on npm. The installed command is still `skillsync`.
-
-Future releases are managed by Release Please and GitHub Actions. Use conventional commits:
-
-- `fix:` creates a patch release.
-- `feat:` creates a minor release.
-- `feat!:` or `BREAKING CHANGE:` creates a major release.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting. SkillSync is
-available under the [MIT License](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md) to work on SkillSync itself and [SECURITY.md](SECURITY.md) to report a vulnerability.
