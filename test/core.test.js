@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readlink, writeFile, lstat, symlink } from 'node:fs/promises';
+import {
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readlink,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -8,17 +16,27 @@ import {
   addSkillToVault,
   deleteSkillFromVault,
   loadRegistry,
+  loadVaultConfig,
   rebuildRegistry,
+  setVaultPolicy,
 } from '../src/core/registry.js';
 import {
   addTarget,
   applyLinks,
   installSkill,
+  listDevices,
   loadDevice,
+  markDeviceApplied,
+  removeTargetAndPrune,
   saveDevice,
   scanTargets,
+  setSkillTargets,
+  setTargetAutoImport,
+  skillAssignmentCount,
   uninstallSkill,
+  uninstallSkillAndPrune,
 } from '../src/core/device.js';
+import { generateGroups } from '../src/core/groups.js';
 import { syncVault } from '../src/core/sync.js';
 
 async function tempDir() {
@@ -123,6 +141,32 @@ test('installSkill creates device state and applyLinks creates/removes safe syml
   assert.match(skillStillExists, /# Bog/);
 });
 
+test('device generations distinguish desired assignments from locally applied state', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+
+  await addTarget({ vaultPath: vault, deviceId: 'remote-device', name: 'codex', targetPath: target });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'remote-device',
+    skillName: 'paper-mcp',
+    targets: ['codex'],
+  });
+
+  const pending = await loadDevice(vault, 'remote-device');
+  assert.equal(pending.desired_generation, 2);
+  assert.equal(pending.applied_generation, 0);
+
+  await applyLinks({ vaultPath: vault, deviceId: 'remote-device' });
+  await markDeviceApplied({ vaultPath: vault, deviceId: 'remote-device' });
+
+  const applied = await loadDevice(vault, 'remote-device');
+  assert.equal(applied.applied_generation, applied.desired_generation);
+});
+
 test('applyLinks replaces broken vault-owned symlinks instead of failing with EEXIST', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -165,6 +209,75 @@ test('installSkill tracks device-global installs without an agent target', async
   await uninstallSkill({ vaultPath: vault, deviceId, skillName: 'global-only' });
   const uninstalled = await loadDevice(vault, deviceId);
   assert.deepEqual(uninstalled.global_installed, []);
+});
+
+test('installSkill adds destinations without removing existing assignments', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: path.join(root, 'codex') });
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'opencode', targetPath: path.join(root, 'opencode') });
+
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'shared-skill', targets: ['codex'] });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'shared-skill', targets: ['opencode'] });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'shared-skill', targets: ['global'] });
+
+  const device = await loadDevice(vault, 'macbook');
+  assert.deepEqual(device.installed['shared-skill'], ['codex', 'opencode']);
+  assert.deepEqual(device.global_installed, ['shared-skill']);
+});
+
+test('setSkillTargets replaces a skill assignment with exact destinations', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: path.join(root, 'codex') });
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'opencode', targetPath: path.join(root, 'opencode') });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['codex', 'opencode', 'global'],
+  });
+
+  const before = await loadDevice(vault, 'macbook');
+  await setSkillTargets({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['opencode'],
+  });
+
+  const after = await loadDevice(vault, 'macbook');
+  assert.deepEqual(after.installed['shared-skill'], ['opencode']);
+  assert.deepEqual(after.global_installed, []);
+  assert.equal(after.desired_generation, before.desired_generation + 1);
+});
+
+test('removing a target cleans SkillSync-owned projections but preserves unmanaged folders', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'shared-skill', targets: ['codex'] });
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+  await makeSkill(target, 'local-only', '# Local\n');
+
+  await removeTargetAndPrune({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+  });
+
+  await assert.rejects(() => lstat(path.join(target, 'shared-skill')));
+  assert.equal(
+    await readFile(path.join(target, 'local-only', 'SKILL.md'), 'utf8'),
+    '# Local\n',
+  );
 });
 
 test('scanTargets records unmanaged local skills from a separate scan path', async () => {
@@ -219,6 +332,180 @@ test('scanTargets deduplicates duplicate local skills by name', async () => {
   ]);
 });
 
+test('auto-import baselines existing local skills and adopts only newly detected skills', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(target, 'existing-local', '# Existing\n');
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
+  await setTargetAutoImport({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    enabled: true,
+  });
+
+  await makeSkill(target, 'new-local', '---\nname: new-local\n---\n# New\n');
+  const result = await syncVault({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    pull: false,
+    pushChanges: false,
+  });
+
+  assert.deepEqual(result.autoImported.map((entry) => entry.name), ['new-local']);
+  const registry = await loadRegistry(vault);
+  assert.equal(registry.skills['existing-local'], undefined);
+  assert.ok(registry.skills['new-local']);
+  const device = await loadDevice(vault, 'macbook');
+  assert.deepEqual(device.installed['new-local'], ['codex']);
+  assert.equal((await lstat(path.join(target, 'new-local'))).isSymbolicLink(), true);
+  assert.equal((await lstat(path.join(target, 'existing-local'))).isDirectory(), true);
+
+  const secondSync = await syncVault({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    pull: false,
+    pushChanges: false,
+  });
+  assert.deepEqual(secondSync.autoImported, []);
+});
+
+test('auto-import leaves a different same-name local skill untouched for explicit conflict resolution', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Vault\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
+  await setTargetAutoImport({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    enabled: true,
+  });
+  await makeSkill(target, 'shared-skill', '# Local\n');
+
+  const result = await syncVault({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    pull: false,
+    pushChanges: false,
+  });
+
+  assert.deepEqual(result.autoImported, []);
+  assert.equal(result.autoImportConflicts.length, 1);
+  assert.equal(await readFile(path.join(target, 'shared-skill', 'SKILL.md'), 'utf8'), '# Local\n');
+  assert.equal(await readFile(path.join(vault, 'skills', 'shared-skill', 'SKILL.md'), 'utf8'), '# Vault\n');
+});
+
+test('auto-import will not follow a symlinked parent outside the managed target', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  const external = path.join(root, 'external');
+  await mkdir(target, { recursive: true });
+  await mkdir(external, { recursive: true });
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
+  await setTargetAutoImport({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    enabled: true,
+  });
+  await makeSkill(external, 'outside-skill', '# Outside\n');
+  await symlink(external, path.join(target, 'linked-parent'), 'dir');
+
+  const result = await syncVault({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    pull: false,
+    pushChanges: false,
+  });
+
+  assert.deepEqual(result.autoImported, []);
+  assert.equal((await loadRegistry(vault)).skills['outside-skill'], undefined);
+  assert.equal(
+    await readFile(path.join(external, 'outside-skill', 'SKILL.md'), 'utf8'),
+    '# Outside\n',
+  );
+});
+
+test('copy projection ownership requires a matching vault marker', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  const unmanaged = await makeSkill(target, 'unmanaged', '# Keep\n');
+  await writeFile(path.join(unmanaged, '.skillsync-owned.json'), JSON.stringify({
+    skill: 'unmanaged',
+    vault: path.join(root, 'different-vault'),
+  }));
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    targetPath: target,
+    mode: 'copy',
+  });
+
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  assert.equal(await readFile(path.join(unmanaged, 'SKILL.md'), 'utf8'), '# Keep\n');
+});
+
+test('delete-on-last-uninstall prunes only the skill that transitions from assigned to unassigned', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
+  await makeSkill(path.join(vault, 'skills'), 'unassigned-library-skill', '# Keep\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: path.join(root, 'mac') });
+  await addTarget({ vaultPath: vault, deviceId: 'linux', name: 'codex', targetPath: path.join(root, 'linux') });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'shared-skill', targets: ['codex'] });
+  await installSkill({ vaultPath: vault, deviceId: 'linux', skillName: 'shared-skill', targets: ['codex'] });
+  await setVaultPolicy({ vaultPath: vault, name: 'delete_unassigned_skills', enabled: true });
+
+  const first = await uninstallSkillAndPrune({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+  });
+  assert.equal(first.pruned, false);
+  assert.equal(await skillAssignmentCount(vault, 'shared-skill'), 1);
+
+  const second = await uninstallSkillAndPrune({
+    vaultPath: vault,
+    deviceId: 'linux',
+    skillName: 'shared-skill',
+  });
+  assert.equal(second.pruned, true);
+  const registry = await loadRegistry(vault);
+  assert.equal(registry.skills['shared-skill'], undefined);
+  assert.ok(registry.skills['unassigned-library-skill']);
+});
+
+test('delete-on-last-uninstall is disabled by default and never sweeps an already-unassigned skill', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'library-skill', '# Library\n');
+  await rebuildRegistry(vault);
+
+  const defaultConfig = await loadVaultConfig(vault);
+  assert.equal(defaultConfig.policies.delete_unassigned_skills, false);
+  await setVaultPolicy({ vaultPath: vault, name: 'delete_unassigned_skills', enabled: true });
+  const result = await uninstallSkillAndPrune({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'library-skill',
+  });
+
+  assert.equal(result.pruned, false);
+  assert.ok((await loadRegistry(vault)).skills['library-skill']);
+});
+
 test('background sync preserves last_seen even if an older caller requests a heartbeat', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -251,4 +538,101 @@ test('deleteSkillFromVault removes the skill from registry and every device mani
   assert.equal(registry.skills['bog-hyperframes'], undefined);
   const device = await loadDevice(vault, 'macbook');
   assert.equal(device.installed['bog-hyperframes'], undefined);
+  assert.ok(device.desired_generation > device.applied_generation);
+});
+
+test('path-like skill names and device IDs are rejected before filesystem access', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const outside = path.join(root, 'outside');
+  await mkdir(outside, { recursive: true });
+  await writeFile(path.join(outside, 'keep.txt'), 'keep');
+
+  await assert.rejects(
+    () => deleteSkillFromVault({ vaultPath: vault, skillName: '../outside' }),
+    /Skill name must be one non-empty path segment/,
+  );
+  await assert.rejects(
+    () => loadDevice(vault, '../outside'),
+    /Device ID must be one non-empty path segment/,
+  );
+  await assert.rejects(
+    () => addTarget({
+      vaultPath: vault,
+      deviceId: 'safe-device',
+      name: '__proto__',
+      targetPath: path.join(root, 'target'),
+    }),
+    /Target name must be one non-empty path segment/,
+  );
+  assert.equal(await readFile(path.join(outside, 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('generated pack names cannot escape the vault output folders', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await writeFile(path.join(vault, 'groups.json'), JSON.stringify({
+    packs: {
+      '../escape': {
+        skills: ['paper-mcp'],
+      },
+    },
+  }));
+
+  await assert.rejects(
+    () => generateGroups({ vaultPath: vault, write: true }),
+    /Pack name must be one non-empty path segment/,
+  );
+  await assert.rejects(() => lstat(path.join(root, 'escape.json')));
+});
+
+test('device manifest payload cannot override its filename identity', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await mkdir(path.join(vault, 'devices'), { recursive: true });
+  await writeFile(path.join(vault, 'devices', 'safe-device.json'), JSON.stringify({
+    version: 1,
+    device_id: '../../escape',
+    display_name: 'Untrusted payload',
+    targets: {},
+    installed: {},
+    global_installed: [],
+    detected: {},
+  }));
+
+  const [device] = await listDevices(vault);
+
+  assert.equal(device.device_id, 'safe-device');
+  assert.equal(device.display_name, 'Untrusted payload');
+});
+
+test('sync applies the latest desired generation on the target device', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'remote-codex');
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'remote', name: 'codex', targetPath: target });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'remote',
+    skillName: 'paper-mcp',
+    targets: ['codex'],
+  });
+
+  const pending = await loadDevice(vault, 'remote');
+  assert.ok(pending.desired_generation > pending.applied_generation);
+
+  await syncVault({
+    vaultPath: vault,
+    deviceId: 'remote',
+    pull: false,
+    pushChanges: false,
+  });
+
+  const applied = await loadDevice(vault, 'remote');
+  assert.equal(applied.applied_generation, applied.desired_generation);
+  assert.equal((await lstat(path.join(target, 'paper-mcp'))).isSymbolicLink(), true);
 });

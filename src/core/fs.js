@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function expandHome(value) {
   if (!value) return value;
   if (value === '~') return homedir();
@@ -54,6 +56,20 @@ export function slugifySkillName(name) {
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+export function assertSafePathSegment(value, label = 'Path segment') {
+  if (typeof value !== 'string'
+    || !value
+    || value === '.'
+    || value === '..'
+    || RESERVED_OBJECT_KEYS.has(value)
+    || value.includes('\0')
+    || path.posix.basename(value) !== value
+    || path.win32.basename(value) !== value) {
+    throw new Error(`${label} must be one non-empty path segment`);
+  }
+  return value;
 }
 
 export async function readSkillName(skillDir) {
