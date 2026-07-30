@@ -241,11 +241,11 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     cwd: path.resolve('.'),
     env: { ...process.env, HOME: home },
   });
-  assert.match(enabled.stdout, /Global AGENTS\.md sync enabled/);
+  assert.match(enabled.stdout, /Global AGENTS\.md profile enabled: macbook/);
   assert.match(enabled.stdout, /Preserved previous local path/);
   assert.equal((await lstat(destination)).isSymbolicLink(), true);
   assert.equal(
-    await readFile(path.join(vault, 'globals', 'AGENTS.md'), 'utf8'),
+    await readFile(path.join(vault, 'globals', 'agents', 'macbook.md'), 'utf8'),
     '# Shared instructions\n',
   );
 
@@ -257,7 +257,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     cwd: path.resolve('.'),
     env: { ...process.env, HOME: home },
   });
-  assert.match(status.stdout, /macbook: synced/);
+  assert.match(status.stdout, /macbook: macbook \(synced\)/);
 
   const disabled = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
@@ -267,7 +267,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     cwd: path.resolve('.'),
     env: { ...process.env, HOME: home },
   });
-  assert.match(disabled.stdout, /A local copy remains/);
+  assert.match(disabled.stdout, /Standalone local copies remain/);
   assert.equal((await lstat(destination)).isFile(), true);
   assert.equal(await readFile(destination, 'utf8'), '# Shared instructions\n');
 });

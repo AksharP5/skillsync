@@ -88,37 +88,47 @@ Choose a skill, check or uncheck the devices that should have it, and select des
 
 Remote changes apply automatically when those devices next sync. If a skill is removed from every device and `delete-unassigned-skills` is enabled, SkillSync waits until every device reports the local copy gone and then removes it from the vault.
 
-## Sync your global AGENTS.md
+## Sync global instructions
 
-SkillSync can optionally keep Codex’s global `~/.codex/AGENTS.md` synchronized through the same private vault.
+Global instruction locations depend on the agent:
 
-On the device whose instructions you want to keep:
+- Codex: `~/.codex/AGENTS.md`
+- OpenCode: `~/.config/opencode/AGENTS.md`
 
-```bash
-skillsync instructions enable --from-local
-```
+SkillSync stores global instructions as named profiles. Each device selects its own profile, so devices can stay different or intentionally share one.
 
-On each additional device:
-
-```bash
-skillsync instructions enable --use-vault
-```
-
-SkillSync preserves the previous local path as a timestamped backup, then links `~/.codex/AGENTS.md` to the canonical `globals/AGENTS.md` in the vault. Editing the normal global file therefore updates the vault and propagates through the background service. Only the content change needs a commit; devices do not write separate heartbeat or applied-hash commits. Project-specific `AGENTS.md` files are not affected.
-
-Check every device:
+Import the version already used by a device:
 
 ```bash
-skillsync instructions status
+skillsync instructions import --name macbook --from ~/.config/opencode/AGENTS.md
 ```
 
-To stop syncing on one device:
+If Codex and OpenCode on that device should use the same profile, link the other global path:
 
 ```bash
-skillsync instructions disable
+skillsync instructions link ~/.codex/AGENTS.md
 ```
 
-Disabling removes the managed link and leaves a standalone local copy with the current instructions. You can also toggle this under **Settings** in the interactive UI.
+Import another device’s different version under another name, or switch it to an existing profile:
+
+```bash
+skillsync instructions import --name linux --from ~/.codex/AGENTS.md
+skillsync instructions use macbook
+```
+
+You can also select the profile used by another device. Remote assignments apply when that device next syncs:
+
+```bash
+skillsync instructions use-device macbook --device linux
+```
+
+Exact-content imports reuse an existing profile by default. If a device sharing a profile should diverge, fork it before editing:
+
+```bash
+skillsync instructions fork linux-personal
+```
+
+View profiles, assignments, and pending changes with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups, never overwrites unmanaged replacements during background sync, and does not auto-delete unassigned profiles. Disabling leaves standalone local copies. Project-specific `AGENTS.md` files are not affected.
 
 ## Add and install skills
 
@@ -287,7 +297,15 @@ skillsync status
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]
-skillsync instructions <status|enable|disable> [--path path] [--from-local|--use-vault]
+skillsync instructions status
+skillsync instructions profiles
+skillsync instructions import [--name profile] [--from path] [--to path]
+skillsync instructions use <profile> [--device id]
+skillsync instructions use-device <source-device> [--device target-device]
+skillsync instructions fork [profile]
+skillsync instructions link <path>
+skillsync instructions unlink <path>
+skillsync instructions disable [--device id]
 skillsync device list
 skillsync device show <id>
 skillsync add <folder-or-git-url> [--skill name] [--target target] [--global]

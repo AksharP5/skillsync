@@ -15,6 +15,7 @@ import {
   managedProjections,
   removeTargetAndPrune,
   setDeviceAutoImport,
+  setGlobalInstructionsProfile,
   setSkillTargets,
   setTargetAutoImport,
   uninstallSkillAndPrune,
@@ -39,11 +40,16 @@ import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push,
 import { generateGroups } from './core/groups.js';
 import {
   DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
+  addGlobalInstructionsPath,
+  assignGlobalInstructionsProfile,
   disableGlobalInstructions,
   enableGlobalInstructions,
-  globalInstructionsHash,
-  globalInstructionsVaultPath,
+  forkGlobalInstructionsProfile,
+  importGlobalInstructionsProfile,
   inspectGlobalInstructions,
+  listGlobalInstructionProfiles,
+  removeGlobalInstructionsPath,
+  selectGlobalInstructionsProfile,
 } from './core/instructions.js';
 import {
   addSkillToVault,
@@ -647,55 +653,210 @@ async function matrixCommand(rest = []) {
 async function instructionsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
   const config = await configured();
-  if (subcommand === 'status') {
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: true,
-    });
-    const canonical = globalInstructionsVaultPath(config.repoPath);
-    const canonicalExists = await exists(canonical);
-    const hash = canonicalExists ? await globalInstructionsHash(canonical) : null;
-    console.log(canonicalExists
-      ? `Canonical global instructions: ${canonical} (${hash})`
-      : 'Canonical global instructions: not configured');
-    const devices = await listDevices(config.repoPath);
+  await syncVault({
+    vaultPath: config.repoPath,
+    deviceId: config.deviceId,
+    pull: true,
+  });
+
+  if (subcommand === 'status' || subcommand === 'profiles') {
+    const [profiles, devices] = await Promise.all([
+      listGlobalInstructionProfiles(config.repoPath),
+      listDevices(config.repoPath),
+    ]);
+    if (!profiles.length) {
+      console.log('No global instruction profiles are configured.');
+    } else {
+      console.log('Global instruction profiles:');
+      for (const profile of profiles) {
+        const assigned = devices
+          .filter((device) => device.instructions.agents?.profile === profile.id)
+          .map((device) => device.device_id);
+        const suffix = assigned.length ? ` [${assigned.join(', ')}]` : ' [unassigned]';
+        console.log(`- ${profile.id}: ${profile.hash.slice(0, 19)}${suffix}`);
+      }
+    }
+    console.log('Devices:');
     for (const device of devices) {
       const agents = device.instructions.agents;
-      if (!agents?.enabled) {
-        console.log(`- ${device.device_id}: off`);
+      if (!agents?.profile) {
+        const capability = (device.instructions.version || 0) >= 1
+          ? ''
+          : ' (upgrade and sync required before remote assignment)';
+        console.log(`- ${device.device_id}: off${capability}`);
         continue;
       }
-      let state = 'enabled';
-      if (device.device_id === config.deviceId) {
-        const inspected = await inspectGlobalInstructions({
-          vaultPath: config.repoPath,
-          targetPath: agents.path,
-        });
-        state = inspected.destinationOwned ? 'synced' : 'needs repair';
+      let state = agents.profile === agents.applied_profile
+        ? 'applied'
+        : `pending (applied: ${agents.applied_profile || 'off'})`;
+      if (device.device_id === config.deviceId && agents.profile === agents.applied_profile) {
+        const inspections = await Promise.all((agents.paths || []).map((targetPath) => (
+          inspectGlobalInstructions({
+            vaultPath: config.repoPath,
+            profile: agents.profile,
+            targetPath,
+          })
+        )));
+        state = inspections.every((inspected) => inspected.destinationOwned)
+          ? 'synced'
+          : 'needs repair';
       }
-      console.log(`- ${device.device_id}: ${state} -> ${agents.path}`);
+      const paths = agents.paths?.length ? ` -> ${agents.paths.join(', ')}` : '';
+      console.log(`- ${device.device_id}: ${agents.profile} (${state})${paths}`);
     }
     return;
   }
-  if (subcommand === 'enable') {
+  if (subcommand === 'import') {
+    const device = await loadDevice(config.repoPath, config.deviceId);
+    const sourcePath = flagValue(
+      rest,
+      '--from',
+      flagValue(rest, '--path', device.instructions.agents?.path || DEFAULT_GLOBAL_INSTRUCTIONS_PATH),
+    );
+    const targetPaths = flagList(rest, ['--to']);
+    const result = await importGlobalInstructionsProfile({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      profile: flagValue(rest, '--name', config.deviceId),
+      sourcePath,
+      targetPaths: targetPaths.length
+        ? targetPaths
+        : device.instructions.agents?.paths?.length
+          ? device.instructions.agents.paths
+          : [sourcePath],
+      separate: hasFlag(rest, '--separate'),
+    });
     await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
-      pull: true,
+      pull: false,
     });
+    console.log(result.deduplicated
+      ? `Matched existing profile: ${result.profile}`
+      : `Imported global instructions profile: ${result.profile}`);
+    for (const preserved of result.backups) {
+      console.log(`Preserved previous local path: ${preserved.backup}`);
+    }
+    return;
+  }
+  if (subcommand === 'use' || subcommand === 'use-device') {
+    const targetDeviceId = flagValue(rest, '--device', config.deviceId);
+    let profile = subcommand === 'use' ? rest[1] : null;
+    if (subcommand === 'use-device') {
+      const sourceDeviceId = rest[1];
+      if (!sourceDeviceId) {
+        throw new Error('Usage: skillsync instructions use-device <source-device> [--device target-device]');
+      }
+      const sourceDevice = await requireKnownDevice(config.repoPath, sourceDeviceId);
+      profile = sourceDevice.instructions.agents?.profile;
+      if (!profile) throw new Error(`${sourceDeviceId} is not using a global instructions profile`);
+    }
+    if (!profile || profile.startsWith('--')) {
+      throw new Error('Usage: skillsync instructions use <profile> [--device device]');
+    }
+    await requireKnownDevice(config.repoPath, targetDeviceId);
+    if (targetDeviceId === config.deviceId) {
+      const targetPath = flagValue(rest, '--path');
+      const result = await selectGlobalInstructionsProfile({
+        vaultPath: config.repoPath,
+        deviceId: targetDeviceId,
+        profile,
+        targetPaths: targetPath ? [targetPath] : undefined,
+      });
+      for (const preserved of result.backups) {
+        console.log(`Preserved previous local path: ${preserved.backup}`);
+      }
+    } else {
+      await assignGlobalInstructionsProfile({
+        vaultPath: config.repoPath,
+        deviceId: targetDeviceId,
+        profile,
+      });
+    }
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    console.log(`Assigned ${targetDeviceId} to global instructions profile ${profile}.`);
+    return;
+  }
+  if (subcommand === 'fork') {
+    const result = await forkGlobalInstructionsProfile({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      profile: rest[1] || flagValue(rest, '--name', config.deviceId),
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    console.log(`Forked global instructions into profile ${result.profile}.`);
+    return;
+  }
+  if (subcommand === 'link') {
+    const targetPath = rest[1];
+    if (!targetPath) throw new Error('Usage: skillsync instructions link <path>');
+    const result = await addGlobalInstructionsPath({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      targetPath,
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    for (const preserved of result.backups) {
+      console.log(`Preserved previous local path: ${preserved.backup}`);
+    }
+    console.log(`Linked ${targetPath} to profile ${result.profile}.`);
+    return;
+  }
+  if (subcommand === 'unlink') {
+    const targetPath = rest[1];
+    if (!targetPath) throw new Error('Usage: skillsync instructions unlink <path>');
+    const result = await removeGlobalInstructionsPath({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      targetPath,
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    console.log(`Unlinked ${result.destination}; a standalone local copy remains.`);
+    return;
+  }
+  if (subcommand === 'enable') {
     const targetPath = flagValue(rest, '--path', DEFAULT_GLOBAL_INSTRUCTIONS_PATH);
     const fromLocal = hasFlag(rest, '--from-local');
     const useVault = hasFlag(rest, '--use-vault');
     if (fromLocal && useVault) {
       throw new Error('Choose only one: --from-local or --use-vault');
     }
-    let strategy = fromLocal ? 'from-local' : useVault ? 'use-vault' : undefined;
+    const profiles = await listGlobalInstructionProfiles(config.repoPath);
+    let strategy = fromLocal
+      ? 'from-local'
+      : useVault
+        ? 'use-vault'
+        : !profiles.length
+          ? 'from-local'
+          : undefined;
+    let profile = flagValue(
+      rest,
+      '--profile',
+      strategy === 'from-local' ? config.deviceId : 'shared',
+    );
     const inspected = await inspectGlobalInstructions({
       vaultPath: config.repoPath,
+      profile,
       targetPath,
     });
-    if (!strategy
+    if (!fromLocal
+      && !useVault
       && inspected.canonicalExists
       && inspected.destinationExists
       && !inspected.destinationOwned
@@ -711,44 +872,55 @@ async function instructionsCommand(rest = []) {
         ],
       }), 'cancel');
       if (strategy === 'cancel') return;
+      if (strategy === 'from-local' && !hasFlag(rest, '--profile')) {
+        profile = config.deviceId;
+      }
     }
     const result = await enableGlobalInstructions({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       targetPath,
       strategy,
+      profile,
     });
     await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: false,
     });
-    console.log(`Global AGENTS.md sync enabled: ${result.destination}`);
-    console.log(`Canonical file: ${result.source}`);
+    console.log(`Global AGENTS.md profile enabled: ${result.profile}`);
+    console.log(`Local path: ${result.destination}`);
+    console.log(`Profile file: ${result.source}`);
     if (result.backup) console.log(`Preserved previous local path: ${result.backup}`);
     return;
   }
   if (subcommand === 'disable') {
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: true,
-    });
-    const result = await disableGlobalInstructions({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-    });
+    const targetDeviceId = flagValue(rest, '--device', config.deviceId);
+    const targetDevice = await requireKnownDevice(config.repoPath, targetDeviceId);
+    if (targetDeviceId !== config.deviceId && (targetDevice.instructions.version || 0) < 1) {
+      throw new Error(`${targetDeviceId} must sync with a profile-capable SkillSync version first`);
+    }
+    const result = targetDeviceId === config.deviceId
+      ? await disableGlobalInstructions({
+        vaultPath: config.repoPath,
+        deviceId: config.deviceId,
+      })
+      : await setGlobalInstructionsProfile({
+        vaultPath: config.repoPath,
+        deviceId: targetDeviceId,
+        profile: null,
+      }).then(() => ({ disabled: true, destinations: [] }));
     await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: false,
     });
     console.log(result.disabled
-      ? `Global AGENTS.md sync disabled. A local copy remains at ${result.destination}.`
-      : 'Global AGENTS.md sync was not configured on this device.');
+      ? `Global AGENTS.md sync disabled for ${targetDeviceId}.${targetDeviceId === config.deviceId ? ' Standalone local copies remain.' : ''}`
+      : `Global AGENTS.md sync was not configured on ${targetDeviceId}.`);
     return;
   }
-  throw new Error('Usage: skillsync instructions <status|enable|disable> [--path path] [--from-local|--use-vault]');
+  throw new Error('Usage: skillsync instructions <status|profiles|import|use|use-device|fork|link|unlink|enable|disable>');
 }
 
 function conflictAction(rest) {
@@ -2186,9 +2358,11 @@ async function settingsScreen(config) {
         description: 'Full syncs remove skills with no assignments and no detected local copies.',
       },
       {
-        name: `Sync global AGENTS.md on this device: ${device.instructions.agents?.enabled ? 'on' : 'off'}`,
+        name: `Global AGENTS.md profile: ${device.instructions.agents?.profile || 'off'}`,
         value: 'toggle-instructions',
-        description: `Keeps ${device.instructions.agents?.path || DEFAULT_GLOBAL_INSTRUCTIONS_PATH} linked to the canonical vault file.`,
+        description: device.instructions.agents?.profile
+          ? `Projects this profile to ${(device.instructions.agents.paths || []).join(', ')}.`
+          : 'Import or select a named profile for this device.',
       },
       { name: 'Back', value: 'back' },
     ],
@@ -2210,19 +2384,7 @@ async function settingsScreen(config) {
     return;
   }
   if (choice === 'toggle-instructions') {
-    if (device.instructions.agents?.enabled) {
-      const confirmed = await confirm({
-        message: 'Disable global AGENTS.md sync and leave a standalone local copy?',
-        default: false,
-      });
-      if (confirmed) await instructionsCommand(['disable']);
-    } else {
-      const confirmed = await confirm({
-        message: `Enable global AGENTS.md sync at ${DEFAULT_GLOBAL_INSTRUCTIONS_PATH}?`,
-        default: true,
-      });
-      if (confirmed) await instructionsCommand(['enable']);
-    }
+    await instructionProfileSettingsScreen(config, device);
     return;
   }
   if (choice !== 'toggle-prune') return;
@@ -2245,6 +2407,87 @@ async function settingsScreen(config) {
   console.log(`\ndelete-unassigned-skills: ${next ? 'on' : 'off'}\n`);
 }
 
+async function instructionProfileSettingsScreen(config, device) {
+  const profiles = await listGlobalInstructionProfiles(config.repoPath);
+  const agents = device.instructions.agents;
+  const choices = profiles.map((profile) => ({
+    name: `${profile.id}${agents?.profile === profile.id ? ' (current)' : ''}`,
+    value: `use:${profile.id}`,
+    description: `Use this profile on ${device.display_name}.`,
+  }));
+  choices.push({
+    name: 'Import this device’s existing instructions',
+    value: 'import',
+  });
+  if (agents?.profile) {
+    choices.push(
+      { name: 'Fork the current profile', value: 'fork' },
+      { name: 'Link another global instructions path', value: 'link' },
+    );
+    if ((agents.paths || []).length > 1) {
+      choices.push({ name: 'Unlink a global instructions path', value: 'unlink' });
+    }
+    choices.push({ name: 'Disable and leave standalone local copies', value: 'disable' });
+  }
+  choices.push({ name: 'Back', value: 'back' });
+  const choice = await promptWithEscape(select({
+    message: 'Global AGENTS.md profiles',
+    loop: false,
+    choices,
+  }), 'back');
+  if (!choice || choice === 'back') return;
+  if (choice.startsWith('use:')) {
+    await instructionsCommand(['use', choice.slice('use:'.length)]);
+    return;
+  }
+  if (choice === 'import') {
+    const sourcePath = await input({
+      message: 'Existing global instructions path',
+      default: agents?.path || DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
+    });
+    const name = await input({
+      message: 'Profile name',
+      default: config.deviceId,
+    });
+    await instructionsCommand(['import', '--name', name, '--from', sourcePath]);
+    return;
+  }
+  if (choice === 'fork') {
+    const name = await input({
+      message: 'New independent profile name',
+      default: `${config.deviceId}-personal`,
+    });
+    await instructionsCommand(['fork', name]);
+    return;
+  }
+  if (choice === 'link') {
+    const targetPath = await input({
+      message: 'Additional global instructions path',
+      default: '~/.config/opencode/AGENTS.md',
+    });
+    await instructionsCommand(['link', targetPath]);
+    return;
+  }
+  if (choice === 'unlink') {
+    const targetPath = await select({
+      message: 'Path to leave as a standalone copy',
+      choices: agents.paths.map((candidate) => ({
+        name: candidate,
+        value: candidate,
+      })),
+    });
+    await instructionsCommand(['unlink', targetPath]);
+    return;
+  }
+  if (choice === 'disable'
+    && await confirm({
+      message: 'Disable global AGENTS.md sync and leave standalone local copies?',
+      default: false,
+    })) {
+    await instructionsCommand(['disable']);
+  }
+}
+
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions <status|enable|disable> [--path path] [--from-local|--use-vault]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path]\n  skillsync instructions use <profile> [--device id]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

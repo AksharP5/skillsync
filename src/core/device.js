@@ -106,17 +106,30 @@ function composeDevice({ desired, reported, deviceId }) {
     'Device ID',
   );
   const legacy = isLegacyDeviceManifest(desired) ? desired : null;
-  const desiredState = normalizeDesiredState(desired, normalizedDeviceId);
   const reportedState = normalizeReportedState(
     reported || legacy,
     normalizedDeviceId,
     { legacy: Boolean(legacy && !reported) },
   );
+  const explicitProfile = desired?.instructions?.agents
+    && Object.hasOwn(desired.instructions.agents, 'profile');
+  const desiredState = normalizeDesiredState(desired, normalizedDeviceId, {
+    fallbackProfile: explicitProfile
+      ? null
+      : reportedState.instructions.agents?.applied_profile || null,
+  });
   return normalizeDevice({
     ...reportedState,
     desired_generation: desiredState.generation,
     installed: desiredState.installed,
     global_installed: desiredState.global_installed,
+    instructions: {
+      version: reportedState.instructions.version,
+      agents: composeInstructionState(
+        desiredState.instructions.agents,
+        reportedState.instructions.agents,
+      ),
+    },
   }, normalizedDeviceId);
 }
 
@@ -128,17 +141,17 @@ function isLegacyDeviceManifest(value) {
     'applied_generation',
     'targets',
     'detected',
-    'instructions',
   ].some((key) => Object.hasOwn(value, key)));
 }
 
-function normalizeDesiredState(value, deviceId) {
+function normalizeDesiredState(value, deviceId, { fallbackProfile = null } = {}) {
   return {
     version: 1,
     device_id: deviceId,
     generation: nonNegativeInteger(value?.generation ?? value?.desired_generation),
     installed: normalizeInstalled(value?.installed),
     global_installed: normalizeGlobalInstalled(value),
+    instructions: normalizeDesiredInstructions(value?.instructions, fallbackProfile),
   };
 }
 
@@ -150,7 +163,7 @@ function normalizeReportedState(value, deviceId, { legacy = false } = {}) {
     applied_generation: nonNegativeInteger(value?.applied_generation),
     targets: normalizeTargets(value?.targets, { defaultAutoImport: !legacy }),
     detected: value?.detected && typeof value.detected === 'object' ? value.detected : {},
-    instructions: normalizeInstructions(value?.instructions),
+    instructions: normalizeReportedInstructions(value?.instructions),
   };
 }
 
@@ -159,6 +172,7 @@ function desiredStateFromDevice(device) {
     generation: device.desired_generation,
     installed: device.installed,
     global_installed: device.global_installed,
+    instructions: device.instructions,
   }, device.device_id);
 }
 
@@ -168,7 +182,7 @@ function reportedStateFromDevice(device) {
     applied_generation: device.applied_generation,
     targets: device.targets,
     detected: device.detected,
-    instructions: device.instructions,
+    instructions: reportedInstructionsFromDevice(device.instructions),
   }, device.device_id);
   return {
     ...reported,
@@ -191,7 +205,7 @@ function normalizeDevice(device, deviceId) {
     installed: normalizeInstalled(device?.installed),
     global_installed: normalizeGlobalInstalled(device),
     detected: device?.detected && typeof device.detected === 'object' ? device.detected : {},
-    instructions: normalizeInstructions(device?.instructions),
+    instructions: normalizeInstructionState(device?.instructions),
   };
 }
 
@@ -261,31 +275,123 @@ function serializeReportedTargets(targets) {
   ]));
 }
 
-function normalizeInstructions(instructions) {
+function normalizeInstructionProfile(profile) {
+  if (profile === null || profile === undefined || profile === '') return null;
+  return assertSafePathSegment(profile, 'Instruction profile');
+}
+
+function normalizeInstructionPaths(agents) {
+  const values = Array.isArray(agents?.paths)
+    ? agents.paths
+    : typeof agents?.path === 'string' && agents.path
+      ? [agents.path]
+      : [];
+  return [...new Set(values.filter((value) => typeof value === 'string' && value))];
+}
+
+function normalizeDesiredInstructions(instructions, fallbackProfile = null) {
   const agents = instructions?.agents;
-  if (!agents || typeof agents !== 'object') return {};
-  const targetPath = typeof agents.path === 'string' && agents.path
-    ? agents.path
-    : '~/.codex/AGENTS.md';
+  const explicit = agents
+    && typeof agents === 'object'
+    && Object.hasOwn(agents, 'profile');
+  const profile = explicit
+    ? normalizeInstructionProfile(agents.profile)
+    : normalizeInstructionProfile(fallbackProfile);
+  if (!explicit && !profile) return {};
+  return { agents: { profile } };
+}
+
+function normalizeReportedInstructions(instructions) {
+  const agents = instructions?.agents;
+  const version = nonNegativeInteger(instructions?.version);
+  if (!agents || typeof agents !== 'object') {
+    return version ? { version } : {};
+  }
+  const paths = normalizeInstructionPaths(agents);
+  const appliedProfile = normalizeInstructionProfile(
+    agents.applied_profile ?? (agents.enabled ? 'shared' : null),
+  );
+  if (!paths.length && !appliedProfile) return version ? { version } : {};
   return {
+    version,
     agents: {
-      path: targetPath,
-      enabled: Boolean(agents.enabled),
+      paths,
+      applied_profile: appliedProfile,
     },
   };
+}
+
+function composeInstructionState(desiredAgents, reportedAgents) {
+  const profile = normalizeInstructionProfile(desiredAgents?.profile);
+  const paths = normalizeInstructionPaths(reportedAgents);
+  const appliedProfile = normalizeInstructionProfile(reportedAgents?.applied_profile);
+  if (!profile && !paths.length && !appliedProfile) return undefined;
+  return {
+    profile,
+    paths,
+    path: paths[0] || '~/.codex/AGENTS.md',
+    applied_profile: appliedProfile,
+    enabled: Boolean(profile),
+  };
+}
+
+function normalizeInstructionState(instructions) {
+  const agents = instructions?.agents;
+  const version = nonNegativeInteger(instructions?.version);
+  if (!agents || typeof agents !== 'object') return version ? { version } : {};
+  const composed = composeInstructionState(agents, agents);
+  return composed ? { version, agents: composed } : version ? { version } : {};
+}
+
+function reportedInstructionsFromDevice(instructions) {
+  const agents = instructions?.agents;
+  const version = nonNegativeInteger(instructions?.version);
+  if (!agents || typeof agents !== 'object') return version ? { version } : {};
+  const paths = normalizeInstructionPaths(agents);
+  const appliedProfile = normalizeInstructionProfile(agents.applied_profile);
+  if (!paths.length && !appliedProfile) return version ? { version } : {};
+  return {
+    version,
+    agents: {
+      paths,
+      applied_profile: appliedProfile,
+    },
+  };
+}
+
+export async function setGlobalInstructionsProfile({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  profile,
+}) {
+  const device = await loadDevice(vaultPath, deviceId);
+  const nextProfile = normalizeInstructionProfile(profile);
+  if (device.instructions.agents?.profile === nextProfile) return device;
+  device.instructions.agents = {
+    ...(device.instructions.agents || {}),
+    profile: nextProfile,
+    enabled: Boolean(nextProfile),
+  };
+  bumpDesiredGeneration(device);
+  await saveDesiredDevice(vaultPath, device);
+  return device;
 }
 
 export async function configureGlobalInstructions({
   vaultPath,
   deviceId = defaultDeviceId(),
-  targetPath = '~/.codex/AGENTS.md',
-  enabled,
+  targetPaths,
+  targetPath,
+  appliedProfile,
 }) {
   const device = await loadDevice(vaultPath, deviceId);
+  const paths = targetPaths || (targetPath ? [targetPath] : device.instructions.agents?.paths || []);
   device.instructions.agents = {
-    path: targetPath,
-    enabled: Boolean(enabled),
+    ...(device.instructions.agents || {}),
+    paths: [...new Set(paths)],
+    applied_profile: normalizeInstructionProfile(appliedProfile),
   };
+  device.instructions.version = 1;
   await saveReportedDevice(vaultPath, device);
   return device;
 }

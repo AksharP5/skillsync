@@ -32,6 +32,7 @@ import {
   removeTargetAndPrune,
   scanTargets,
   setDeviceAutoImport,
+  setGlobalInstructionsProfile,
   setSkillTargets,
   setTargetAutoImport,
   skillAssignmentCount,
@@ -42,10 +43,15 @@ import {
 import { generateGroups } from '../src/core/groups.js';
 import {
   applyGlobalInstructions,
+  assignGlobalInstructionsProfile,
   disableGlobalInstructions,
   enableGlobalInstructions,
+  forkGlobalInstructionsProfile,
   globalInstructionsHash,
   globalInstructionsVaultPath,
+  importGlobalInstructionsProfile,
+  listGlobalInstructionProfiles,
+  selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import {
   matrixAssignmentChanges,
@@ -394,17 +400,25 @@ test('legacy device manifests migrate into controller-owned desired state and de
     installed: { 'paper-mcp': ['codex'] },
     global_installed: [],
     detected: { codex: [] },
+    instructions: {
+      agents: {
+        path: path.join(root, '.codex', 'AGENTS.md'),
+        enabled: true,
+      },
+    },
   }));
 
   await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
 
   const desired = JSON.parse(await readFile(path.join(vault, 'devices', 'macbook.json'), 'utf8'));
   const reported = JSON.parse(await readFile(path.join(vault, 'state', 'macbook.json'), 'utf8'));
-  assert.deepEqual(Object.keys(desired).sort(), ['device_id', 'generation', 'global_installed', 'installed', 'version']);
+  assert.deepEqual(Object.keys(desired).sort(), ['device_id', 'generation', 'global_installed', 'installed', 'instructions', 'version']);
   assert.equal(desired.generation, 4);
   assert.deepEqual(desired.installed, { 'paper-mcp': ['codex'] });
+  assert.equal(desired.instructions.agents.profile, 'shared');
   assert.deepEqual(Object.keys(reported).sort(), ['applied_generation', 'detected', 'device_id', 'display_name', 'instructions', 'targets', 'version']);
   assert.equal(reported.applied_generation, 3);
+  assert.equal(reported.instructions.agents.applied_profile, 'shared');
   assert.equal(reported.targets.codex.auto_adopt, false);
   assert.equal(reported.targets.codex.auto_import, undefined);
 });
@@ -426,6 +440,52 @@ test('desired assignment edits and reported device scans do not overwrite each o
   assert.equal(await readFile(path.join(vault, 'devices', 'linux.json'), 'utf8'), desiredBeforeScan);
 });
 
+test('v0.9 shared instructions migrate in place without changing the selected content', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const canonical = globalInstructionsVaultPath(vault);
+  const destination = path.join(root, '.codex', 'AGENTS.md');
+  await mkdir(path.join(vault, 'devices'), { recursive: true });
+  await mkdir(path.join(vault, 'state'), { recursive: true });
+  await mkdir(path.dirname(canonical), { recursive: true });
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(canonical, '# Shared\n');
+  await symlink(path.relative(path.dirname(destination), canonical), destination, 'file');
+  await writeFile(path.join(vault, 'devices', 'macbook.json'), JSON.stringify({
+    version: 1,
+    device_id: 'macbook',
+    generation: 2,
+    installed: {},
+    global_installed: [],
+  }));
+  await writeFile(path.join(vault, 'state', 'macbook.json'), JSON.stringify({
+    version: 1,
+    device_id: 'macbook',
+    display_name: 'MacBook',
+    applied_generation: 2,
+    targets: {},
+    detected: {},
+    instructions: {
+      agents: {
+        path: destination,
+        enabled: true,
+      },
+    },
+  }));
+  const desiredBefore = await readFile(path.join(vault, 'devices', 'macbook.json'), 'utf8');
+
+  let device = await loadDevice(vault, 'macbook');
+  assert.equal(device.instructions.agents.profile, 'shared');
+  assert.equal(device.instructions.agents.applied_profile, 'shared');
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  device = await loadDevice(vault, 'macbook');
+
+  assert.equal(device.instructions.version, 1);
+  assert.equal(device.instructions.agents.profile, 'shared');
+  assert.equal(await readFile(destination, 'utf8'), '# Shared\n');
+  assert.equal(await readFile(path.join(vault, 'devices', 'macbook.json'), 'utf8'), desiredBefore);
+});
+
 test('global instructions adopt a local AGENTS.md, stay linked to the vault, and disable to a local copy', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -443,7 +503,7 @@ test('global instructions adopt a local AGENTS.md, stay linked to the vault, and
     strategy: 'from-local',
   });
 
-  const canonical = globalInstructionsVaultPath(vault);
+  const canonical = globalInstructionsVaultPath(vault, 'macbook');
   assert.equal(await readFile(canonical, 'utf8'), '# Device instructions\n');
   assert.equal((await lstat(destination)).isSymbolicLink(), true);
   assert.equal(path.resolve(path.dirname(destination), await readlink(destination)), canonical);
@@ -451,6 +511,8 @@ test('global instructions adopt a local AGENTS.md, stay linked to the vault, and
   assert.equal(await readFile(enabled.backup, 'utf8'), '# Device instructions\n');
   let device = await loadDevice(vault, 'macbook');
   assert.equal(device.instructions.agents.enabled, true);
+  assert.equal(device.instructions.agents.profile, 'macbook');
+  assert.equal(device.instructions.agents.applied_profile, 'macbook');
   assert.equal(device.instructions.agents.path, destination);
 
   await writeFile(destination, '# Updated everywhere\n');
@@ -464,6 +526,8 @@ test('global instructions adopt a local AGENTS.md, stay linked to the vault, and
   assert.equal(await readFile(originalSource, 'utf8'), '# Device instructions\n');
   device = await loadDevice(vault, 'macbook');
   assert.equal(device.instructions.agents.enabled, false);
+  assert.equal(device.instructions.agents.profile, null);
+  assert.equal(device.instructions.agents.applied_profile, null);
 });
 
 test('global instructions require explicit conflict resolution and never overwrite an unmanaged replacement', async () => {
@@ -501,6 +565,244 @@ test('global instructions require explicit conflict resolution and never overwri
     /Refusing to overwrite unmanaged global instructions/,
   );
   assert.equal(await readFile(destination, 'utf8'), '# Unmanaged replacement\n');
+});
+
+test('global instruction profiles preserve distinct device versions and deduplicate exact imports', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const mac = path.join(root, 'mac', 'AGENTS.md');
+  const arch = path.join(root, 'arch', 'AGENTS.md');
+  const devbox = path.join(root, 'devbox', 'AGENTS.md');
+  await mkdir(path.dirname(mac), { recursive: true });
+  await mkdir(path.dirname(arch), { recursive: true });
+  await mkdir(path.dirname(devbox), { recursive: true });
+  await writeFile(mac, '# Mac\n');
+  await writeFile(arch, '# Arch\n');
+  await writeFile(devbox, '# Arch\n');
+
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'macbook',
+    sourcePath: mac,
+  });
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'archlinux',
+    profile: 'archlinux',
+    sourcePath: arch,
+  });
+  const duplicate = await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'devbox',
+    profile: 'devbox',
+    sourcePath: devbox,
+  });
+
+  assert.equal(duplicate.profile, 'archlinux');
+  assert.equal(duplicate.deduplicated, true);
+  assert.deepEqual(
+    (await listGlobalInstructionProfiles(vault)).map((profile) => profile.id),
+    ['archlinux', 'macbook'],
+  );
+  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'macbook'), 'utf8'), '# Mac\n');
+  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'archlinux'), 'utf8'), '# Arch\n');
+
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'archlinux',
+  });
+  assert.equal(await readFile(mac, 'utf8'), '# Arch\n');
+  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'macbook'), 'utf8'), '# Mac\n');
+});
+
+test('forking a shared instruction profile gives one device an independent editable copy', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const mac = path.join(root, 'mac', 'AGENTS.md');
+  const arch = path.join(root, 'arch', 'AGENTS.md');
+  await mkdir(path.dirname(mac), { recursive: true });
+  await mkdir(path.dirname(arch), { recursive: true });
+  await writeFile(mac, '# Shared\n');
+  await writeFile(arch, '# Shared\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared-team',
+    sourcePath: mac,
+    separate: true,
+  });
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'archlinux',
+    profile: 'shared-team',
+    targetPaths: [arch],
+  });
+
+  await forkGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'mac-own',
+  });
+  await writeFile(mac, '# Mac only\n');
+
+  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'mac-own'), 'utf8'), '# Mac only\n');
+  assert.equal(await readFile(arch, 'utf8'), '# Shared\n');
+  assert.equal((await loadDevice(vault, 'macbook')).instructions.agents.profile, 'mac-own');
+  assert.equal((await loadDevice(vault, 'archlinux')).instructions.agents.profile, 'shared-team');
+});
+
+test('remote profile selection stays pending until that device applies it', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const remote = path.join(root, 'remote', 'AGENTS.md');
+  const alternate = path.join(root, 'alternate', 'AGENTS.md');
+  await mkdir(path.dirname(remote), { recursive: true });
+  await mkdir(path.dirname(alternate), { recursive: true });
+  await writeFile(remote, '# Original\n');
+  await writeFile(alternate, '# Alternate\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'remote',
+    profile: 'original',
+    sourcePath: remote,
+  });
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'controller',
+    profile: 'alternate',
+    sourcePath: alternate,
+  });
+  const originalLink = await readlink(remote);
+  const reportedBeforeAssignment = await readFile(path.join(vault, 'state', 'remote.json'), 'utf8');
+
+  await assignGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'remote',
+    profile: 'alternate',
+  });
+  let device = await loadDevice(vault, 'remote');
+  assert.equal(device.instructions.agents.profile, 'alternate');
+  assert.equal(device.instructions.agents.applied_profile, 'original');
+  assert.ok(device.desired_generation > device.applied_generation);
+  assert.equal(await readlink(remote), originalLink);
+  assert.equal(await readFile(path.join(vault, 'state', 'remote.json'), 'utf8'), reportedBeforeAssignment);
+  assert.equal(
+    JSON.parse(await readFile(path.join(vault, 'devices', 'remote.json'), 'utf8'))
+      .instructions.agents.profile,
+    'alternate',
+  );
+
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'remote' });
+  await markDeviceApplied({ vaultPath: vault, deviceId: 'remote' });
+  device = await loadDevice(vault, 'remote');
+  assert.equal(device.instructions.agents.applied_profile, 'alternate');
+  assert.equal(device.desired_generation, device.applied_generation);
+  assert.equal(await readFile(remote, 'utf8'), '# Alternate\n');
+});
+
+test('one device profile can safely project to both Codex and OpenCode global paths', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const source = path.join(root, 'source', 'AGENTS.md');
+  const codex = path.join(root, '.codex', 'AGENTS.md');
+  const opencode = path.join(root, '.config', 'opencode', 'AGENTS.md');
+  await mkdir(path.dirname(source), { recursive: true });
+  await mkdir(path.dirname(codex), { recursive: true });
+  await mkdir(path.dirname(opencode), { recursive: true });
+  await writeFile(source, '# Device profile\n');
+  await writeFile(codex, '# Old Codex\n');
+  await writeFile(opencode, '# Old OpenCode\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'macbook',
+    sourcePath: source,
+    targetPaths: [codex, opencode],
+  });
+
+  assert.equal(await readFile(codex, 'utf8'), '# Device profile\n');
+  assert.equal(await readFile(opencode, 'utf8'), '# Device profile\n');
+  const device = await loadDevice(vault, 'macbook');
+  assert.deepEqual(device.instructions.agents.paths, [codex, opencode]);
+});
+
+test('instruction profile names cannot escape the vault', async () => {
+  const root = await tempDir();
+  const source = path.join(root, 'AGENTS.md');
+  await writeFile(source, '# Safe\n');
+  await assert.rejects(
+    () => importGlobalInstructionsProfile({
+      vaultPath: path.join(root, 'vault'),
+      deviceId: 'macbook',
+      profile: '../outside',
+      sourcePath: source,
+    }),
+    /one non-empty path segment/,
+  );
+});
+
+test('remote instruction assignment waits for the target to report profile support', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const profile = globalInstructionsVaultPath(vault);
+  await mkdir(path.dirname(profile), { recursive: true });
+  await writeFile(profile, '# Shared\n');
+
+  await assert.rejects(
+    () => assignGlobalInstructionsProfile({
+      vaultPath: vault,
+      deviceId: 'remote',
+      profile: 'shared',
+    }),
+    /must sync with a profile-capable SkillSync version first/,
+  );
+
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'remote' });
+  assert.equal((await loadDevice(vault, 'remote')).instructions.version, 1);
+  await assignGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'remote',
+    profile: 'shared',
+  });
+  assert.equal((await loadDevice(vault, 'remote')).instructions.agents.profile, 'shared');
+});
+
+test('instruction profile selection validates every destination before moving local files', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const profile = globalInstructionsVaultPath(vault);
+  const localFile = path.join(root, 'local', 'AGENTS.md');
+  const localDirectory = path.join(root, 'directory');
+  await mkdir(path.dirname(profile), { recursive: true });
+  await mkdir(path.dirname(localFile), { recursive: true });
+  await mkdir(localDirectory, { recursive: true });
+  await writeFile(profile, '# Shared\n');
+  await writeFile(localFile, '# Local\n');
+
+  await assert.rejects(
+    () => selectGlobalInstructionsProfile({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      profile: 'shared',
+      targetPaths: [localFile, localDirectory],
+    }),
+    /destination is a directory/,
+  );
+  assert.equal(await readFile(localFile, 'utf8'), '# Local\n');
+  assert.equal(await readFile(profile, 'utf8'), '# Shared\n');
+
+  await assert.rejects(
+    () => selectGlobalInstructionsProfile({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      profile: 'shared',
+      targetPaths: [profile],
+    }),
+    /cannot be its vault profile file/,
+  );
+  assert.equal(await readFile(profile, 'utf8'), '# Shared\n');
 });
 
 test('skill matrix distinguishes assigned, detected, and absent skills', () => {
