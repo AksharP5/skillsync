@@ -125,22 +125,9 @@ async function isSelectedProfileLink(destination, vaultPath, profile) {
   return await ownedProfileAt(destination, vaultPath) === profile;
 }
 
-function targetUsesClaude(name, target) {
-  if (name.toLowerCase() === 'claude') return true;
-  return [target?.path, target?.scan_path]
-    .filter((value) => typeof value === 'string')
-    .some((value) => value.replaceAll('\\', '/').includes('/.claude/'));
-}
-
 export async function deviceHasClaude({
-  device,
   commandExistsFn = commandExists,
-}) {
-  if (Object.entries(device?.targets || {}).some(([name, target]) => (
-    targetUsesClaude(name, target)
-  ))) {
-    return true;
-  }
+} = {}) {
   return commandExistsFn('claude');
 }
 
@@ -182,7 +169,7 @@ export async function reconcileGlobalInstructionProviders({
   if (!agents?.profile) {
     return { changed: false, claudeEnabled: false, conflicts: [] };
   }
-  const claudeEnabled = await deviceHasClaude({ device, commandExistsFn });
+  const claudeEnabled = await deviceHasClaude({ commandExistsFn });
   const destination = resolvedDestination(claudePath);
   const paths = agents.paths || [];
   const automaticPaths = agents.auto_paths || [];

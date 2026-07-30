@@ -706,7 +706,7 @@ async function instructionsCommand(rest = []) {
     }
     const currentDevice = devices.find((device) => device.device_id === config.deviceId);
     const includeClaude = currentDevice
-      ? await deviceHasClaude({ device: currentDevice })
+      ? await deviceHasClaude()
       : false;
     const discovered = await discoverGlobalInstructions({
       vaultPath: config.repoPath,
@@ -2498,7 +2498,7 @@ async function instructionProfileSettingsScreen(config, device) {
     return;
   }
   if (choice === 'link') {
-    const hasClaude = await deviceHasClaude({ device });
+    const hasClaude = await deviceHasClaude();
     const claudeLinked = (agents.paths || []).includes(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
     const targetPath = await input({
       message: 'Additional global instructions path',

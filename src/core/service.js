@@ -43,6 +43,17 @@ function xmlEscape(value) {
     .replaceAll("'", '&apos;');
 }
 
+function servicePath(command, pathValue) {
+  return [
+    path.dirname(command),
+    ...splitPath(pathValue),
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+  ].filter((entry, index, entries) => entries.indexOf(entry) === index).join(path.delimiter);
+}
+
 export function renderLaunchAgent({
   label,
   command,
@@ -52,15 +63,8 @@ export function renderLaunchAgent({
   const argumentsXml = [command, ...args]
     .map((argument) => `<string>${xmlEscape(argument)}</string>`)
     .join('');
-  const servicePath = [
-    path.dirname(command),
-    ...splitPath(pathValue),
-    '/usr/bin',
-    '/bin',
-    '/usr/sbin',
-    '/sbin',
-  ].filter((entry, index, entries) => entries.indexOf(entry) === index).join(path.delimiter);
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>${xmlEscape(label)}</string>\n  <key>ProgramArguments</key><array>${argumentsXml}</array>\n  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xmlEscape(servicePath)}</string></dict>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n`;
+  const environmentPath = servicePath(command, pathValue);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>${xmlEscape(label)}</string>\n  <key>ProgramArguments</key><array>${argumentsXml}</array>\n  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xmlEscape(environmentPath)}</string></dict>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n`;
 }
 
 function systemdQuote(value) {
@@ -69,7 +73,12 @@ function systemdQuote(value) {
     .replaceAll('"', '\\"')}"`;
 }
 
-export function renderSystemdUserService({ command, args = [] }) {
+export function renderSystemdUserService({
+  command,
+  args = [],
+  pathValue = process.env.PATH,
+}) {
   const invocation = [command, ...args].map(systemdQuote).join(' ');
-  return `[Unit]\nDescription=SkillSync daemon\n\n[Service]\nType=simple\nExecStart=${invocation}\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n`;
+  const environmentPath = servicePath(command, pathValue);
+  return `[Unit]\nDescription=SkillSync daemon\n\n[Service]\nType=simple\nEnvironment=${systemdQuote(`PATH=${environmentPath}`)}\nExecStart=${invocation}\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n`;
 }

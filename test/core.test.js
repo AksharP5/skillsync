@@ -820,7 +820,7 @@ test('global instruction discovery inventories managed and differing provider fi
   assert.notEqual(discovered[0].hash, discovered[1].hash);
 });
 
-test('the shared profile projects CLAUDE.md only while Claude is configured on a device', async () => {
+test('the shared profile projects CLAUDE.md only while the Claude executable is installed', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const codex = path.join(root, '.codex', 'AGENTS.md');
@@ -853,16 +853,24 @@ test('the shared profile projects CLAUDE.md only while Claude is configured on a
   });
   assert.equal(
     await deviceHasClaude({
-      device: await loadDevice(vault, 'workstation'),
       commandExistsFn: commandMissing,
     }),
-    true,
+    false,
   );
   reconciled = await reconcileGlobalInstructionProviders({
     vaultPath: vault,
     deviceId: 'workstation',
     claudePath: claude,
     commandExistsFn: commandMissing,
+  });
+  assert.equal(reconciled.changed, false);
+  await assert.rejects(() => lstat(claude), { code: 'ENOENT' });
+
+  reconciled = await reconcileGlobalInstructionProviders({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    claudePath: claude,
+    commandExistsFn: async () => true,
   });
   assert.equal(reconciled.changed, true);
   await applyGlobalInstructions({ vaultPath: vault, deviceId: 'workstation' });
@@ -876,11 +884,6 @@ test('the shared profile projects CLAUDE.md only while Claude is configured on a
     [claude],
   );
 
-  await removeTargetAndPrune({
-    vaultPath: vault,
-    deviceId: 'workstation',
-    name: 'claude',
-  });
   reconciled = await reconcileGlobalInstructionProviders({
     vaultPath: vault,
     deviceId: 'workstation',
