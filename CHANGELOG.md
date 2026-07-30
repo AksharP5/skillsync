@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/AksharP5/skillsync/compare/v0.9.0...v0.10.0) (2026-07-30)
+
+
+### Features
+
+* add per-device instruction profiles ([#33](https://github.com/AksharP5/skillsync/issues/33)) ([1ac7f9e](https://github.com/AksharP5/skillsync/commit/1ac7f9ec0e50e894ba3789a6b5d71cae201f02b8))
+
 ## [0.9.0](https://github.com/AksharP5/skillsync/compare/v0.8.0...v0.9.0) (2026-07-30)
 
 
