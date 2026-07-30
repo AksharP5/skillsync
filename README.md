@@ -100,7 +100,7 @@ SkillSync stores global instructions as named profiles. Each device selects its 
 
 No device wins because it installed SkillSync first. You choose which local file to import, and exact copies are shared only when their contents match.
 
-Codex and OpenCode use `AGENTS.md`. When Claude Code is installed or a Claude target is configured on a device, SkillSync also links that device’s `CLAUDE.md` to the same selected profile. Devices without Claude do not get a `CLAUDE.md`. A differing unmanaged `CLAUDE.md` is preserved for explicit resolution.
+Codex and OpenCode use `AGENTS.md`. When the Claude Code executable is installed on a device, SkillSync also links that device’s `CLAUDE.md` to the same selected profile. Devices without Claude Code do not get a `CLAUDE.md`, even if an old Claude skill target remains configured. A differing unmanaged `CLAUDE.md` is preserved for explicit resolution.
 
 Import the version already used by a device:
 
