@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/AksharP5/skillsync/compare/v0.7.1...v0.8.0) (2026-07-30)
+
+
+### Features
+
+* add editable skill matrix ([#28](https://github.com/AksharP5/skillsync/issues/28)) ([5ddee44](https://github.com/AksharP5/skillsync/commit/5ddee441da4f86fd261929de6a32433d2fd055d1))
+
 ## [0.7.1](https://github.com/AksharP5/skillsync/compare/v0.7.0...v0.7.1) (2026-07-30)
 
 
