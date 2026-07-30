@@ -37,7 +37,6 @@ export function newDevice(deviceId = defaultDeviceId()) {
     version: 1,
     device_id: deviceId,
     display_name: deviceId,
-    last_seen: new Date().toISOString(),
     desired_generation: 0,
     applied_generation: 0,
     targets: {},
@@ -55,16 +54,122 @@ export function devicePath(vaultPath, deviceId) {
   );
 }
 
+export function deviceStatePath(vaultPath, deviceId) {
+  return path.join(
+    vaultPath,
+    'state',
+    `${assertSafePathSegment(deviceId, 'Device ID')}.json`,
+  );
+}
+
 export async function loadDevice(vaultPath, deviceId = defaultDeviceId()) {
   await ensureVault(vaultPath);
-  const device = await readJson(devicePath(vaultPath, deviceId), newDevice(deviceId));
-  return normalizeDevice(device, deviceId);
+  const desired = await readJson(devicePath(vaultPath, deviceId), null);
+  const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
+  return composeDevice({ desired, reported, deviceId });
 }
 
 export async function saveDevice(vaultPath, device) {
   await ensureVault(vaultPath);
   const normalized = normalizeDevice(device, device.device_id);
-  await writeJson(devicePath(vaultPath, normalized.device_id), normalized);
+  await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
+  await writeJson(devicePath(vaultPath, normalized.device_id), desiredStateFromDevice(normalized));
+  return normalized;
+}
+
+async function saveDesiredDevice(vaultPath, device) {
+  await ensureVault(vaultPath);
+  const normalized = normalizeDevice(device, device.device_id);
+  if (!await exists(deviceStatePath(vaultPath, normalized.device_id))) {
+    await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
+  }
+  await writeJson(devicePath(vaultPath, normalized.device_id), desiredStateFromDevice(normalized));
+  return normalized;
+}
+
+async function saveReportedDevice(vaultPath, device) {
+  await ensureVault(vaultPath);
+  const normalized = normalizeDevice(device, device.device_id);
+  await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
+  const desiredPath = devicePath(vaultPath, normalized.device_id);
+  const desired = await readJson(desiredPath, null);
+  if (!desired || isLegacyDeviceManifest(desired)) {
+    await writeJson(desiredPath, desiredStateFromDevice(normalized));
+  }
+  return normalized;
+}
+
+function composeDevice({ desired, reported, deviceId }) {
+  const normalizedDeviceId = assertSafePathSegment(
+    deviceId || desired?.device_id || reported?.device_id || defaultDeviceId(),
+    'Device ID',
+  );
+  const legacy = isLegacyDeviceManifest(desired) ? desired : null;
+  const desiredState = normalizeDesiredState(desired, normalizedDeviceId);
+  const reportedState = normalizeReportedState(
+    reported || legacy,
+    normalizedDeviceId,
+    { legacy: Boolean(legacy && !reported) },
+  );
+  return normalizeDevice({
+    ...reportedState,
+    desired_generation: desiredState.generation,
+    installed: desiredState.installed,
+    global_installed: desiredState.global_installed,
+  }, normalizedDeviceId);
+}
+
+function isLegacyDeviceManifest(value) {
+  return Boolean(value && typeof value === 'object' && [
+    'display_name',
+    'last_seen',
+    'desired_generation',
+    'applied_generation',
+    'targets',
+    'detected',
+  ].some((key) => Object.hasOwn(value, key)));
+}
+
+function normalizeDesiredState(value, deviceId) {
+  return {
+    version: 1,
+    device_id: deviceId,
+    generation: nonNegativeInteger(value?.generation ?? value?.desired_generation),
+    installed: normalizeInstalled(value?.installed),
+    global_installed: normalizeGlobalInstalled(value),
+  };
+}
+
+function normalizeReportedState(value, deviceId, { legacy = false } = {}) {
+  return {
+    version: 1,
+    device_id: deviceId,
+    display_name: value?.display_name || value?.device_id || deviceId,
+    applied_generation: nonNegativeInteger(value?.applied_generation),
+    targets: normalizeTargets(value?.targets, { defaultAutoImport: !legacy }),
+    detected: value?.detected && typeof value.detected === 'object' ? value.detected : {},
+  };
+}
+
+function desiredStateFromDevice(device) {
+  return normalizeDesiredState({
+    generation: device.desired_generation,
+    installed: device.installed,
+    global_installed: device.global_installed,
+  }, device.device_id);
+}
+
+function reportedStateFromDevice(device) {
+  const reported = normalizeReportedState({
+    display_name: device.display_name,
+    applied_generation: device.applied_generation,
+    targets: device.targets,
+    detected: device.detected,
+  }, device.device_id);
+  return {
+    ...reported,
+    targets: serializeReportedTargets(reported.targets),
+  };
 }
 
 function normalizeDevice(device, deviceId) {
@@ -76,7 +181,6 @@ function normalizeDevice(device, deviceId) {
     version: 1,
     device_id: normalizedDeviceId,
     display_name: device?.display_name || device?.device_id || normalizedDeviceId,
-    last_seen: device?.last_seen || new Date().toISOString(),
     desired_generation: nonNegativeInteger(device?.desired_generation),
     applied_generation: nonNegativeInteger(device?.applied_generation),
     targets: normalizeTargets(device?.targets),
@@ -93,7 +197,6 @@ function nonNegativeInteger(value) {
 
 function bumpDesiredGeneration(device) {
   device.desired_generation = nonNegativeInteger(device.desired_generation) + 1;
-  device.last_seen = new Date().toISOString();
 }
 
 function normalizeInstalled(installed) {
@@ -124,7 +227,7 @@ function markGlobalInstalled(device, skillName, installed) {
   device.global_installed = [...names].sort();
 }
 
-function normalizeTargets(targets) {
+function normalizeTargets(targets, { defaultAutoImport = true } = {}) {
   if (!targets || typeof targets !== 'object') return {};
   return Object.fromEntries(Object.entries(targets).map(([name, target]) => [
     name,
@@ -132,12 +235,36 @@ function normalizeTargets(targets) {
       path: target.path,
       mode: target.mode || 'symlink',
       ...(target.scan_path ? { scan_path: target.scan_path } : {}),
-      ...(target.auto_import ? { auto_import: true } : {}),
+      auto_import: typeof target.auto_adopt === 'boolean'
+        ? target.auto_adopt
+        : typeof target.auto_import === 'boolean'
+          ? target.auto_import
+          : defaultAutoImport,
     },
   ]));
 }
 
-export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name, targetPath, mode = 'symlink', scanPath }) {
+function serializeReportedTargets(targets) {
+  return Object.fromEntries(Object.entries(targets || {}).map(([name, target]) => [
+    name,
+    {
+      path: target.path,
+      mode: target.mode || 'symlink',
+      ...(target.scan_path ? { scan_path: target.scan_path } : {}),
+      auto_adopt: Boolean(target.auto_import),
+    },
+  ]));
+}
+
+export async function addTarget({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  name,
+  targetPath,
+  mode = 'symlink',
+  scanPath,
+  autoImport,
+}) {
   assertSafePathSegment(name, 'Target name');
   if (!targetPath) throw new Error('Target path is required');
   if (!['symlink', 'copy'].includes(mode)) throw new Error(`Unsupported target mode: ${mode}`);
@@ -147,7 +274,9 @@ export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name,
     path: targetPath,
     mode,
     ...(scanPath ? { scan_path: scanPath } : {}),
-    ...(previousTarget?.auto_import ? { auto_import: true } : {}),
+    auto_import: typeof autoImport === 'boolean'
+      ? autoImport
+      : previousTarget?.auto_import ?? true,
   };
   if (JSON.stringify(previousTarget) !== JSON.stringify(nextTarget)) {
     if (previousTarget
@@ -155,9 +284,8 @@ export async function addTarget({ vaultPath, deviceId = defaultDeviceId(), name,
       await removeOwnedTargetProjections({ vaultPath, device, name });
     }
     device.targets[name] = nextTarget;
-    bumpDesiredGeneration(device);
   }
-  await saveDevice(vaultPath, device);
+  await saveReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -168,12 +296,16 @@ export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), na
   await removeOwnedTargetProjections({ vaultPath, device, name });
   delete device.targets[name];
   delete device.detected[name];
+  let assignmentsChanged = false;
   for (const [skillName, targets] of Object.entries(device.installed)) {
     const index = targets.indexOf(name);
-    if (index >= 0) targets.splice(index, 1);
+    if (index >= 0) {
+      targets.splice(index, 1);
+      assignmentsChanged = true;
+    }
     if (!targets.length) delete device.installed[skillName];
   }
-  bumpDesiredGeneration(device);
+  if (assignmentsChanged) bumpDesiredGeneration(device);
   await saveDevice(vaultPath, device);
   return device;
 }
@@ -201,10 +333,27 @@ export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceI
   }
   const target = device.targets[name];
   if (Boolean(target.auto_import) === Boolean(enabled)) return device;
-  if (enabled) target.auto_import = true;
-  else delete target.auto_import;
-  device.last_seen = new Date().toISOString();
-  await saveDevice(vaultPath, device);
+  target.auto_import = Boolean(enabled);
+  await saveReportedDevice(vaultPath, device);
+  return device;
+}
+
+export async function setDeviceAutoImport({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  enabled,
+}) {
+  let device = await loadDevice(vaultPath, deviceId);
+  if (enabled && Object.keys(device.targets).some((name) => !Array.isArray(device.detected?.[name]))) {
+    device = await scanTargets({ vaultPath, deviceId });
+  }
+  let changed = false;
+  for (const target of Object.values(device.targets)) {
+    if (target.auto_import === Boolean(enabled)) continue;
+    target.auto_import = Boolean(enabled);
+    changed = true;
+  }
+  if (changed) await saveReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -235,7 +384,7 @@ export async function setSkillTargets({ vaultPath, deviceId = defaultDeviceId(),
   else delete device.installed[skillName];
   markGlobalInstalled(device, skillName, wantsGlobalInstall);
   if (changed) bumpDesiredGeneration(device);
-  await saveDevice(vaultPath, device);
+  await saveDesiredDevice(vaultPath, device);
   return device;
 }
 
@@ -288,7 +437,7 @@ export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), 
     || hadGlobalInstall !== hasGlobalInstall) {
     bumpDesiredGeneration(device);
   }
-  await saveDevice(vaultPath, device);
+  await saveDesiredDevice(vaultPath, device);
   return device;
 }
 
@@ -379,7 +528,7 @@ export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId(
   const device = await loadDevice(vaultPath, deviceId);
   if (device.applied_generation === device.desired_generation) return device;
   device.applied_generation = device.desired_generation;
-  await saveDevice(vaultPath, device);
+  await saveReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -540,7 +689,7 @@ export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
   const device = await loadDevice(vaultPath, deviceId);
   const detected = await detectTargets({ vaultPath, device });
   device.detected = detected;
-  await saveDevice(vaultPath, device);
+  await saveReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -703,15 +852,15 @@ async function isOwnedCopy(targetPath, vaultPath) {
 
 export async function listDevices(vaultPath) {
   await mkdir(path.join(vaultPath, 'devices'), { recursive: true });
-  const files = await readdir(path.join(vaultPath, 'devices')).catch(() => []);
+  await mkdir(path.join(vaultPath, 'state'), { recursive: true });
+  const desiredFiles = await readdir(path.join(vaultPath, 'devices')).catch(() => []);
+  const reportedFiles = await readdir(path.join(vaultPath, 'state')).catch(() => []);
+  const deviceIds = new Set([...desiredFiles, ...reportedFiles]
+    .filter((file) => file.endsWith('.json'))
+    .map((file) => file.slice(0, -'.json'.length)));
   const devices = [];
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    const deviceId = file.slice(0, -'.json'.length);
-    devices.push(normalizeDevice(
-      await readJson(path.join(vaultPath, 'devices', file)),
-      deviceId,
-    ));
+  for (const deviceId of deviceIds) {
+    devices.push(await loadDevice(vaultPath, deviceId));
   }
   return devices.sort((a, b) => String(a.display_name).localeCompare(String(b.display_name)));
 }

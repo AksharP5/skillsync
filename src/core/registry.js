@@ -32,6 +32,7 @@ export function defaultVaultConfig() {
 export async function ensureVault(vaultPath) {
   await ensureDir(path.join(vaultPath, 'skills'));
   await ensureDir(path.join(vaultPath, 'devices'));
+  await ensureDir(path.join(vaultPath, 'state'));
   const registryPath = path.join(vaultPath, REGISTRY_FILE);
   if (!await exists(registryPath)) {
     await writeJson(registryPath, emptyRegistry());
@@ -216,15 +217,45 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
     if (!changed) continue;
     delete device.installed?.[skillName];
     if (Array.isArray(device.global_installed)) device.global_installed = device.global_installed.filter((name) => name !== skillName);
-    const desiredGeneration = Number(device.desired_generation);
-    const appliedGeneration = Number(device.applied_generation);
-    device.desired_generation = Number.isInteger(desiredGeneration) && desiredGeneration >= 0
-      ? desiredGeneration + 1
-      : 1;
-    device.applied_generation = Number.isInteger(appliedGeneration) && appliedGeneration >= 0
-      ? appliedGeneration
-      : 0;
-    await writeJson(filePath, device);
+    const deviceId = assertSafePathSegment(file.slice(0, -'.json'.length), 'Device ID');
+    const statePath = path.join(vaultPath, 'state', file);
+    if (!await exists(statePath) && device && [
+      'display_name',
+      'last_seen',
+      'applied_generation',
+      'targets',
+      'detected',
+    ].some((key) => Object.hasOwn(device, key))) {
+      const targets = Object.fromEntries(Object.entries(device.targets || {}).map(([name, target]) => [
+        name,
+        {
+          path: target.path,
+          mode: target.mode || 'symlink',
+          ...(target.scan_path ? { scan_path: target.scan_path } : {}),
+          auto_adopt: Boolean(target.auto_adopt ?? target.auto_import),
+        },
+      ]));
+      await writeJson(statePath, {
+        version: 1,
+        device_id: deviceId,
+        display_name: device.display_name || deviceId,
+        applied_generation: Number.isInteger(Number(device.applied_generation))
+          ? Math.max(0, Number(device.applied_generation))
+          : 0,
+        targets,
+        detected: device.detected && typeof device.detected === 'object' ? device.detected : {},
+      });
+    }
+    const desiredGeneration = Number(device.generation ?? device.desired_generation);
+    await writeJson(filePath, {
+      version: 1,
+      device_id: deviceId,
+      generation: Number.isInteger(desiredGeneration) && desiredGeneration >= 0
+        ? desiredGeneration + 1
+        : 1,
+      installed: device.installed && typeof device.installed === 'object' ? device.installed : {},
+      global_installed: Array.isArray(device.global_installed) ? device.global_installed : [],
+    });
   }
 }
 

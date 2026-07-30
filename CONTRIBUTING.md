@@ -24,7 +24,7 @@ npm pack --dry-run
 1. Open an issue first for behavior or data-model changes that affect existing vaults.
 2. Create a focused branch from `main`.
 3. Add or update tests for every behavior change.
-4. Preserve backward compatibility for existing `registry.json`, `vault.json`, and `devices/*.json` files.
+4. Preserve backward compatibility for existing `registry.json`, `vault.json`, and legacy `devices/*.json` files.
 5. Run `npm test`, `npm pack --dry-run`, and `git diff --check`.
 6. Explain user-visible behavior, migration impact, and safety boundaries in the pull request.
 
@@ -39,7 +39,8 @@ Use conventional commits because releases are automated:
 SkillSync manages user-authored directories and private Git repositories. Changes must:
 
 - never overwrite an unmanaged local path silently;
-- avoid uploading newly detected local skills unless the target explicitly enables automatic import;
+- respect each target's auto-adoption setting and baseline existing local skills before adoption;
+- keep controller-owned desired assignments separate from device-owned reported state;
 - preserve a recoverable copy before replacing user-owned content;
 - avoid periodic repository writes when no meaningful state changed;
 - keep destructive vault deletion explicit or policy-controlled and covered by tests.
