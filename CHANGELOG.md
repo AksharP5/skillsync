@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/AksharP5/skillsync/compare/v0.8.0...v0.9.0) (2026-07-30)
+
+
+### Features
+
+* sync global AGENTS.md ([#30](https://github.com/AksharP5/skillsync/issues/30)) ([6577e7f](https://github.com/AksharP5/skillsync/commit/6577e7fb5de4e7e107a51f5559c633d9ac2d888f))
+
 ## [0.8.0](https://github.com/AksharP5/skillsync/compare/v0.7.1...v0.8.0) (2026-07-30)
 
 
