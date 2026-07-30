@@ -13,8 +13,10 @@ import path from 'node:path';
 import {
   configureGlobalInstructions,
   defaultDeviceId,
+  initializeLocalPathState,
   listDevices,
   loadDevice,
+  loadLocalDevice,
   setGlobalInstructionsProfile,
 } from './device.js';
 import {
@@ -164,7 +166,7 @@ export async function reconcileGlobalInstructionProviders({
   claudePath = DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
   commandExistsFn = commandExists,
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const agents = device.instructions.agents;
   if (!agents?.profile) {
     return { changed: false, claudeEnabled: false, conflicts: [] };
@@ -388,7 +390,8 @@ export async function selectGlobalInstructionsProfile({
   targetPaths,
 }) {
   const selected = await requireProfile(vaultPath, profile);
-  const device = await loadDevice(vaultPath, deviceId);
+  await initializeLocalPathState({ vaultPath, deviceId });
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const paths = [...new Set(
     targetPaths?.length
       ? targetPaths
@@ -474,7 +477,7 @@ export async function forkGlobalInstructionsProfile({
   deviceId = defaultDeviceId(),
   profile,
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const current = device.instructions.agents?.profile;
   if (!current) throw new Error(`${deviceId} is not using a global instructions profile`);
   const source = (await requireProfile(vaultPath, current)).source;
@@ -497,7 +500,7 @@ export async function addGlobalInstructionsPath({
   deviceId = defaultDeviceId(),
   targetPath,
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const profile = device.instructions.agents?.profile;
   if (!profile) throw new Error(`${deviceId} is not using a global instructions profile`);
   const paths = [...new Set([
@@ -517,7 +520,7 @@ export async function removeGlobalInstructionsPath({
   deviceId = defaultDeviceId(),
   targetPath,
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const agents = device.instructions.agents;
   if (!agents?.paths?.includes(targetPath)) {
     throw new Error(`Global instructions path is not linked: ${targetPath}`);
@@ -548,7 +551,7 @@ export async function applyGlobalInstructions({
   vaultPath,
   deviceId = defaultDeviceId(),
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const agents = device.instructions.agents;
   if (!agents) {
     await configureGlobalInstructions({
@@ -562,10 +565,18 @@ export async function applyGlobalInstructions({
       prunedProfiles: await sweepUnusedGlobalInstructionProfiles(vaultPath),
     };
   }
-  const paths = agents.paths?.length
-    ? agents.paths
-    : [agents.path || DEFAULT_GLOBAL_INSTRUCTIONS_PATH];
+  const paths = agents.paths || [];
   const selected = agents.profile;
+
+  if (selected && !paths.length) {
+    return {
+      enabled: true,
+      pending: true,
+      profile: selected,
+      paths: [],
+      prunedProfiles: [],
+    };
+  }
 
   if (!selected) {
     const applied = agents.applied_profile;
@@ -628,7 +639,7 @@ export async function disableGlobalInstructions({
   vaultPath,
   deviceId = defaultDeviceId(),
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.instructions.agents) return { disabled: false, destinations: [] };
   await setGlobalInstructionsProfile({
     vaultPath,

@@ -10,9 +10,11 @@ import {
   applyLinks,
   defaultDeviceId,
   installSkill,
+  initializeLocalPathState,
   listDevices,
-  loadDevice,
+  loadLocalDevice,
   managedProjections,
+  migrateLegacyLocalPathState,
   removeTargetAndPrune,
   setDeviceAutoImport,
   setGlobalInstructionsProfile,
@@ -192,7 +194,14 @@ async function configured() {
   if (!config.repoPath || !await exists(config.repoPath)) {
     throw new Error('SkillSync is not set up. Run: skillsync setup');
   }
+  if (!await isGitRepo(config.repoPath)) {
+    throw new Error(`SkillSync vault checkout is missing Git metadata: ${config.repoPath}`);
+  }
   await ensureVault(config.repoPath);
+  await migrateLegacyLocalPathState({
+    vaultPath: config.repoPath,
+    deviceId: config.deviceId,
+  });
   return config;
 }
 
@@ -301,11 +310,13 @@ async function setup(rest) {
   await ensureVaultCheckout(repo, repoPath);
 
   await ensureVault(repoPath);
-  await saveConfig({ version: 1, repo, repoPath, deviceId: defaultDeviceId() });
-  await maybeAddDetectedTargets(repoPath, defaultDeviceId(), yes);
+  const deviceId = defaultDeviceId();
+  await initializeLocalPathState({ vaultPath: repoPath, deviceId });
+  await saveConfig({ version: 1, repo, repoPath, deviceId });
+  await maybeAddDetectedTargets(repoPath, deviceId, yes);
   await rebuildRegistry(repoPath);
   await commitInitialVault(repoPath);
-  await syncVault({ vaultPath: repoPath, deviceId: defaultDeviceId(), pull: false });
+  await syncVault({ vaultPath: repoPath, deviceId, pull: false });
 
   console.log('\nSkillSync setup complete.');
   console.log(`Vault: ${repoPath}`);
@@ -320,7 +331,9 @@ async function connect(rest) {
   await mkdir(path.dirname(repoPath), { recursive: true });
   await ensureVaultCheckout(repo, repoPath);
   await ensureVault(repoPath);
-  await saveConfig({ version: 1, repo, repoPath, deviceId: defaultDeviceId() });
+  const deviceId = defaultDeviceId();
+  await initializeLocalPathState({ vaultPath: repoPath, deviceId });
+  await saveConfig({ version: 1, repo, repoPath, deviceId });
   await rebuildRegistry(repoPath);
   console.log(`Connected ${repoPath} to ${repo}`);
 }
@@ -378,7 +391,7 @@ async function status() {
   const config = await configured();
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const detectedCount = countDetectedSkills(device);
   console.log(`Vault: ${config.repoPath}`);
   console.log(`Device: ${device.display_name} (${device.device_id})`);
@@ -402,7 +415,7 @@ async function listSkills() {
   const config = await configured();
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const names = Object.keys(registry.skills).sort();
   if (!names.length) {
     console.log('No skills in vault yet. Add one with: skillsync add <skill-folder>');
@@ -660,10 +673,14 @@ async function instructionsCommand(rest = []) {
   await syncInstructionChanges(config, { pull: true });
 
   if (subcommand === 'status' || subcommand === 'profiles') {
-    const [profiles, devices] = await Promise.all([
+    const [profiles, reportedDevices, localDevice] = await Promise.all([
       listGlobalInstructionProfiles(config.repoPath),
       listDevices(config.repoPath),
+      loadLocalDevice(config.repoPath, config.deviceId),
     ]);
+    const devices = reportedDevices.map((device) => (
+      device.device_id === config.deviceId ? localDevice : device
+    ));
     if (!profiles.length) {
       console.log('No global instruction profiles are configured.');
     } else {
@@ -727,7 +744,7 @@ async function instructionsCommand(rest = []) {
     return;
   }
   if (subcommand === 'import') {
-    const device = await loadDevice(config.repoPath, config.deviceId);
+    const device = await loadLocalDevice(config.repoPath, config.deviceId);
     const explicitSource = hasFlag(rest, '--from') || hasFlag(rest, '--path');
     const sourcePath = flagValue(
       rest,
@@ -975,7 +992,7 @@ async function diffSummary(leftPath, rightPath) {
 }
 
 async function targetsMatchingSourcePath({ config, skillName, sourcePath, preferredTargets }) {
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const candidates = preferredTargets?.length ? preferredTargets : Object.keys(device.targets || {});
   const resolvedSource = path.resolve(sourcePath);
   return candidates.filter((targetName) => {
@@ -1271,7 +1288,7 @@ function parseTargets(rest) {
 
 async function chooseInstallTargets(config, rest) {
   const explicit = parseTargets(rest);
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const available = Object.keys(device.targets || {}).sort();
   if (explicit?.includes('*') || hasFlag(rest, '--all-targets')) {
     return [...new Set([...available, ...(explicit || []).filter((target) => target !== '*')])];
@@ -1309,7 +1326,8 @@ async function deviceCommand(rest) {
     console.log(`Managed skills: ${countManagedSkills(device)}`);
     console.log('Targets:');
     for (const [name, targetConfig] of Object.entries(device.targets || {})) {
-      console.log(`- ${name}: ${targetConfig.path} (${targetConfig.mode}) [auto-adopt ${targetConfig.auto_import ? 'on' : 'off'}]`);
+      const location = targetConfig.path ? `: ${targetConfig.path} (${targetConfig.mode})` : '';
+      console.log(`- ${name}${location} [auto-adopt ${targetConfig.auto_import ? 'on' : 'off'}]`);
     }
     return;
   }
@@ -1382,7 +1400,7 @@ async function autoAdoptCommand(rest) {
   const config = await configured();
   const value = rest[0] || 'show';
   if (value === 'show') {
-    const device = await loadDevice(config.repoPath, config.deviceId);
+    const device = await loadLocalDevice(config.repoPath, config.deviceId);
     console.log(`Auto-adoption on ${device.display_name}: ${deviceAutoAdoptState(device)}`);
     for (const [name, targetConfig] of Object.entries(device.targets || {})) {
       console.log(`- ${name}: ${targetConfig.auto_import ? 'on' : 'off'}`);
@@ -1454,7 +1472,7 @@ async function scanCommand() {
     deviceId: config.deviceId,
     pull: false,
   });
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   for (const adopted of result.autoImported || []) {
     console.log(`Auto-adopted ${adopted.name} from ${adopted.target}.`);
   }
@@ -1599,7 +1617,7 @@ async function runUi() {
 
 async function skillsScreen(config) {
   const registry = await loadRegistry(config.repoPath);
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const names = Object.keys(registry.skills).sort();
   if (!names.length) {
     console.log('\nNo skills in vault yet. Use Add/import first.\n');
@@ -1666,7 +1684,7 @@ async function skillsScreen(config) {
 async function installedScreen(config) {
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const localSkills = localSkillEntries(device, registry);
   if (!localSkills.length) {
     await promptWithEscape(select({
@@ -1860,7 +1878,7 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
 }
 
 async function chooseTargets(config) {
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const targetNames = Object.keys(device.targets);
   const choices = [
     { name: 'global: mark installed on this device (no agent projection)', value: 'global', checked: !targetNames.length },
@@ -1946,7 +1964,9 @@ function deviceTargetChoices(device, selected = []) {
       checked: selectedTargets.has('global'),
     },
     ...targetNames.map((name) => ({
-      name: `${name}: ${device.targets[name].path}`,
+      name: device.targets[name].path
+        ? `${name}: ${device.targets[name].path}`
+        : name,
       value: name,
       checked: selectedTargets.has(name),
     })),
@@ -2320,7 +2340,7 @@ async function deviceSkillDestinationsScreen(config, deviceId) {
 }
 
 async function targetsScreen(config) {
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const choices = Object.entries(device.targets).map(([name, targetConfig]) => ({
     name: `${name}: ${targetConfig.path} (${targetConfig.mode})${targetConfig.scan_path ? ` scan ${targetConfig.scan_path}` : ''} [auto-adopt ${targetConfig.auto_import ? 'on' : 'off'}]`,
     value: `target:${name}`,
@@ -2377,7 +2397,7 @@ async function targetsScreen(config) {
 
 async function settingsScreen(config) {
   const vaultConfig = await loadVaultConfig(config.repoPath);
-  const device = await loadDevice(config.repoPath, config.deviceId);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const enabled = vaultConfig.policies.delete_unassigned_skills;
   const autoAdopt = deviceAutoAdoptState(device);
   const choice = await promptWithEscape(select({

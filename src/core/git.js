@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { exists } from './fs.js';
+import { assertSafePathSegment, exists } from './fs.js';
 import path from 'node:path';
 
 export function run(command, args, options = {}) {
@@ -42,6 +42,16 @@ export async function gh(args, cwd, options = {}) {
 
 export async function isGitRepo(repoPath) {
   return exists(path.join(repoPath, '.git'));
+}
+
+export async function gitPrivatePath(repoPath, ...segments) {
+  if (!await isGitRepo(repoPath)) return null;
+  const relativePath = path.posix.join(
+    'skillsync',
+    ...segments.map((segment) => assertSafePathSegment(segment, 'Private Git path segment')),
+  );
+  const { stdout } = await git(['rev-parse', '--git-path', relativePath], repoPath);
+  return path.resolve(repoPath, stdout.trim());
 }
 
 export async function cloneRepo(repo, repoPath) {

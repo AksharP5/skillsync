@@ -20,4 +20,6 @@ Include:
 
 SkillSync uses a user-owned private GitHub repository as its control plane. Every authenticated device with write access to that vault can change skill content and device assignments. SkillSync does not provide per-device access control for a shared multi-user vault.
 
+Device-local skill targets and global instruction paths are approved on that device and stored outside the synced vault. Pulled vault state cannot authorize new local filesystem locations.
+
 Skill folders can contain executable instructions or supporting scripts. Users should review third-party skills before adding them to a vault.

@@ -25,11 +25,14 @@ import {
   addTarget,
   applyLinks,
   globalInstructionsAssignmentPath,
+  initializeLocalPathState,
   installSkill,
   listDevices,
   listUnusedSkills,
   loadDevice,
+  loadLocalDevice,
   markDeviceApplied,
+  migrateLegacyLocalPathState,
   removeTargetAndPrune,
   scanTargets,
   setDeviceAutoImport,
@@ -226,6 +229,7 @@ test('installSkill tracks device-global installs without an agent target', async
   await rebuildRegistry(vault);
 
   const deviceId = 'test-device';
+  await initializeLocalPathState({ vaultPath: vault, deviceId });
   await installSkill({ vaultPath: vault, deviceId, skillName: 'global-only', targets: ['global'] });
   await applyLinks({ vaultPath: vault, deviceId });
 
@@ -412,6 +416,7 @@ test('legacy device manifests migrate into controller-owned desired state and de
     },
   }));
 
+  await migrateLegacyLocalPathState({ vaultPath: vault, deviceId: 'macbook' });
   await scanTargets({ vaultPath: vault, deviceId: 'macbook' });
 
   const desired = JSON.parse(await readFile(path.join(vault, 'devices', 'macbook.json'), 'utf8'));
@@ -480,8 +485,9 @@ test('v0.9 shared instructions migrate in place without changing the selected co
   let device = await loadDevice(vault, 'macbook');
   assert.equal(device.instructions.agents.profile, 'shared');
   assert.equal(device.instructions.agents.applied_profile, 'shared');
+  await migrateLegacyLocalPathState({ vaultPath: vault, deviceId: 'macbook' });
   await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
-  device = await loadDevice(vault, 'macbook');
+  device = await loadLocalDevice(vault, 'macbook');
 
   assert.equal(device.instructions.version, 1);
   assert.equal(device.instructions.agents.profile, 'shared');
@@ -512,7 +518,7 @@ test('global instructions adopt a local AGENTS.md, stay linked to the vault, and
   assert.equal(path.resolve(path.dirname(destination), await readlink(destination)), canonical);
   assert.equal((await lstat(enabled.backup)).isSymbolicLink(), true);
   assert.equal(await readFile(enabled.backup, 'utf8'), '# Device instructions\n');
-  let device = await loadDevice(vault, 'macbook');
+  let device = await loadLocalDevice(vault, 'macbook');
   assert.equal(device.instructions.agents.enabled, true);
   assert.equal(device.instructions.agents.profile, 'macbook');
   assert.equal(device.instructions.agents.applied_profile, 'macbook');
@@ -527,7 +533,7 @@ test('global instructions adopt a local AGENTS.md, stay linked to the vault, and
   assert.equal((await lstat(destination)).isFile(), true);
   assert.equal(await readFile(destination, 'utf8'), '# Updated everywhere\n');
   assert.equal(await readFile(originalSource, 'utf8'), '# Device instructions\n');
-  device = await loadDevice(vault, 'macbook');
+  device = await loadLocalDevice(vault, 'macbook');
   assert.equal(device.instructions.agents.enabled, false);
   assert.equal(device.instructions.agents.profile, null);
   assert.equal(device.instructions.agents.applied_profile, null);
@@ -702,6 +708,7 @@ test('remote profile selection stays pending until that device applies it', asyn
   );
   assert.equal(await readFile(globalInstructionsVaultPath(vault, 'original'), 'utf8'), '# Original\n');
 
+  await initializeLocalPathState({ vaultPath: vault, deviceId: 'remote' });
   await applyGlobalInstructions({ vaultPath: vault, deviceId: 'remote' });
   await markDeviceApplied({ vaultPath: vault, deviceId: 'remote' });
   device = await loadDevice(vault, 'remote');
@@ -787,7 +794,7 @@ test('one device profile can safely project to both Codex and OpenCode global pa
 
   assert.equal(await readFile(codex, 'utf8'), '# Device profile\n');
   assert.equal(await readFile(opencode, 'utf8'), '# Device profile\n');
-  const device = await loadDevice(vault, 'macbook');
+  const device = await loadLocalDevice(vault, 'macbook');
   assert.deepEqual(device.instructions.agents.paths, [codex, opencode]);
 });
 
@@ -880,7 +887,7 @@ test('the shared profile projects CLAUDE.md only while the Claude executable is 
     globalInstructionsVaultPath(vault, 'workstation'),
   );
   assert.deepEqual(
-    (await loadDevice(vault, 'workstation')).instructions.agents.auto_paths,
+    (await loadLocalDevice(vault, 'workstation')).instructions.agents.auto_paths,
     [claude],
   );
 
@@ -893,7 +900,7 @@ test('the shared profile projects CLAUDE.md only while the Claude executable is 
   assert.equal(reconciled.changed, true);
   await assert.rejects(() => lstat(claude), { code: 'ENOENT' });
   assert.equal(
-    (await loadDevice(vault, 'workstation')).instructions.agents.paths.includes(claude),
+    (await loadLocalDevice(vault, 'workstation')).instructions.agents.paths.includes(claude),
     false,
   );
 });
@@ -967,6 +974,7 @@ test('remote instruction assignment waits for the target to report profile suppo
     /must sync with a profile-capable SkillSync version first/,
   );
 
+  await initializeLocalPathState({ vaultPath: vault, deviceId: 'remote' });
   await applyGlobalInstructions({ vaultPath: vault, deviceId: 'remote' });
   assert.equal((await loadDevice(vault, 'remote')).instructions.version, 1);
   await assignGlobalInstructionsProfile({
