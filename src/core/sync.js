@@ -2,6 +2,7 @@ import {
   applyLinks,
   autoImportNewLocalSkills,
   markDeviceApplied,
+  migrateLegacyLocalPathState,
   scanTargets,
   sweepUnusedSkills,
 } from './device.js';
@@ -13,6 +14,9 @@ import {
 import { refreshChangedRegistryEntries } from './registry.js';
 
 export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
+  if (deviceId) {
+    await migrateLegacyLocalPathState({ vaultPath, deviceId });
+  }
   if (pull && await isGitRepo(vaultPath)) {
     await pullRebase(vaultPath);
   }

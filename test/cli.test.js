@@ -23,6 +23,7 @@ import {
   scanTargets,
   setTargetAutoImport,
 } from '../src/core/device.js';
+import { git } from '../src/core/git.js';
 import { loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,18 @@ async function makeSkill(root, name, body = '# Skill\n') {
 }
 
 async function writeConfig(home, vault, deviceId = 'test-device') {
+  const remote = path.join(home, '.skillsync', 'test-remote.git');
+  await mkdir(path.dirname(vault), { recursive: true });
+  await git(['init', '--bare', remote]);
+  await git(['init', vault]);
+  await git(['config', 'user.email', 'test@example.invalid'], vault);
+  await git(['config', 'user.name', 'SkillSync Test'], vault);
+  await writeFile(path.join(vault, 'README.md'), '# Test vault\n');
+  await git(['add', 'README.md'], vault);
+  await git(['commit', '-m', 'initial vault'], vault);
+  await git(['branch', '-M', 'main'], vault);
+  await git(['remote', 'add', 'origin', remote], vault);
+  await git(['push', '-u', 'origin', 'main'], vault);
   const configDir = path.join(home, '.config', 'skillsync');
   await mkdir(configDir, { recursive: true });
   await writeFile(path.join(configDir, 'config.json'), JSON.stringify({

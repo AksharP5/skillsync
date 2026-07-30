@@ -12,7 +12,9 @@ import {
   removePath,
   slugifySkillName,
   writeJson,
+  writePrivateJson,
 } from './fs.js';
+import { gitPrivatePath } from './git.js';
 import {
   addSkillToVault,
   compareSkillToVault,
@@ -23,6 +25,7 @@ import {
 } from './registry.js';
 
 const GLOBAL_INSTALL_TARGET = 'global';
+const LOCAL_PATH_STATE_VERSION = 1;
 
 function isGlobalInstallTarget(target) {
   return target === GLOBAL_INSTALL_TARGET || target === '@global';
@@ -88,9 +91,199 @@ export async function loadDevice(vaultPath, deviceId = defaultDeviceId()) {
   });
 }
 
+async function localPathStatePath(vaultPath, deviceId) {
+  const normalizedDeviceId = assertSafePathSegment(deviceId, 'Device ID');
+  return await gitPrivatePath(vaultPath, 'local', 'devices', `${normalizedDeviceId}.json`)
+    || path.join(vaultPath, '.skillsync-local', 'devices', `${normalizedDeviceId}.json`);
+}
+
+function normalizeLocalDetected(detected) {
+  if (!detected || typeof detected !== 'object' || Array.isArray(detected)) {
+    throw new Error('Local detected-skill state must be an object');
+  }
+  const normalized = {};
+  for (const [targetName, skills] of Object.entries(detected)) {
+    assertSafePathSegment(targetName, 'Target name');
+    if (!Array.isArray(skills)) {
+      throw new Error(`Local detected-skill state for ${targetName} must be an array`);
+    }
+    normalized[targetName] = skills.map((skill) => {
+      if (!skill || typeof skill !== 'object' || Array.isArray(skill)) {
+        throw new Error(`Local detected skill for ${targetName} must be an object`);
+      }
+      if (typeof skill.name !== 'string' || !skill.name) {
+        throw new Error(`Local detected skill for ${targetName} must have a name`);
+      }
+      if (typeof skill.path !== 'string' || !skill.path) {
+        throw new Error(`Local detected skill ${skill.name} must have a path`);
+      }
+      return {
+        name: skill.name,
+        path: skill.path,
+        in_vault: Boolean(skill.in_vault),
+      };
+    });
+  }
+  return normalized;
+}
+
+function normalizeLocalTargets(targets) {
+  if (!targets || typeof targets !== 'object' || Array.isArray(targets)) {
+    throw new Error('Local device path state targets must be an object');
+  }
+  const normalized = {};
+  for (const [name, target] of Object.entries(targets)) {
+    assertSafePathSegment(name, 'Target name');
+    if (!target || typeof target !== 'object' || Array.isArray(target)) {
+      throw new Error(`Local target ${name} must be an object`);
+    }
+    if (typeof target.path !== 'string' || !target.path) {
+      throw new Error(`Local target ${name} path must be a non-empty string`);
+    }
+    if (!['symlink', 'copy'].includes(target.mode)) {
+      throw new Error(`Local target ${name} has unsupported mode: ${target.mode}`);
+    }
+    if (Object.hasOwn(target, 'scan_path')
+      && (typeof target.scan_path !== 'string' || !target.scan_path)) {
+      throw new Error(`Local target ${name} scan path must be a non-empty string`);
+    }
+    if (typeof target.auto_import !== 'boolean') {
+      throw new Error(`Local target ${name} auto-import setting must be boolean`);
+    }
+    normalized[name] = {
+      path: target.path,
+      mode: target.mode,
+      ...(target.scan_path ? { scan_path: target.scan_path } : {}),
+      auto_import: target.auto_import,
+    };
+  }
+  return normalized;
+}
+
+function normalizeLocalPathState(value, deviceId) {
+  const normalizedDeviceId = assertSafePathSegment(deviceId, 'Device ID');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Local device path state must be an object');
+  }
+  if (value.version !== LOCAL_PATH_STATE_VERSION) {
+    throw new Error(`Unsupported local device path state version: ${value.version}`);
+  }
+  if (value.device_id !== normalizedDeviceId) {
+    throw new Error(`Local device path state belongs to ${value.device_id || 'another device'}, not ${normalizedDeviceId}`);
+  }
+  const instructions = value.instructions;
+  if (!instructions || typeof instructions !== 'object' || Array.isArray(instructions)) {
+    throw new Error('Local device path state instructions must be an object');
+  }
+  if (!Array.isArray(instructions.paths) || !Array.isArray(instructions.auto_paths)) {
+    throw new Error('Local instruction paths must be arrays');
+  }
+  const paths = normalizeInstructionPaths(instructions);
+  const automaticPaths = normalizeAutomaticInstructionPaths(instructions)
+    .filter((targetPath) => paths.includes(targetPath));
+  return {
+    version: LOCAL_PATH_STATE_VERSION,
+    device_id: normalizedDeviceId,
+    targets: normalizeLocalTargets(value.targets),
+    detected: normalizeLocalDetected(value.detected),
+    instructions: {
+      paths,
+      auto_paths: automaticPaths,
+    },
+  };
+}
+
+function localPathStateFromDevice(device) {
+  const normalized = normalizeDevice(device, device.device_id);
+  const paths = normalizeInstructionPaths(normalized.instructions.agents);
+  return normalizeLocalPathState({
+    version: LOCAL_PATH_STATE_VERSION,
+    device_id: normalized.device_id,
+    targets: normalized.targets,
+    detected: normalized.detected,
+    instructions: {
+      paths,
+      auto_paths: normalizeAutomaticInstructionPaths(normalized.instructions.agents)
+        .filter((targetPath) => paths.includes(targetPath)),
+    },
+  }, normalized.device_id);
+}
+
+async function readLocalPathState(vaultPath, deviceId) {
+  const statePath = await localPathStatePath(vaultPath, deviceId);
+  if (!statePath || !await exists(statePath)) return null;
+  return normalizeLocalPathState(await readJson(statePath), deviceId);
+}
+
+async function writeLocalPathState(vaultPath, device) {
+  const statePath = await localPathStatePath(vaultPath, device.device_id);
+  if (!statePath) return null;
+  const localState = localPathStateFromDevice(device);
+  await writePrivateJson(statePath, localState);
+  return localState;
+}
+
+export async function initializeLocalPathState({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+}) {
+  const statePath = await localPathStatePath(vaultPath, deviceId);
+  if (!statePath) return null;
+  const existing = await readLocalPathState(vaultPath, deviceId);
+  if (existing) return existing;
+  return writeLocalPathState(vaultPath, newDevice(deviceId));
+}
+
+export async function migrateLegacyLocalPathState({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+}) {
+  const existing = await readLocalPathState(vaultPath, deviceId);
+  if (existing) return existing;
+  const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
+  const desired = await readJson(devicePath(vaultPath, deviceId), null);
+  const legacy = isLegacyDeviceManifest(desired) ? desired : null;
+  const source = reported || legacy;
+  const normalized = normalizeReportedState(
+    source,
+    deviceId,
+    { legacy: Boolean(legacy && !reported) },
+  );
+  return writeLocalPathState(vaultPath, {
+    ...newDevice(deviceId),
+    ...normalized,
+  });
+}
+
+export async function loadLocalDevice(vaultPath, deviceId = defaultDeviceId()) {
+  const device = await loadDevice(vaultPath, deviceId);
+  const local = await readLocalPathState(vaultPath, deviceId);
+  if (!local) {
+    throw new Error(`Local paths for ${deviceId} are not initialized; run SkillSync setup or reconnect this device`);
+  }
+  const agents = composeInstructionState(
+    { profile: device.instructions.agents?.profile },
+    {
+      paths: local.instructions.paths,
+      auto_paths: local.instructions.auto_paths,
+      applied_profile: device.instructions.agents?.applied_profile,
+    },
+  );
+  return normalizeDevice({
+    ...device,
+    targets: local.targets,
+    detected: local.detected,
+    instructions: {
+      version: device.instructions.version,
+      ...(agents ? { agents } : {}),
+    },
+  }, device.device_id);
+}
+
 export async function saveDevice(vaultPath, device) {
   await ensureVault(vaultPath);
   const normalized = normalizeDevice(device, device.device_id);
+  await writeLocalPathState(vaultPath, normalized);
   await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
   await writeJson(devicePath(vaultPath, normalized.device_id), desiredStateFromDevice(normalized));
   return normalized;
@@ -116,6 +309,12 @@ async function saveReportedDevice(vaultPath, device) {
     await writeJson(desiredPath, desiredStateFromDevice(normalized));
   }
   return normalized;
+}
+
+async function saveLocalReportedDevice(vaultPath, device) {
+  const normalized = normalizeDevice(device, device.device_id);
+  await writeLocalPathState(vaultPath, normalized);
+  return saveReportedDevice(vaultPath, normalized);
 }
 
 function composeDevice({
@@ -206,6 +405,8 @@ function reportedStateFromDevice(device) {
   return {
     ...reported,
     targets: serializeReportedTargets(reported.targets),
+    detected: serializeReportedDetected(reported.detected),
+    instructions: reportedInstructionsFromDevice(device.instructions),
   };
 }
 
@@ -286,11 +487,18 @@ function serializeReportedTargets(targets) {
   return Object.fromEntries(Object.entries(targets || {}).map(([name, target]) => [
     name,
     {
-      path: target.path,
-      mode: target.mode || 'symlink',
-      ...(target.scan_path ? { scan_path: target.scan_path } : {}),
       auto_adopt: Boolean(target.auto_import),
     },
+  ]));
+}
+
+function serializeReportedDetected(detected) {
+  return Object.fromEntries(Object.entries(detected || {}).map(([targetName, skills]) => [
+    targetName,
+    (Array.isArray(skills) ? skills : []).map((skill) => ({
+      name: skill.name,
+      in_vault: Boolean(skill.in_vault),
+    })),
   ]));
 }
 
@@ -347,7 +555,7 @@ function composeInstructionState(desiredAgents, reportedAgents) {
     profile,
     paths,
     ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
-    path: paths[0] || '~/.codex/AGENTS.md',
+    ...(paths[0] ? { path: paths[0] } : {}),
     applied_profile: appliedProfile,
     enabled: Boolean(profile),
   };
@@ -365,16 +573,11 @@ function reportedInstructionsFromDevice(instructions) {
   const agents = instructions?.agents;
   const version = nonNegativeInteger(instructions?.version);
   if (!agents || typeof agents !== 'object') return version ? { version } : {};
-  const paths = normalizeInstructionPaths(agents);
-  const automaticPaths = normalizeAutomaticInstructionPaths(agents)
-    .filter((value) => paths.includes(value));
   const appliedProfile = normalizeInstructionProfile(agents.applied_profile);
-  if (!paths.length && !appliedProfile) return version ? { version } : {};
+  if (!appliedProfile) return version ? { version } : {};
   return {
     version,
     agents: {
-      paths,
-      ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
       applied_profile: appliedProfile,
     },
   };
@@ -404,7 +607,8 @@ export async function configureGlobalInstructions({
   automaticPaths,
   appliedProfile,
 }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  await initializeLocalPathState({ vaultPath, deviceId });
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const paths = targetPaths || (targetPath ? [targetPath] : device.instructions.agents?.paths || []);
   const autoPaths = automaticPaths || device.instructions.agents?.auto_paths || [];
   device.instructions.agents = {
@@ -414,7 +618,7 @@ export async function configureGlobalInstructions({
     applied_profile: normalizeInstructionProfile(appliedProfile),
   };
   device.instructions.version = 1;
-  await saveReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -430,7 +634,8 @@ export async function addTarget({
   assertSafePathSegment(name, 'Target name');
   if (!targetPath) throw new Error('Target path is required');
   if (!['symlink', 'copy'].includes(mode)) throw new Error(`Unsupported target mode: ${mode}`);
-  const device = await loadDevice(vaultPath, deviceId);
+  await initializeLocalPathState({ vaultPath, deviceId });
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const previousTarget = device.targets[name];
   const nextTarget = {
     path: targetPath,
@@ -447,13 +652,13 @@ export async function addTarget({
     }
     device.targets[name] = nextTarget;
   }
-  await saveReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   assertSafePathSegment(name, 'Target name');
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.targets[name]) return device;
   await removeOwnedTargetProjections({ vaultPath, device, name });
   delete device.targets[name];
@@ -488,7 +693,7 @@ async function removeOwnedTargetProjections({ vaultPath, device, name }) {
 
 export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceId(), name, enabled }) {
   assertSafePathSegment(name, 'Target name');
-  let device = await loadDevice(vaultPath, deviceId);
+  let device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.targets[name]) throw new Error(`Unknown target on this device: ${name}`);
   if (enabled && !Array.isArray(device.detected?.[name])) {
     device = await scanTargets({ vaultPath, deviceId });
@@ -496,7 +701,7 @@ export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceI
   const target = device.targets[name];
   if (Boolean(target.auto_import) === Boolean(enabled)) return device;
   target.auto_import = Boolean(enabled);
-  await saveReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -505,7 +710,7 @@ export async function setDeviceAutoImport({
   deviceId = defaultDeviceId(),
   enabled,
 }) {
-  let device = await loadDevice(vaultPath, deviceId);
+  let device = await loadLocalDevice(vaultPath, deviceId);
   if (enabled && Object.keys(device.targets).some((name) => !Array.isArray(device.detected?.[name]))) {
     device = await scanTargets({ vaultPath, deviceId });
   }
@@ -515,7 +720,7 @@ export async function setDeviceAutoImport({
     target.auto_import = Boolean(enabled);
     changed = true;
   }
-  if (changed) await saveReportedDevice(vaultPath, device);
+  if (changed) await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
@@ -660,7 +865,7 @@ export async function removeTargetAndPrune(options) {
 }
 
 export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const registry = await loadRegistry(vaultPath);
   const desiredByTarget = new Map();
   for (const [skillName, targets] of Object.entries(device.installed)) {
@@ -691,15 +896,15 @@ export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
 }
 
 export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   if (device.applied_generation === device.desired_generation) return device;
   device.applied_generation = device.desired_generation;
-  await saveReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
 export async function managedProjections({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const registry = await loadRegistry(vaultPath);
   const projections = [];
 
@@ -774,7 +979,7 @@ function pathInside(childPath, parentPath) {
 }
 
 export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const currentDetected = await detectTargets({ vaultPath, device });
   const adopted = [];
   const conflicts = [];
@@ -852,10 +1057,10 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
 }
 
 export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId);
   const detected = await detectTargets({ vaultPath, device });
   device.detected = detected;
-  await saveReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 

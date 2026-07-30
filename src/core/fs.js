@@ -1,5 +1,5 @@
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { chmod, cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -38,6 +38,21 @@ export async function readJson(filePath, fallback = undefined) {
 export async function writeJson(filePath, value) {
   await ensureDir(path.dirname(filePath));
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function writePrivateJson(filePath, value) {
+  const directory = path.dirname(filePath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const temporary = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    flag: 'wx',
+    mode: 0o600,
+  }).then(() => rename(temporary, filePath)).catch(async (error) => {
+    await rm(temporary, { force: true });
+    throw error;
+  });
+  await chmod(filePath, 0o600);
 }
 
 export async function copyDir(source, destination) {
