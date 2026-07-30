@@ -19,7 +19,14 @@ import {
   setTargetAutoImport,
   uninstallSkillAndPrune,
 } from './core/device.js';
-import { renderSkillDeviceMatrix } from './core/matrix.js';
+import {
+  matrixAssignmentChanges,
+  renderSkillDeviceMatrix,
+  setDraftSkillAssignmentTargets,
+  skillAssignmentTargets,
+  skillDeviceMarker,
+  skillDeviceState,
+} from './core/matrix.js';
 import {
   assertSafePathSegment,
   ensureDir,
@@ -72,7 +79,7 @@ async function main() {
     case 'installed':
       return installedCommand(rest);
     case 'matrix':
-      return matrixCommand();
+      return matrixCommand(rest);
     case 'devices':
     case 'device':
       return deviceCommand(rest);
@@ -608,8 +615,14 @@ async function installedCommand(rest = []) {
   }
 }
 
-async function matrixCommand() {
+async function matrixCommand(rest = []) {
   const config = await configured();
+  if (hasFlag(rest, '--edit')) {
+    if (!process.stdin.isTTY) {
+      throw new Error('The matrix editor needs an interactive terminal. Run: skillsync matrix --edit');
+    }
+    return matrixEditorScreen(config);
+  }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
   const registry = await loadRegistry(config.repoPath);
   const devices = await listDevices(config.repoPath);
@@ -1224,7 +1237,7 @@ async function runUi() {
     const menuChoices = [
       { name: 'Browse/install skills', value: 'skills', description: 'Select multiple vault skills to install or remove here.' },
       { name: 'Installed on this device', value: 'installed', description: 'View, sync, or uninstall local skills on this device.' },
-      { name: 'Skill matrix', value: 'matrix', description: 'See every vault skill across every registered device.' },
+      { name: 'Skill matrix', value: 'matrix', description: 'View or edit vault skills across every registered device.' },
       { name: 'Devices', value: 'devices', description: 'View and edit skill assignments on every device.' },
       { name: 'Targets', value: 'targets', description: 'Manage local agent skill folders.' },
       { name: 'Settings', value: 'settings', description: 'Manage vault-wide behavior.' },
@@ -1580,10 +1593,12 @@ async function matrixScreen(config) {
     message: 'Skill matrix',
     loop: false,
     choices: [
+      { name: 'Edit by skill', value: 'edit-matrix', description: 'Check or uncheck this skill across every device, then apply once.' },
       { name: 'Edit a device', value: 'edit', description: 'Toggle skills or edit their destinations.' },
       { name: 'Back', value: 'back' },
     ],
   }));
+  if (action === 'edit-matrix') await matrixEditorScreen(config, { syncFirst: false });
   if (action === 'edit') await devicesScreen(config);
 }
 
@@ -1612,9 +1627,11 @@ function deviceTargetChoices(device, selected = []) {
 }
 
 async function chooseTargetsForDevice(device, selected = null) {
+  const targetNames = Object.keys(device.targets || {});
+  const defaultTargets = targetNames.length ? targetNames : ['global'];
   const choices = deviceTargetChoices(
     device,
-    selected || Object.keys(device.targets || {}),
+    selected ?? defaultTargets,
   );
   return promptWithEscape(checkbox({
     message: `Install where on ${device.display_name}?`,
@@ -1624,6 +1641,206 @@ async function chooseTargetsForDevice(device, selected = null) {
     required: true,
     instructions: 'Space toggles destinations. Enter confirms. Esc cancels.',
   }), []);
+}
+
+function matrixDeviceChoice(device, skillName) {
+  const state = skillDeviceState(device, skillName);
+  const targets = skillAssignmentTargets(device, skillName);
+  const stateLabel = state === 'assigned'
+    ? `assigned: ${targets.join(', ')}`
+    : state === 'detected'
+      ? 'detected locally, not managed'
+      : 'absent';
+  return {
+    name: `${device.display_name} (${device.device_id})  ${skillDeviceMarker(device, skillName)} ${stateLabel}`,
+    short: device.display_name,
+    value: device.device_id,
+    checked: state === 'assigned',
+  };
+}
+
+async function editMatrixSkillDraft({ skillName, draftDevices }) {
+  const sortedDevices = [...draftDevices].sort((a, b) => a.device_id.localeCompare(b.device_id));
+  const selected = await promptWithEscape(checkbox({
+    message: `${skillName}: assigned devices`,
+    loop: false,
+    pageSize: promptPageSize(sortedDevices.length, { min: 6, max: 18 }),
+    choices: sortedDevices.map((device) => matrixDeviceChoice(device, skillName)),
+    instructions: 'Space toggles devices. Enter stages this row. Esc cancels.',
+  }), null);
+  if (selected === null) return false;
+
+  const selectedIds = new Set(selected);
+  const newlyEnabled = sortedDevices.filter((device) => selectedIds.has(device.device_id)
+    && !skillAssignmentTargets(device, skillName).length);
+  const destinations = new Map();
+  for (const device of newlyEnabled) {
+    const targets = await chooseTargetsForDevice(device);
+    if (!targets.length) return false;
+    destinations.set(device.device_id, targets);
+  }
+
+  for (const device of sortedDevices) {
+    if (!selectedIds.has(device.device_id)) {
+      setDraftSkillAssignmentTargets(device, skillName, []);
+    } else if (destinations.has(device.device_id)) {
+      setDraftSkillAssignmentTargets(device, skillName, destinations.get(device.device_id));
+    }
+  }
+  return true;
+}
+
+function matrixChangeSummary(changes) {
+  return changes.map((change) => {
+    const before = change.before.length ? change.before.join(', ') : 'off';
+    const after = change.after.length ? change.after.join(', ') : 'off';
+    return `${change.skillName} on ${change.displayName}: ${before} -> ${after}`;
+  });
+}
+
+async function applyMatrixDraft({ config, changes }) {
+  await syncVault({
+    vaultPath: config.repoPath,
+    deviceId: config.deviceId,
+    pull: true,
+  });
+  const registry = await loadRegistry(config.repoPath);
+  const devices = new Map((await listDevices(config.repoPath))
+    .map((device) => [device.device_id, device]));
+  for (const change of changes) {
+    if (!registry.skills[change.skillName]) {
+      throw new Error(`${change.skillName} was removed from the vault while the matrix editor was open. Reopen the editor and try again.`);
+    }
+    const device = devices.get(change.deviceId);
+    if (!device) {
+      throw new Error(`${change.displayName} was removed while the matrix editor was open. Reopen the editor and try again.`);
+    }
+    for (const target of change.after) {
+      if (target !== 'global' && !device.targets[target]) {
+        throw new Error(`${target} is no longer configured on ${change.displayName}. Reopen the editor and choose its current destinations.`);
+      }
+    }
+  }
+  let localChanged = false;
+  for (const change of changes) {
+    if (change.after.length) {
+      await setSkillTargets({
+        vaultPath: config.repoPath,
+        deviceId: change.deviceId,
+        skillName: change.skillName,
+        targets: change.after,
+      });
+    } else {
+      await uninstallSkillAndPrune({
+        vaultPath: config.repoPath,
+        deviceId: change.deviceId,
+        skillName: change.skillName,
+      });
+    }
+    if (change.deviceId === config.deviceId) localChanged = true;
+  }
+  if (localChanged) {
+    await applyLinks({ vaultPath: config.repoPath, deviceId: config.deviceId });
+  }
+  return syncVault({
+    vaultPath: config.repoPath,
+    deviceId: config.deviceId,
+    pull: false,
+  });
+}
+
+async function matrixEditorScreen(config, { syncFirst = true } = {}) {
+  if (!process.stdin.isTTY) {
+    throw new Error('The matrix editor needs an interactive terminal. Run: skillsync matrix --edit');
+  }
+  if (syncFirst) {
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: true,
+    });
+  }
+  const registry = await loadRegistry(config.repoPath);
+  const names = Object.keys(registry.skills).sort();
+  const initialDevices = await listDevices(config.repoPath);
+  const draftDevices = structuredClone(initialDevices);
+  if (!names.length || !draftDevices.length) {
+    console.log('\nNothing to edit yet. Add a skill and register a device first.\n');
+    return;
+  }
+
+  while (true) {
+    const changes = matrixAssignmentChanges(initialDevices, draftDevices);
+    console.log(`\n${renderSkillDeviceMatrix({
+      skills: names,
+      devices: draftDevices,
+      maxWidth: process.stdout.columns || 120,
+    })}`);
+    if (changes.length) {
+      console.log(`\nStaged changes:\n- ${matrixChangeSummary(changes).join('\n- ')}`);
+    }
+
+    const choices = [
+      ...(changes.length ? [{
+        name: `Apply ${changes.length} staged change${changes.length === 1 ? '' : 's'}`,
+        value: 'apply',
+        description: 'Write all staged cells and sync them in one commit.',
+      }] : []),
+      ...names.map((name) => ({
+        name,
+        value: `skill:${name}`,
+        description: 'Choose which devices should have this skill.',
+      })),
+      {
+        name: changes.length ? 'Discard changes and go back' : 'Back',
+        value: 'back',
+      },
+    ];
+    const action = await promptWithEscape(select({
+      message: 'Editable skill matrix',
+      loop: false,
+      pageSize: promptPageSize(choices.length, { min: 10, max: 32 }),
+      choices,
+    }));
+    if (!action || action === 'back') {
+      if (!changes.length || await confirm({ message: 'Discard all staged matrix changes?', default: false })) return;
+      continue;
+    }
+    if (action.startsWith('skill:')) {
+      await editMatrixSkillDraft({
+        skillName: action.slice('skill:'.length),
+        draftDevices,
+      });
+      continue;
+    }
+    if (action === 'apply') {
+      const confirmed = await confirm({
+        message: `Write ${changes.length} staged matrix change${changes.length === 1 ? '' : 's'} and sync once?`,
+        default: true,
+      });
+      if (!confirmed) continue;
+      const result = await applyMatrixDraft({ config, changes });
+      const removedEverywhere = [...new Set(changes
+        .filter((change) => !change.after.length)
+        .map((change) => change.skillName))]
+        .filter((skillName) => !draftDevices.some((device) => skillAssignmentTargets(device, skillName).length));
+      console.log('\nMatrix changes saved.');
+      if (changes.some((change) => change.deviceId !== config.deviceId)) {
+        console.log('Remote device changes will apply automatically on their next sync.');
+      }
+      if (removedEverywhere.length) {
+        const vaultConfig = await loadVaultConfig(config.repoPath);
+        console.log(vaultConfig.policies.delete_unassigned_skills
+          ? `Once every device reports these skills absent, SkillSync will remove them from the vault: ${removedEverywhere.join(', ')}.`
+          : `These skills now have no assignments but remain in the vault because automatic cleanup is off: ${removedEverywhere.join(', ')}.`);
+      }
+      if (result.prunedSkills?.length) {
+        console.log(`Removed unused vault skills: ${result.prunedSkills.join(', ')}.`);
+      }
+      console.log('');
+      return;
+    }
+  }
 }
 
 async function applyDeviceAssignmentChanges({ config, deviceId, toInstall, toUninstall, targets }) {
@@ -1890,5 +2107,5 @@ async function settingsScreen(config) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync setup [--name skills] [--repo owner/repo|url]\n  skillsync                 Open TUI\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target codex,claude] [--global]\n  skillsync add <skill-folder-or-git-url> [--skill name] [--target target] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target codex,claude] [--global]\n  skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]\n  skillsync delete <skill>\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync daemon\n`);
 }

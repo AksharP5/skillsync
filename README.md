@@ -78,7 +78,15 @@ terminal-control  | ✓         | ✓      | ✓
 
 `○` means SkillSync found a local copy even though the skill is not assigned to that device. This distinction prevents cleanup from deleting skills that are still present somewhere.
 
-You can also open **Skill matrix** in the interactive UI and jump directly to a device to edit its assignments.
+Open the editable matrix directly:
+
+```bash
+skillsync matrix --edit
+```
+
+Choose a skill, check or uncheck the devices that should have it, and select destinations for newly enabled devices. You can stage multiple rows before applying them all in one sync commit. The same editor is available under **Skill matrix → Edit by skill** in the interactive UI.
+
+Remote changes apply automatically when those devices next sync. If a skill is removed from every device and `delete-unassigned-skills` is enabled, SkillSync waits until every device reports the local copy gone and then removes it from the vault.
 
 ## Add and install skills
 
@@ -246,7 +254,7 @@ skillsync setup [--name skills] [--repo owner/repo|url]
 skillsync status
 skillsync list
 skillsync installed [--device id]
-skillsync matrix
+skillsync matrix [--edit]
 skillsync device list
 skillsync device show <id>
 skillsync add <folder-or-git-url> [--skill name] [--target target] [--global]
