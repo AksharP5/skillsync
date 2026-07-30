@@ -63,11 +63,29 @@ export function deviceStatePath(vaultPath, deviceId) {
   );
 }
 
+export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
+  return path.join(
+    vaultPath,
+    'globals',
+    'assignments',
+    `${assertSafePathSegment(deviceId, 'Device ID')}.json`,
+  );
+}
+
 export async function loadDevice(vaultPath, deviceId = defaultDeviceId()) {
   await ensureVault(vaultPath);
   const desired = await readJson(devicePath(vaultPath, deviceId), null);
   const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
-  return composeDevice({ desired, reported, deviceId });
+  const instructionSelection = await readJson(
+    globalInstructionsAssignmentPath(vaultPath, deviceId),
+    null,
+  );
+  return composeDevice({
+    desired,
+    reported,
+    instructionSelection,
+    deviceId,
+  });
 }
 
 export async function saveDevice(vaultPath, device) {
@@ -100,7 +118,12 @@ async function saveReportedDevice(vaultPath, device) {
   return normalized;
 }
 
-function composeDevice({ desired, reported, deviceId }) {
+function composeDevice({
+  desired,
+  reported,
+  instructionSelection,
+  deviceId,
+}) {
   const normalizedDeviceId = assertSafePathSegment(
     deviceId || desired?.device_id || reported?.device_id || defaultDeviceId(),
     'Device ID',
@@ -111,13 +134,11 @@ function composeDevice({ desired, reported, deviceId }) {
     normalizedDeviceId,
     { legacy: Boolean(legacy && !reported) },
   );
-  const explicitProfile = desired?.instructions?.agents
-    && Object.hasOwn(desired.instructions.agents, 'profile');
-  const desiredState = normalizeDesiredState(desired, normalizedDeviceId, {
-    fallbackProfile: explicitProfile
-      ? null
-      : reportedState.instructions.agents?.applied_profile || null,
-  });
+  const desiredState = normalizeDesiredState(desired, normalizedDeviceId);
+  const selectedProfile = instructionSelection
+    && Object.hasOwn(instructionSelection, 'profile')
+    ? normalizeInstructionProfile(instructionSelection.profile)
+    : reportedState.instructions.agents?.applied_profile || null;
   return normalizeDevice({
     ...reportedState,
     desired_generation: desiredState.generation,
@@ -126,7 +147,7 @@ function composeDevice({ desired, reported, deviceId }) {
     instructions: {
       version: reportedState.instructions.version,
       agents: composeInstructionState(
-        desiredState.instructions.agents,
+        { profile: selectedProfile },
         reportedState.instructions.agents,
       ),
     },
@@ -144,14 +165,13 @@ function isLegacyDeviceManifest(value) {
   ].some((key) => Object.hasOwn(value, key)));
 }
 
-function normalizeDesiredState(value, deviceId, { fallbackProfile = null } = {}) {
+function normalizeDesiredState(value, deviceId) {
   return {
     version: 1,
     device_id: deviceId,
     generation: nonNegativeInteger(value?.generation ?? value?.desired_generation),
     installed: normalizeInstalled(value?.installed),
     global_installed: normalizeGlobalInstalled(value),
-    instructions: normalizeDesiredInstructions(value?.instructions, fallbackProfile),
   };
 }
 
@@ -172,7 +192,6 @@ function desiredStateFromDevice(device) {
     generation: device.desired_generation,
     installed: device.installed,
     global_installed: device.global_installed,
-    instructions: device.instructions,
   }, device.device_id);
 }
 
@@ -289,18 +308,6 @@ function normalizeInstructionPaths(agents) {
   return [...new Set(values.filter((value) => typeof value === 'string' && value))];
 }
 
-function normalizeDesiredInstructions(instructions, fallbackProfile = null) {
-  const agents = instructions?.agents;
-  const explicit = agents
-    && typeof agents === 'object'
-    && Object.hasOwn(agents, 'profile');
-  const profile = explicit
-    ? normalizeInstructionProfile(agents.profile)
-    : normalizeInstructionProfile(fallbackProfile);
-  if (!explicit && !profile) return {};
-  return { agents: { profile } };
-}
-
 function normalizeReportedInstructions(instructions) {
   const agents = instructions?.agents;
   const version = nonNegativeInteger(instructions?.version);
@@ -367,14 +374,12 @@ export async function setGlobalInstructionsProfile({
   const device = await loadDevice(vaultPath, deviceId);
   const nextProfile = normalizeInstructionProfile(profile);
   if (device.instructions.agents?.profile === nextProfile) return device;
-  device.instructions.agents = {
-    ...(device.instructions.agents || {}),
+  await writeJson(globalInstructionsAssignmentPath(vaultPath, deviceId), {
+    version: 1,
+    device_id: device.device_id,
     profile: nextProfile,
-    enabled: Boolean(nextProfile),
-  };
-  bumpDesiredGeneration(device);
-  await saveDesiredDevice(vaultPath, device);
-  return device;
+  });
+  return loadDevice(vaultPath, deviceId);
 }
 
 export async function configureGlobalInstructions({
@@ -997,9 +1002,11 @@ async function isOwnedCopy(targetPath, vaultPath) {
 export async function listDevices(vaultPath) {
   await mkdir(path.join(vaultPath, 'devices'), { recursive: true });
   await mkdir(path.join(vaultPath, 'state'), { recursive: true });
+  await mkdir(path.join(vaultPath, 'globals', 'assignments'), { recursive: true });
   const desiredFiles = await readdir(path.join(vaultPath, 'devices')).catch(() => []);
   const reportedFiles = await readdir(path.join(vaultPath, 'state')).catch(() => []);
-  const deviceIds = new Set([...desiredFiles, ...reportedFiles]
+  const instructionFiles = await readdir(path.join(vaultPath, 'globals', 'assignments')).catch(() => []);
+  const deviceIds = new Set([...desiredFiles, ...reportedFiles, ...instructionFiles]
     .filter((file) => file.endsWith('.json'))
     .map((file) => file.slice(0, -'.json'.length)));
   const devices = [];

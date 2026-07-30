@@ -97,6 +97,8 @@ Global instruction locations depend on the agent:
 
 SkillSync stores global instructions as named profiles. Each device selects its own profile, so devices can stay different or intentionally share one.
 
+No device wins because it installed SkillSync first. You choose which local file to import, and exact copies are shared only when their contents match.
+
 Import the version already used by a device:
 
 ```bash
@@ -128,7 +130,7 @@ Exact-content imports reuse an existing profile by default. If a device sharing 
 skillsync instructions fork linux-personal
 ```
 
-View profiles, assignments, and pending changes with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups, never overwrites unmanaged replacements during background sync, and does not auto-delete unassigned profiles. Disabling leaves standalone local copies. Project-specific `AGENTS.md` files are not affected.
+Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and any unmanaged Codex or OpenCode global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups, never overwrites unmanaged replacements during background sync, and does not auto-delete unassigned profiles. Disabling leaves standalone local copies. Project-specific `AGENTS.md` files are not affected.
 
 ## Add and install skills
 
@@ -230,6 +232,8 @@ The vault keeps cross-device assignments separate from device-reported local sta
 skills/          canonical skill folders
 devices/         desired assignments, editable from any connected device
 state/           local targets and inventory reported by each device
+globals/agents/  named global instruction profiles
+globals/assignments/  each device's selected instruction profile
 registry.json    generated skill index
 vault.json       vault-wide settings
 ```

@@ -24,6 +24,7 @@ import {
 import {
   addTarget,
   applyLinks,
+  globalInstructionsAssignmentPath,
   installSkill,
   listDevices,
   listUnusedSkills,
@@ -45,6 +46,7 @@ import {
   applyGlobalInstructions,
   assignGlobalInstructionsProfile,
   disableGlobalInstructions,
+  discoverGlobalInstructions,
   enableGlobalInstructions,
   forkGlobalInstructionsProfile,
   globalInstructionsHash,
@@ -412,10 +414,9 @@ test('legacy device manifests migrate into controller-owned desired state and de
 
   const desired = JSON.parse(await readFile(path.join(vault, 'devices', 'macbook.json'), 'utf8'));
   const reported = JSON.parse(await readFile(path.join(vault, 'state', 'macbook.json'), 'utf8'));
-  assert.deepEqual(Object.keys(desired).sort(), ['device_id', 'generation', 'global_installed', 'installed', 'instructions', 'version']);
+  assert.deepEqual(Object.keys(desired).sort(), ['device_id', 'generation', 'global_installed', 'installed', 'version']);
   assert.equal(desired.generation, 4);
   assert.deepEqual(desired.installed, { 'paper-mcp': ['codex'] });
-  assert.equal(desired.instructions.agents.profile, 'shared');
   assert.deepEqual(Object.keys(reported).sort(), ['applied_generation', 'detected', 'device_id', 'display_name', 'instructions', 'targets', 'version']);
   assert.equal(reported.applied_generation, 3);
   assert.equal(reported.instructions.agents.applied_profile, 'shared');
@@ -676,6 +677,7 @@ test('remote profile selection stays pending until that device applies it', asyn
   });
   const originalLink = await readlink(remote);
   const reportedBeforeAssignment = await readFile(path.join(vault, 'state', 'remote.json'), 'utf8');
+  const desiredBeforeAssignment = await readFile(path.join(vault, 'devices', 'remote.json'), 'utf8');
 
   await assignGlobalInstructionsProfile({
     vaultPath: vault,
@@ -685,12 +687,11 @@ test('remote profile selection stays pending until that device applies it', asyn
   let device = await loadDevice(vault, 'remote');
   assert.equal(device.instructions.agents.profile, 'alternate');
   assert.equal(device.instructions.agents.applied_profile, 'original');
-  assert.ok(device.desired_generation > device.applied_generation);
   assert.equal(await readlink(remote), originalLink);
   assert.equal(await readFile(path.join(vault, 'state', 'remote.json'), 'utf8'), reportedBeforeAssignment);
+  assert.equal(await readFile(path.join(vault, 'devices', 'remote.json'), 'utf8'), desiredBeforeAssignment);
   assert.equal(
-    JSON.parse(await readFile(path.join(vault, 'devices', 'remote.json'), 'utf8'))
-      .instructions.agents.profile,
+    JSON.parse(await readFile(globalInstructionsAssignmentPath(vault, 'remote'), 'utf8')).profile,
     'alternate',
   );
 
@@ -700,6 +701,57 @@ test('remote profile selection stays pending until that device applies it', asyn
   assert.equal(device.instructions.agents.applied_profile, 'alternate');
   assert.equal(device.desired_generation, device.applied_generation);
   assert.equal(await readFile(remote, 'utf8'), '# Alternate\n');
+});
+
+test('v0.9 device rewrites cannot erase a profile assignment from another device', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const remote = path.join(root, 'remote', 'AGENTS.md');
+  const alternate = path.join(root, 'alternate', 'AGENTS.md');
+  await mkdir(path.dirname(remote), { recursive: true });
+  await mkdir(path.dirname(alternate), { recursive: true });
+  await writeFile(remote, '# Original\n');
+  await writeFile(alternate, '# Alternate\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'remote',
+    profile: 'original',
+    sourcePath: remote,
+  });
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'controller',
+    profile: 'alternate',
+    sourcePath: alternate,
+  });
+  await assignGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'remote',
+    profile: 'alternate',
+  });
+
+  const desiredPath = path.join(vault, 'devices', 'remote.json');
+  await writeFile(desiredPath, `${JSON.stringify({
+    version: 1,
+    device_id: 'remote',
+    display_name: 'remote',
+    desired_generation: 0,
+    applied_generation: 0,
+    targets: {},
+    installed: {},
+    global_installed: [],
+    detected: {},
+  }, null, 2)}\n`);
+
+  const desired = JSON.parse(await readFile(desiredPath, 'utf8'));
+  const assignment = JSON.parse(
+    await readFile(globalInstructionsAssignmentPath(vault, 'remote'), 'utf8'),
+  );
+  const device = await loadDevice(vault, 'remote');
+  assert.equal(Object.hasOwn(desired, 'instructions'), false);
+  assert.equal(assignment.profile, 'alternate');
+  assert.equal(device.instructions.agents.profile, 'alternate');
+  assert.equal(device.instructions.agents.applied_profile, 'original');
 });
 
 test('one device profile can safely project to both Codex and OpenCode global paths', async () => {
@@ -726,6 +778,35 @@ test('one device profile can safely project to both Codex and OpenCode global pa
   assert.equal(await readFile(opencode, 'utf8'), '# Device profile\n');
   const device = await loadDevice(vault, 'macbook');
   assert.deepEqual(device.instructions.agents.paths, [codex, opencode]);
+});
+
+test('global instruction discovery inventories managed and differing provider files', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, '.codex', 'AGENTS.md');
+  const opencode = path.join(root, '.config', 'opencode', 'AGENTS.md');
+  await mkdir(path.dirname(codex), { recursive: true });
+  await mkdir(path.dirname(opencode), { recursive: true });
+  await writeFile(codex, '# Codex\n');
+  await writeFile(opencode, '# OpenCode\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'macbook',
+    sourcePath: codex,
+  });
+
+  const discovered = await discoverGlobalInstructions({
+    vaultPath: vault,
+    providerPaths: [
+      { provider: 'codex', path: codex },
+      { provider: 'opencode', path: opencode },
+    ],
+  });
+  assert.equal(discovered[0].profile, 'macbook');
+  assert.equal(discovered[1].profile, null);
+  assert.match(discovered[1].hash, /^sha256:/);
+  assert.notEqual(discovered[0].hash, discovered[1].hash);
 });
 
 test('instruction profile names cannot escape the vault', async () => {

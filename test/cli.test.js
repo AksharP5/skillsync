@@ -2,7 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -270,6 +279,87 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
   assert.match(disabled.stdout, /Standalone local copies remain/);
   assert.equal((await lstat(destination)).isFile(), true);
   assert.equal(await readFile(destination, 'utf8'), '# Shared instructions\n');
+});
+
+test('explicit OpenCode import manages that file before linking an existing Codex path', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const codex = path.join(home, '.codex', 'AGENTS.md');
+  const opencode = path.join(home, '.config', 'opencode', 'AGENTS.md');
+  const shared = path.join(vault, 'globals', 'AGENTS.md');
+  await mkdir(path.dirname(shared), { recursive: true });
+  await mkdir(path.dirname(codex), { recursive: true });
+  await mkdir(path.dirname(opencode), { recursive: true });
+  await mkdir(path.join(vault, 'devices'), { recursive: true });
+  await mkdir(path.join(vault, 'state'), { recursive: true });
+  await writeFile(shared, '# Existing Codex\n');
+  await symlink(path.relative(path.dirname(codex), shared), codex, 'file');
+  await writeFile(opencode, '# Mac OpenCode\n');
+  await writeFile(path.join(vault, 'devices', 'macbook.json'), `${JSON.stringify({
+    version: 1,
+    device_id: 'macbook',
+    generation: 0,
+    installed: {},
+    global_installed: [],
+  }, null, 2)}\n`);
+  await writeFile(path.join(vault, 'state', 'macbook.json'), `${JSON.stringify({
+    version: 1,
+    device_id: 'macbook',
+    display_name: 'macbook',
+    applied_generation: 0,
+    targets: {},
+    detected: {},
+    instructions: {
+      agents: {
+        path: codex,
+        enabled: true,
+      },
+    },
+  }, null, 2)}\n`);
+  await writeConfig(home, vault, 'macbook');
+
+  const imported = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'import',
+    '--name',
+    'macbook',
+    '--from',
+    opencode,
+  ], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(imported.stdout, /Imported global instructions profile: macbook/);
+  assert.match(imported.stdout, /Preserved previous local path/);
+  const profile = path.join(vault, 'globals', 'agents', 'macbook.md');
+  assert.equal(await readFile(profile, 'utf8'), '# Mac OpenCode\n');
+  assert.equal(path.resolve(path.dirname(opencode), await readlink(opencode)), profile);
+  assert.equal(path.resolve(path.dirname(codex), await readlink(codex)), shared);
+
+  const linked = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'link',
+    codex,
+  ], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(linked.stdout, /Linked .*AGENTS\.md to profile macbook/);
+  assert.equal(path.resolve(path.dirname(opencode), await readlink(opencode)), profile);
+  assert.equal(path.resolve(path.dirname(codex), await readlink(codex)), profile);
+
+  const status = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'status',
+  ], {
+    cwd: path.resolve('.'),
+    env: { ...process.env, HOME: home },
+  });
+  assert.match(status.stdout, /codex: ~\/\.codex\/AGENTS\.md \(profile macbook\)/);
+  assert.match(status.stdout, /opencode: ~\/\.config\/opencode\/AGENTS\.md \(profile macbook\)/);
 });
 
 test('daemon rejects a non-positive interval instead of entering a tight loop', async () => {

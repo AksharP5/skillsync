@@ -26,6 +26,16 @@ import {
 export const DEFAULT_GLOBAL_INSTRUCTIONS_PATH = '~/.codex/AGENTS.md';
 export const LEGACY_GLOBAL_INSTRUCTIONS_PROFILE = 'shared';
 
+export function globalInstructionProviderPaths(env = process.env) {
+  const opencode = env.XDG_CONFIG_HOME
+    ? path.join(env.XDG_CONFIG_HOME, 'opencode', 'AGENTS.md')
+    : '~/.config/opencode/AGENTS.md';
+  return [
+    { provider: 'codex', path: DEFAULT_GLOBAL_INSTRUCTIONS_PATH },
+    { provider: 'opencode', path: opencode },
+  ];
+}
+
 function profileId(profile) {
   return assertSafePathSegment(profile, 'Instruction profile');
 }
@@ -45,6 +55,13 @@ export async function globalInstructionsHash(filePath) {
   const hash = createHash('sha256');
   hash.update(await readFile(filePath));
   return `sha256:${hash.digest('hex')}`;
+}
+
+async function optionalGlobalInstructionsHash(filePath) {
+  return globalInstructionsHash(filePath).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
 }
 
 async function pathInfo(filePath) {
@@ -96,6 +113,33 @@ async function ownedProfileAt(destination, vaultPath) {
 
 async function isSelectedProfileLink(destination, vaultPath, profile) {
   return await ownedProfileAt(destination, vaultPath) === profile;
+}
+
+export async function discoverGlobalInstructions({
+  vaultPath,
+  configuredPaths = [],
+  env = process.env,
+  providerPaths = globalInstructionProviderPaths(env),
+}) {
+  const candidates = [...providerPaths];
+  for (const targetPath of configuredPaths) {
+    const resolved = resolvedDestination(targetPath);
+    if (candidates.some((candidate) => resolvedDestination(candidate.path) === resolved)) continue;
+    candidates.push({ provider: 'custom', path: targetPath });
+  }
+  const discovered = [];
+  for (const candidate of candidates) {
+    const destination = resolvedDestination(candidate.path);
+    const info = await pathInfo(destination);
+    discovered.push({
+      ...candidate,
+      destination,
+      exists: Boolean(info),
+      profile: info ? await ownedProfileAt(destination, vaultPath) : null,
+      hash: info ? await optionalGlobalInstructionsHash(destination) : null,
+    });
+  }
+  return discovered;
 }
 
 export async function listGlobalInstructionProfiles(vaultPath) {

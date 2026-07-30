@@ -42,6 +42,7 @@ import {
   DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
   addGlobalInstructionsPath,
   assignGlobalInstructionsProfile,
+  discoverGlobalInstructions,
   disableGlobalInstructions,
   enableGlobalInstructions,
   forkGlobalInstructionsProfile,
@@ -704,10 +705,27 @@ async function instructionsCommand(rest = []) {
       const paths = agents.paths?.length ? ` -> ${agents.paths.join(', ')}` : '';
       console.log(`- ${device.device_id}: ${agents.profile} (${state})${paths}`);
     }
+    const currentDevice = devices.find((device) => device.device_id === config.deviceId);
+    const discovered = await discoverGlobalInstructions({
+      vaultPath: config.repoPath,
+      configuredPaths: currentDevice?.instructions.agents?.paths || [],
+    });
+    console.log(`Global files on ${config.deviceId}:`);
+    for (const entry of discovered) {
+      const state = entry.profile
+        ? `profile ${entry.profile}`
+        : entry.hash
+          ? `unmanaged ${entry.hash.slice(0, 19)}`
+          : entry.exists
+            ? 'broken or unreadable'
+            : 'missing';
+      console.log(`- ${entry.provider}: ${entry.path} (${state})`);
+    }
     return;
   }
   if (subcommand === 'import') {
     const device = await loadDevice(config.repoPath, config.deviceId);
+    const explicitSource = hasFlag(rest, '--from') || hasFlag(rest, '--path');
     const sourcePath = flagValue(
       rest,
       '--from',
@@ -721,7 +739,9 @@ async function instructionsCommand(rest = []) {
       sourcePath,
       targetPaths: targetPaths.length
         ? targetPaths
-        : device.instructions.agents?.paths?.length
+        : explicitSource
+          ? [sourcePath]
+          : device.instructions.agents?.paths?.length
           ? device.instructions.agents.paths
           : [sourcePath],
       separate: hasFlag(rest, '--separate'),
