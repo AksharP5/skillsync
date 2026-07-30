@@ -45,6 +45,7 @@ import { generateGroups } from '../src/core/groups.js';
 import {
   applyGlobalInstructions,
   assignGlobalInstructionsProfile,
+  deviceHasClaude,
   disableGlobalInstructions,
   discoverGlobalInstructions,
   enableGlobalInstructions,
@@ -53,6 +54,7 @@ import {
   globalInstructionsVaultPath,
   importGlobalInstructionsProfile,
   listGlobalInstructionProfiles,
+  reconcileGlobalInstructionProviders,
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import {
@@ -615,7 +617,10 @@ test('global instruction profiles preserve distinct device versions and deduplic
     profile: 'archlinux',
   });
   assert.equal(await readFile(mac, 'utf8'), '# Arch\n');
-  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'macbook'), 'utf8'), '# Mac\n');
+  await assert.rejects(
+    () => readFile(globalInstructionsVaultPath(vault, 'macbook'), 'utf8'),
+    { code: 'ENOENT' },
+  );
 });
 
 test('forking a shared instruction profile gives one device an independent editable copy', async () => {
@@ -649,6 +654,7 @@ test('forking a shared instruction profile gives one device an independent edita
   await writeFile(mac, '# Mac only\n');
 
   assert.equal(await readFile(globalInstructionsVaultPath(vault, 'mac-own'), 'utf8'), '# Mac only\n');
+  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'shared-team'), 'utf8'), '# Shared\n');
   assert.equal(await readFile(arch, 'utf8'), '# Shared\n');
   assert.equal((await loadDevice(vault, 'macbook')).instructions.agents.profile, 'mac-own');
   assert.equal((await loadDevice(vault, 'archlinux')).instructions.agents.profile, 'shared-team');
@@ -694,6 +700,7 @@ test('remote profile selection stays pending until that device applies it', asyn
     JSON.parse(await readFile(globalInstructionsAssignmentPath(vault, 'remote'), 'utf8')).profile,
     'alternate',
   );
+  assert.equal(await readFile(globalInstructionsVaultPath(vault, 'original'), 'utf8'), '# Original\n');
 
   await applyGlobalInstructions({ vaultPath: vault, deviceId: 'remote' });
   await markDeviceApplied({ vaultPath: vault, deviceId: 'remote' });
@@ -701,6 +708,10 @@ test('remote profile selection stays pending until that device applies it', asyn
   assert.equal(device.instructions.agents.applied_profile, 'alternate');
   assert.equal(device.desired_generation, device.applied_generation);
   assert.equal(await readFile(remote, 'utf8'), '# Alternate\n');
+  await assert.rejects(
+    () => readFile(globalInstructionsVaultPath(vault, 'original'), 'utf8'),
+    { code: 'ENOENT' },
+  );
 });
 
 test('v0.9 device rewrites cannot erase a profile assignment from another device', async () => {
@@ -809,6 +820,111 @@ test('global instruction discovery inventories managed and differing provider fi
   assert.notEqual(discovered[0].hash, discovered[1].hash);
 });
 
+test('the shared profile projects CLAUDE.md only while Claude is configured on a device', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, '.codex', 'AGENTS.md');
+  const claude = path.join(root, '.claude', 'CLAUDE.md');
+  const claudeSkills = path.join(root, '.claude', 'skills');
+  await mkdir(path.dirname(codex), { recursive: true });
+  await writeFile(codex, '# Shared instructions\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'workstation',
+    sourcePath: codex,
+  });
+
+  const commandMissing = async () => false;
+  let reconciled = await reconcileGlobalInstructionProviders({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    claudePath: claude,
+    commandExistsFn: commandMissing,
+  });
+  assert.equal(reconciled.changed, false);
+  await assert.rejects(() => lstat(claude), { code: 'ENOENT' });
+
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    name: 'claude',
+    targetPath: claudeSkills,
+  });
+  assert.equal(
+    await deviceHasClaude({
+      device: await loadDevice(vault, 'workstation'),
+      commandExistsFn: commandMissing,
+    }),
+    true,
+  );
+  reconciled = await reconcileGlobalInstructionProviders({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    claudePath: claude,
+    commandExistsFn: commandMissing,
+  });
+  assert.equal(reconciled.changed, true);
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'workstation' });
+  assert.equal(await readFile(claude, 'utf8'), '# Shared instructions\n');
+  assert.equal(
+    path.resolve(path.dirname(claude), await readlink(claude)),
+    globalInstructionsVaultPath(vault, 'workstation'),
+  );
+  assert.deepEqual(
+    (await loadDevice(vault, 'workstation')).instructions.agents.auto_paths,
+    [claude],
+  );
+
+  await removeTargetAndPrune({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    name: 'claude',
+  });
+  reconciled = await reconcileGlobalInstructionProviders({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    claudePath: claude,
+    commandExistsFn: commandMissing,
+  });
+  assert.equal(reconciled.changed, true);
+  await assert.rejects(() => lstat(claude), { code: 'ENOENT' });
+  assert.equal(
+    (await loadDevice(vault, 'workstation')).instructions.agents.paths.includes(claude),
+    false,
+  );
+});
+
+test('automatic Claude projection preserves differing unmanaged instructions', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, '.codex', 'AGENTS.md');
+  const claude = path.join(root, '.claude', 'CLAUDE.md');
+  await mkdir(path.dirname(codex), { recursive: true });
+  await mkdir(path.dirname(claude), { recursive: true });
+  await writeFile(codex, '# Shared\n');
+  await writeFile(claude, '# Claude only\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'workstation',
+    sourcePath: codex,
+  });
+
+  const reconciled = await reconcileGlobalInstructionProviders({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    claudePath: claude,
+    commandExistsFn: async () => true,
+  });
+  assert.deepEqual(reconciled.conflicts, [claude]);
+  assert.equal(await readFile(claude, 'utf8'), '# Claude only\n');
+  assert.equal(
+    (await loadDevice(vault, 'workstation')).instructions.agents.paths.includes(claude),
+    false,
+  );
+});
+
 test('instruction profile names cannot escape the vault', async () => {
   const root = await tempDir();
   const source = path.join(root, 'AGENTS.md');
@@ -828,8 +944,16 @@ test('remote instruction assignment waits for the target to report profile suppo
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const profile = globalInstructionsVaultPath(vault);
+  const controller = path.join(root, 'controller', 'AGENTS.md');
   await mkdir(path.dirname(profile), { recursive: true });
+  await mkdir(path.dirname(controller), { recursive: true });
   await writeFile(profile, '# Shared\n');
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'controller',
+    profile: 'shared',
+    targetPaths: [controller],
+  });
 
   await assert.rejects(
     () => assignGlobalInstructionsProfile({

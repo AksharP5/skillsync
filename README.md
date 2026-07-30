@@ -94,10 +94,13 @@ Global instruction locations depend on the agent:
 
 - Codex: `~/.codex/AGENTS.md`
 - OpenCode: `~/.config/opencode/AGENTS.md`
+- Claude Code: `~/.claude/CLAUDE.md`
 
 SkillSync stores global instructions as named profiles. Each device selects its own profile, so devices can stay different or intentionally share one.
 
 No device wins because it installed SkillSync first. You choose which local file to import, and exact copies are shared only when their contents match.
+
+Codex and OpenCode use `AGENTS.md`. When Claude Code is installed or a Claude target is configured on a device, SkillSync also links that device’s `CLAUDE.md` to the same selected profile. Devices without Claude do not get a `CLAUDE.md`. A differing unmanaged `CLAUDE.md` is preserved for explicit resolution.
 
 Import the version already used by a device:
 
@@ -130,7 +133,9 @@ Exact-content imports reuse an existing profile by default. If a device sharing 
 skillsync instructions fork linux-personal
 ```
 
-Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and any unmanaged Codex or OpenCode global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups, never overwrites unmanaged replacements during background sync, and does not auto-delete unassigned profiles. Disabling leaves standalone local copies. Project-specific `AGENTS.md` files are not affected.
+Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and unmanaged global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups and never overwrites unmanaged replacements during background sync.
+
+After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
 
 ## Add and install skills
 

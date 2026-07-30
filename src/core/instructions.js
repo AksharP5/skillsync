@@ -13,6 +13,7 @@ import path from 'node:path';
 import {
   configureGlobalInstructions,
   defaultDeviceId,
+  listDevices,
   loadDevice,
   setGlobalInstructionsProfile,
 } from './device.js';
@@ -22,18 +23,27 @@ import {
   expandHome,
   removePath,
 } from './fs.js';
+import { commandExists } from './git.js';
 
 export const DEFAULT_GLOBAL_INSTRUCTIONS_PATH = '~/.codex/AGENTS.md';
+export const DEFAULT_CLAUDE_INSTRUCTIONS_PATH = '~/.claude/CLAUDE.md';
 export const LEGACY_GLOBAL_INSTRUCTIONS_PROFILE = 'shared';
 
-export function globalInstructionProviderPaths(env = process.env) {
+export function globalInstructionProviderPaths(
+  env = process.env,
+  { includeClaude = false } = {},
+) {
   const opencode = env.XDG_CONFIG_HOME
     ? path.join(env.XDG_CONFIG_HOME, 'opencode', 'AGENTS.md')
     : '~/.config/opencode/AGENTS.md';
-  return [
+  const providers = [
     { provider: 'codex', path: DEFAULT_GLOBAL_INSTRUCTIONS_PATH },
     { provider: 'opencode', path: opencode },
   ];
+  if (includeClaude) {
+    providers.push({ provider: 'claude', path: DEFAULT_CLAUDE_INSTRUCTIONS_PATH });
+  }
+  return providers;
 }
 
 function profileId(profile) {
@@ -115,6 +125,25 @@ async function isSelectedProfileLink(destination, vaultPath, profile) {
   return await ownedProfileAt(destination, vaultPath) === profile;
 }
 
+function targetUsesClaude(name, target) {
+  if (name.toLowerCase() === 'claude') return true;
+  return [target?.path, target?.scan_path]
+    .filter((value) => typeof value === 'string')
+    .some((value) => value.replaceAll('\\', '/').includes('/.claude/'));
+}
+
+export async function deviceHasClaude({
+  device,
+  commandExistsFn = commandExists,
+}) {
+  if (Object.entries(device?.targets || {}).some(([name, target]) => (
+    targetUsesClaude(name, target)
+  ))) {
+    return true;
+  }
+  return commandExistsFn('claude');
+}
+
 export async function discoverGlobalInstructions({
   vaultPath,
   configuredPaths = [],
@@ -140,6 +169,82 @@ export async function discoverGlobalInstructions({
     });
   }
   return discovered;
+}
+
+export async function reconcileGlobalInstructionProviders({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  claudePath = DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
+  commandExistsFn = commandExists,
+}) {
+  const device = await loadDevice(vaultPath, deviceId);
+  const agents = device.instructions.agents;
+  if (!agents?.profile) {
+    return { changed: false, claudeEnabled: false, conflicts: [] };
+  }
+  const claudeEnabled = await deviceHasClaude({ device, commandExistsFn });
+  const destination = resolvedDestination(claudePath);
+  const paths = agents.paths || [];
+  const automaticPaths = agents.auto_paths || [];
+  const linkedPath = paths.find((targetPath) => resolvedDestination(targetPath) === destination);
+  const automaticPath = automaticPaths.find(
+    (targetPath) => resolvedDestination(targetPath) === destination,
+  );
+
+  if (claudeEnabled && !linkedPath) {
+    const source = (await requireProfile(vaultPath, agents.profile)).source;
+    const info = await pathInfo(destination);
+    const owned = info ? await ownedProfileAt(destination, vaultPath) : null;
+    if (info && !owned && !await sameContents(source, destination)) {
+      return {
+        changed: false,
+        claudeEnabled: true,
+        conflicts: [destination],
+      };
+    }
+    const backup = info && !owned ? await backupPath(destination) : null;
+    await configureGlobalInstructions({
+      vaultPath,
+      deviceId,
+      targetPaths: [...paths, claudePath],
+      automaticPaths: [...automaticPaths, claudePath],
+      appliedProfile: agents.applied_profile,
+    });
+    return {
+      changed: true,
+      claudeEnabled: true,
+      conflicts: [],
+      backups: backup ? [backup] : [],
+    };
+  }
+
+  if (!claudeEnabled && automaticPath) {
+    if (await ownedProfileAt(destination, vaultPath)) {
+      await removePath(destination);
+    }
+    await configureGlobalInstructions({
+      vaultPath,
+      deviceId,
+      targetPaths: paths.filter((targetPath) => resolvedDestination(targetPath) !== destination),
+      automaticPaths: automaticPaths.filter(
+        (targetPath) => resolvedDestination(targetPath) !== destination,
+      ),
+      appliedProfile: agents.applied_profile,
+    });
+    return {
+      changed: true,
+      claudeEnabled: false,
+      conflicts: [],
+      backups: [],
+    };
+  }
+
+  return {
+    changed: false,
+    claudeEnabled,
+    conflicts: [],
+    backups: [],
+  };
 }
 
 export async function listGlobalInstructionProfiles(vaultPath) {
@@ -168,6 +273,28 @@ export async function listGlobalInstructionProfiles(vaultPath) {
     });
   }
   return profiles.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function listUnusedGlobalInstructionProfiles(vaultPath) {
+  const [profiles, devices] = await Promise.all([
+    listGlobalInstructionProfiles(vaultPath),
+    listDevices(vaultPath),
+  ]);
+  const used = new Set();
+  for (const device of devices) {
+    const agents = device.instructions.agents;
+    if (agents?.profile) used.add(agents.profile);
+    if (agents?.applied_profile) used.add(agents.applied_profile);
+  }
+  return profiles.filter((profile) => !used.has(profile.id));
+}
+
+export async function sweepUnusedGlobalInstructionProfiles(vaultPath) {
+  const unused = await listUnusedGlobalInstructionProfiles(vaultPath);
+  for (const profile of unused) {
+    await removePath(profile.path);
+  }
+  return unused.map((profile) => profile.id);
 }
 
 export async function inspectGlobalInstructions({
@@ -443,7 +570,10 @@ export async function applyGlobalInstructions({
       targetPaths: [],
       appliedProfile: null,
     });
-    return { enabled: false };
+    return {
+      enabled: false,
+      prunedProfiles: await sweepUnusedGlobalInstructionProfiles(vaultPath),
+    };
   }
   const paths = agents.paths?.length
     ? agents.paths
@@ -468,7 +598,11 @@ export async function applyGlobalInstructions({
       targetPaths: paths,
       appliedProfile: null,
     });
-    return { enabled: false, paths };
+    return {
+      enabled: false,
+      paths,
+      prunedProfiles: await sweepUnusedGlobalInstructionProfiles(vaultPath),
+    };
   }
 
   const source = (await requireProfile(vaultPath, selected)).source;
@@ -499,6 +633,7 @@ export async function applyGlobalInstructions({
     source,
     paths,
     hash: await globalInstructionsHash(source),
+    prunedProfiles: await sweepUnusedGlobalInstructionProfiles(vaultPath),
   };
 }
 

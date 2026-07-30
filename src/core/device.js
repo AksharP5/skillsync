@@ -308,6 +308,11 @@ function normalizeInstructionPaths(agents) {
   return [...new Set(values.filter((value) => typeof value === 'string' && value))];
 }
 
+function normalizeAutomaticInstructionPaths(agents) {
+  const paths = Array.isArray(agents?.auto_paths) ? agents.auto_paths : [];
+  return [...new Set(paths.filter((value) => typeof value === 'string' && value))];
+}
+
 function normalizeReportedInstructions(instructions) {
   const agents = instructions?.agents;
   const version = nonNegativeInteger(instructions?.version);
@@ -315,6 +320,8 @@ function normalizeReportedInstructions(instructions) {
     return version ? { version } : {};
   }
   const paths = normalizeInstructionPaths(agents);
+  const automaticPaths = normalizeAutomaticInstructionPaths(agents)
+    .filter((value) => paths.includes(value));
   const appliedProfile = normalizeInstructionProfile(
     agents.applied_profile ?? (agents.enabled ? 'shared' : null),
   );
@@ -323,6 +330,7 @@ function normalizeReportedInstructions(instructions) {
     version,
     agents: {
       paths,
+      ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
       applied_profile: appliedProfile,
     },
   };
@@ -331,11 +339,14 @@ function normalizeReportedInstructions(instructions) {
 function composeInstructionState(desiredAgents, reportedAgents) {
   const profile = normalizeInstructionProfile(desiredAgents?.profile);
   const paths = normalizeInstructionPaths(reportedAgents);
+  const automaticPaths = normalizeAutomaticInstructionPaths(reportedAgents)
+    .filter((value) => paths.includes(value));
   const appliedProfile = normalizeInstructionProfile(reportedAgents?.applied_profile);
   if (!profile && !paths.length && !appliedProfile) return undefined;
   return {
     profile,
     paths,
+    ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
     path: paths[0] || '~/.codex/AGENTS.md',
     applied_profile: appliedProfile,
     enabled: Boolean(profile),
@@ -355,12 +366,15 @@ function reportedInstructionsFromDevice(instructions) {
   const version = nonNegativeInteger(instructions?.version);
   if (!agents || typeof agents !== 'object') return version ? { version } : {};
   const paths = normalizeInstructionPaths(agents);
+  const automaticPaths = normalizeAutomaticInstructionPaths(agents)
+    .filter((value) => paths.includes(value));
   const appliedProfile = normalizeInstructionProfile(agents.applied_profile);
   if (!paths.length && !appliedProfile) return version ? { version } : {};
   return {
     version,
     agents: {
       paths,
+      ...(automaticPaths.length ? { auto_paths: automaticPaths } : {}),
       applied_profile: appliedProfile,
     },
   };
@@ -387,13 +401,16 @@ export async function configureGlobalInstructions({
   deviceId = defaultDeviceId(),
   targetPaths,
   targetPath,
+  automaticPaths,
   appliedProfile,
 }) {
   const device = await loadDevice(vaultPath, deviceId);
   const paths = targetPaths || (targetPath ? [targetPath] : device.instructions.agents?.paths || []);
+  const autoPaths = automaticPaths || device.instructions.agents?.auto_paths || [];
   device.instructions.agents = {
     ...(device.instructions.agents || {}),
     paths: [...new Set(paths)],
+    auto_paths: [...new Set(autoPaths)].filter((value) => paths.includes(value)),
     applied_profile: normalizeInstructionProfile(appliedProfile),
   };
   device.instructions.version = 1;

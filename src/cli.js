@@ -39,13 +39,16 @@ import {
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { generateGroups } from './core/groups.js';
 import {
+  DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
   DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
   addGlobalInstructionsPath,
   assignGlobalInstructionsProfile,
+  deviceHasClaude,
   discoverGlobalInstructions,
   disableGlobalInstructions,
   enableGlobalInstructions,
   forkGlobalInstructionsProfile,
+  globalInstructionProviderPaths,
   importGlobalInstructionsProfile,
   inspectGlobalInstructions,
   listGlobalInstructionProfiles,
@@ -654,11 +657,7 @@ async function matrixCommand(rest = []) {
 async function instructionsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
   const config = await configured();
-  await syncVault({
-    vaultPath: config.repoPath,
-    deviceId: config.deviceId,
-    pull: true,
-  });
+  await syncInstructionChanges(config, { pull: true });
 
   if (subcommand === 'status' || subcommand === 'profiles') {
     const [profiles, devices] = await Promise.all([
@@ -706,9 +705,13 @@ async function instructionsCommand(rest = []) {
       console.log(`- ${device.device_id}: ${agents.profile} (${state})${paths}`);
     }
     const currentDevice = devices.find((device) => device.device_id === config.deviceId);
+    const includeClaude = currentDevice
+      ? await deviceHasClaude({ device: currentDevice })
+      : false;
     const discovered = await discoverGlobalInstructions({
       vaultPath: config.repoPath,
       configuredPaths: currentDevice?.instructions.agents?.paths || [],
+      providerPaths: globalInstructionProviderPaths(process.env, { includeClaude }),
     });
     console.log(`Global files on ${config.deviceId}:`);
     for (const entry of discovered) {
@@ -746,11 +749,7 @@ async function instructionsCommand(rest = []) {
           : [sourcePath],
       separate: hasFlag(rest, '--separate'),
     });
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     console.log(result.deduplicated
       ? `Matched existing profile: ${result.profile}`
       : `Imported global instructions profile: ${result.profile}`);
@@ -793,11 +792,7 @@ async function instructionsCommand(rest = []) {
         profile,
       });
     }
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     console.log(`Assigned ${targetDeviceId} to global instructions profile ${profile}.`);
     return;
   }
@@ -807,11 +802,7 @@ async function instructionsCommand(rest = []) {
       deviceId: config.deviceId,
       profile: rest[1] || flagValue(rest, '--name', config.deviceId),
     });
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     console.log(`Forked global instructions into profile ${result.profile}.`);
     return;
   }
@@ -823,11 +814,7 @@ async function instructionsCommand(rest = []) {
       deviceId: config.deviceId,
       targetPath,
     });
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     for (const preserved of result.backups) {
       console.log(`Preserved previous local path: ${preserved.backup}`);
     }
@@ -842,11 +829,7 @@ async function instructionsCommand(rest = []) {
       deviceId: config.deviceId,
       targetPath,
     });
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     console.log(`Unlinked ${result.destination}; a standalone local copy remains.`);
     return;
   }
@@ -903,11 +886,7 @@ async function instructionsCommand(rest = []) {
       strategy,
       profile,
     });
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     console.log(`Global AGENTS.md profile enabled: ${result.profile}`);
     console.log(`Local path: ${result.destination}`);
     console.log(`Profile file: ${result.source}`);
@@ -930,17 +909,52 @@ async function instructionsCommand(rest = []) {
         deviceId: targetDeviceId,
         profile: null,
       }).then(() => ({ disabled: true, destinations: [] }));
-    await syncVault({
-      vaultPath: config.repoPath,
-      deviceId: config.deviceId,
-      pull: false,
-    });
+    await syncInstructionChanges(config);
     console.log(result.disabled
       ? `Global AGENTS.md sync disabled for ${targetDeviceId}.${targetDeviceId === config.deviceId ? ' Standalone local copies remain.' : ''}`
       : `Global AGENTS.md sync was not configured on ${targetDeviceId}.`);
     return;
   }
   throw new Error('Usage: skillsync instructions <status|profiles|import|use|use-device|fork|link|unlink|enable|disable>');
+}
+
+function instructionSyncMessages(result) {
+  const messages = [];
+  for (const conflict of result.instructionProviderConflicts || []) {
+    messages.push({
+      level: 'warn',
+      text: `Claude instructions differ and remain unmanaged: ${conflict}. Import or link that path explicitly to resolve it.`,
+    });
+  }
+  for (const backup of result.instructionProviderBackups || []) {
+    messages.push({
+      level: 'log',
+      text: `Preserved matching Claude instructions before linking: ${backup}.`,
+    });
+  }
+  if (result.prunedInstructionProfiles?.length) {
+    messages.push({
+      level: 'log',
+      text: `Removed unused instruction profiles: ${result.prunedInstructionProfiles.join(', ')}.`,
+    });
+  }
+  return messages;
+}
+
+function printInstructionSyncMessages(result, prefix = '') {
+  for (const message of instructionSyncMessages(result)) {
+    console[message.level](`${prefix}${message.text}`);
+  }
+}
+
+async function syncInstructionChanges(config, { pull = false } = {}) {
+  const result = await syncVault({
+    vaultPath: config.repoPath,
+    deviceId: config.deviceId,
+    pull,
+  });
+  printInstructionSyncMessages(result);
+  return result;
 }
 
 function conflictAction(rest) {
@@ -1426,6 +1440,7 @@ async function syncCommand(rest) {
   for (const conflict of result.autoImportConflicts || []) {
     console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.`);
   }
+  printInstructionSyncMessages(result);
   if (result.prunedSkills?.length) {
     console.log(`Removed unused vault skills: ${result.prunedSkills.join(', ')}.`);
   }
@@ -1446,6 +1461,7 @@ async function scanCommand() {
   for (const conflict of result.autoImportConflicts || []) {
     console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.`);
   }
+  printInstructionSyncMessages(result);
   console.log(`Scanned local targets: ${countDetectedSkills(device)} skills detected.`);
 }
 
@@ -1519,6 +1535,7 @@ async function daemon(rest) {
       for (const conflict of result.autoImportConflicts || []) {
         console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}`);
       }
+      printInstructionSyncMessages(result, `[${new Date().toISOString()}] `);
       if (result.prunedSkills?.length) {
         console.log(`[${new Date().toISOString()}] removed unused vault skills: ${result.prunedSkills.join(', ')}`);
       }
@@ -2481,9 +2498,13 @@ async function instructionProfileSettingsScreen(config, device) {
     return;
   }
   if (choice === 'link') {
+    const hasClaude = await deviceHasClaude({ device });
+    const claudeLinked = (agents.paths || []).includes(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
     const targetPath = await input({
       message: 'Additional global instructions path',
-      default: '~/.config/opencode/AGENTS.md',
+      default: hasClaude && !claudeLinked
+        ? DEFAULT_CLAUDE_INSTRUCTIONS_PATH
+        : '~/.config/opencode/AGENTS.md',
     });
     await instructionsCommand(['link', targetPath]);
     return;
