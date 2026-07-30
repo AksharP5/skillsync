@@ -43,11 +43,24 @@ function xmlEscape(value) {
     .replaceAll("'", '&apos;');
 }
 
-export function renderLaunchAgent({ label, command, args = [] }) {
+export function renderLaunchAgent({
+  label,
+  command,
+  args = [],
+  pathValue = process.env.PATH,
+}) {
   const argumentsXml = [command, ...args]
     .map((argument) => `<string>${xmlEscape(argument)}</string>`)
     .join('');
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>${xmlEscape(label)}</string>\n  <key>ProgramArguments</key><array>${argumentsXml}</array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n`;
+  const servicePath = [
+    path.dirname(command),
+    ...splitPath(pathValue),
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+  ].filter((entry, index, entries) => entries.indexOf(entry) === index).join(path.delimiter);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>${xmlEscape(label)}</string>\n  <key>ProgramArguments</key><array>${argumentsXml}</array>\n  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xmlEscape(servicePath)}</string></dict>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n</dict></plist>\n`;
 }
 
 function systemdQuote(value) {
