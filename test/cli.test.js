@@ -32,6 +32,14 @@ async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-cli-test-'));
 }
 
+function cliEnv(home) {
+  return {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+  };
+}
+
 async function makeSkill(root, name, body = '# Skill\n') {
   const dir = path.join(root, name);
   await mkdir(dir, { recursive: true });
@@ -76,7 +84,7 @@ test('installed command shows concrete paths for managed symlink projections', a
 
   const { stdout } = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'installed'], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
 
   assert.match(stdout, /bog-hyperframes  \[managed: codex \| in vault\]/);
@@ -99,7 +107,7 @@ test('installed command marks missing managed projections', async () => {
 
   const { stdout } = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'installed'], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
 
   assert.match(stdout, /paper-mcp  \[managed: codex \| in vault\]/);
@@ -128,7 +136,7 @@ test('install --device records a pending assignment without touching remote path
     'codex',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
 
   assert.match(stdout, /Assigned paper-mcp to remote/);
@@ -162,7 +170,7 @@ test('uninstall --device defers cleanup until the remote device reports the remo
     'remote',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
 
   assert.match(stdout, /will apply on that device's next sync/);
@@ -191,7 +199,7 @@ test('scan adopts a newly detected skill when target auto-adoption is enabled', 
     'scan',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
 
   assert.match(stdout, /Auto-adopted new-local from codex/);
@@ -213,7 +221,7 @@ test('matrix shows cross-device assignments and device auto-adoption can be disa
 
   const matrix = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'matrix'], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(matrix.stdout, /Skill\s+\| linux\s+\| macbook/);
   assert.match(matrix.stdout, /paper-mcp\s+\| ✓\s+\| ·/);
@@ -221,7 +229,7 @@ test('matrix shows cross-device assignments and device auto-adoption can be disa
 
   const adoption = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'auto-adopt', 'off'], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(adoption.stdout, /Auto-adoption on macbook: off/);
   assert.equal((await loadDevice(vault, 'macbook')).targets.codex.auto_import, false);
@@ -236,7 +244,7 @@ test('matrix --edit requires an interactive terminal', async () => {
   await assert.rejects(
     () => execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'matrix', '--edit'], {
       cwd: path.resolve('.'),
-      env: { ...process.env, HOME: home },
+      env: cliEnv(home),
     }),
     (error) => {
       assert.match(error.stderr, /matrix editor needs an interactive terminal/);
@@ -261,7 +269,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     '--from-local',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(enabled.stdout, /Global AGENTS\.md profile enabled: macbook/);
   assert.match(enabled.stdout, /Preserved previous local path/);
@@ -277,7 +285,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     'status',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(status.stdout, /macbook: macbook \(synced\)/);
 
@@ -287,7 +295,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     'disable',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(disabled.stdout, /Standalone local copies remain/);
   assert.equal((await lstat(destination)).isFile(), true);
@@ -341,7 +349,7 @@ test('explicit OpenCode import manages that file before linking an existing Code
     opencode,
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(imported.stdout, /Imported global instructions profile: macbook/);
   assert.match(imported.stdout, /Preserved previous local path/);
@@ -357,7 +365,7 @@ test('explicit OpenCode import manages that file before linking an existing Code
     codex,
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(linked.stdout, /Linked .*AGENTS\.md to profile macbook/);
   assert.equal(path.resolve(path.dirname(opencode), await readlink(opencode)), profile);
@@ -369,10 +377,10 @@ test('explicit OpenCode import manages that file before linking an existing Code
     'status',
   ], {
     cwd: path.resolve('.'),
-    env: { ...process.env, HOME: home },
+    env: cliEnv(home),
   });
   assert.match(status.stdout, /codex: ~\/\.codex\/AGENTS\.md \(profile macbook\)/);
-  assert.match(status.stdout, /opencode: ~\/\.config\/opencode\/AGENTS\.md \(profile macbook\)/);
+  assert.ok(status.stdout.includes(`opencode: ${opencode} (profile macbook)`));
 });
 
 test('daemon rejects a non-positive interval instead of entering a tight loop', async () => {
