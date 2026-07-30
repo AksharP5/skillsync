@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/AksharP5/skillsync/compare/v0.5.1...v0.6.0) (2026-07-30)
+
+
+### Features
+
+* add cross-device skill management ([#16](https://github.com/AksharP5/skillsync/issues/16)) ([51b5525](https://github.com/AksharP5/skillsync/commit/51b55254a0462cd34391ce46d962d5cba8329738))
+
 ## [0.5.1](https://github.com/AksharP5/skillsync/compare/v0.5.0...v0.5.1) (2026-07-29)
 
 
