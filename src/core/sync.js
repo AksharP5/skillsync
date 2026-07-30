@@ -1,4 +1,9 @@
-import { applyLinks, scanTargets } from './device.js';
+import {
+  applyLinks,
+  autoImportNewLocalSkills,
+  markDeviceApplied,
+  scanTargets,
+} from './device.js';
 import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
 import { refreshChangedRegistryEntries } from './registry.js';
 
@@ -7,8 +12,13 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
     await pullRebase(vaultPath);
   }
   await refreshChangedRegistryEntries(vaultPath);
-  if (deviceId) await applyLinks({ vaultPath, deviceId });
-  if (deviceId) await scanTargets({ vaultPath, deviceId });
+  let autoImport = { adopted: [], conflicts: [] };
+  if (deviceId) {
+    autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
+    await applyLinks({ vaultPath, deviceId });
+    await markDeviceApplied({ vaultPath, deviceId });
+    await scanTargets({ vaultPath, deviceId });
+  }
   let committed = false;
   let pushed = false;
   let rebasedBeforePush = false;
@@ -20,5 +30,11 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
       rebasedBeforePush = pushResult.rebased;
     }
   }
-  return { committed, pushed, rebasedBeforePush };
+  return {
+    committed,
+    pushed,
+    rebasedBeforePush,
+    autoImported: autoImport.adopted,
+    autoImportConflicts: autoImport.conflicts,
+  };
 }

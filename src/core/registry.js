@@ -1,12 +1,32 @@
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { copyDir, ensureDir, exists, hashDirectory, readJson, readSkillName, removePath, writeJson } from './fs.js';
+import {
+  assertSafePathSegment,
+  copyDir,
+  ensureDir,
+  exists,
+  hashDirectory,
+  readJson,
+  readSkillName,
+  removePath,
+  writeJson,
+} from './fs.js';
 
 export const REGISTRY_FILE = 'registry.json';
+export const VAULT_CONFIG_FILE = 'vault.json';
 
 export function emptyRegistry() {
   return { version: 1, skills: {} };
+}
+
+export function defaultVaultConfig() {
+  return {
+    version: 1,
+    policies: {
+      delete_unassigned_skills: false,
+    },
+  };
 }
 
 export async function ensureVault(vaultPath) {
@@ -15,6 +35,10 @@ export async function ensureVault(vaultPath) {
   const registryPath = path.join(vaultPath, REGISTRY_FILE);
   if (!await exists(registryPath)) {
     await writeJson(registryPath, emptyRegistry());
+  }
+  const vaultConfigPath = path.join(vaultPath, VAULT_CONFIG_FILE);
+  if (!await exists(vaultConfigPath)) {
+    await writeJson(vaultConfigPath, defaultVaultConfig());
   }
 }
 
@@ -36,6 +60,37 @@ export async function saveRegistry(vaultPath, registry) {
   await writeJson(path.join(vaultPath, REGISTRY_FILE), normalizeRegistry(registry));
 }
 
+function normalizeVaultConfig(config) {
+  return {
+    version: 1,
+    policies: {
+      delete_unassigned_skills: Boolean(config?.policies?.delete_unassigned_skills),
+    },
+  };
+}
+
+export async function loadVaultConfig(vaultPath) {
+  await ensureVault(vaultPath);
+  const config = await readJson(path.join(vaultPath, VAULT_CONFIG_FILE), defaultVaultConfig());
+  return normalizeVaultConfig(config);
+}
+
+export async function saveVaultConfig(vaultPath, config) {
+  await ensureVault(vaultPath);
+  const normalized = normalizeVaultConfig(config);
+  await writeJson(path.join(vaultPath, VAULT_CONFIG_FILE), normalized);
+  return normalized;
+}
+
+export async function setVaultPolicy({ vaultPath, name, enabled }) {
+  if (name !== 'delete_unassigned_skills') {
+    throw new Error(`Unknown vault policy: ${name}`);
+  }
+  const config = await loadVaultConfig(vaultPath);
+  config.policies[name] = Boolean(enabled);
+  return saveVaultConfig(vaultPath, config);
+}
+
 export async function validateSkillFolder(sourcePath) {
   const skillFile = path.join(sourcePath, 'SKILL.md');
   try {
@@ -52,8 +107,10 @@ export async function validateSkillFolder(sourcePath) {
 export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   await ensureVault(vaultPath);
   await validateSkillFolder(sourcePath);
-  const skillName = name || await readSkillName(sourcePath);
-  if (!skillName) throw new Error(`Could not derive a skill name from ${sourcePath}`);
+  const skillName = assertSafePathSegment(
+    name || await readSkillName(sourcePath),
+    'Skill name',
+  );
   const destination = path.join(vaultPath, 'skills', skillName);
   const sourceHash = await hashDirectory(sourcePath);
   if (!await exists(destination)) {
@@ -95,6 +152,7 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
 }
 
 export async function ensureSkillInRegistry(vaultPath, skillName) {
+  assertSafePathSegment(skillName, 'Skill name');
   const registry = await loadRegistry(vaultPath);
   registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
   await saveRegistry(vaultPath, registry);
@@ -102,6 +160,7 @@ export async function ensureSkillInRegistry(vaultPath, skillName) {
 }
 
 export async function registryEntryForSkill(vaultPath, skillName) {
+  assertSafePathSegment(skillName, 'Skill name');
   const skillPath = path.join(vaultPath, 'skills', skillName);
   await validateSkillFolder(skillPath);
   return {
@@ -118,7 +177,7 @@ export async function rebuildRegistry(vaultPath) {
   const registry = emptyRegistry();
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const skillName = entry.name;
+    const skillName = assertSafePathSegment(entry.name, 'Skill name');
     if (!await exists(path.join(skillsDir, skillName, 'SKILL.md'))) continue;
     registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
   }
@@ -139,6 +198,7 @@ export async function refreshChangedRegistryEntries(vaultPath) {
 }
 
 export async function deleteSkillFromVault({ vaultPath, skillName }) {
+  assertSafePathSegment(skillName, 'Skill name');
   await ensureVault(vaultPath);
   await removePath(path.join(vaultPath, 'skills', skillName));
   const registry = await loadRegistry(vaultPath);
@@ -156,6 +216,14 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
     if (!changed) continue;
     delete device.installed?.[skillName];
     if (Array.isArray(device.global_installed)) device.global_installed = device.global_installed.filter((name) => name !== skillName);
+    const desiredGeneration = Number(device.desired_generation);
+    const appliedGeneration = Number(device.applied_generation);
+    device.desired_generation = Number.isInteger(desiredGeneration) && desiredGeneration >= 0
+      ? desiredGeneration + 1
+      : 1;
+    device.applied_generation = Number.isInteger(appliedGeneration) && appliedGeneration >= 0
+      ? appliedGeneration
+      : 0;
     await writeJson(filePath, device);
   }
 }

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { ensureDir, exists, readJson, writeJson } from './fs.js';
+import { assertSafePathSegment, ensureDir, exists, readJson, writeJson } from './fs.js';
 import { loadRegistry } from './registry.js';
 
 const GROUPS_CONFIG_FILE = 'groups.json';
@@ -162,8 +162,9 @@ async function loadGroupsConfig(vaultPath) {
 
 function normalizePacks(packConfig, skillNames) {
   const available = new Set(skillNames);
-  const packs = {};
+  const packs = Object.create(null);
   for (const [packName, raw] of Object.entries(packConfig)) {
+    assertSafePathSegment(packName, 'Pack name');
     const pack = Array.isArray(raw) ? { title: titleCase(packName), skills: raw } : raw;
     const skills = [...new Set((pack.skills || []).filter((name) => available.has(name)))].sort();
     if (!skills.length) continue;
@@ -204,7 +205,7 @@ function normalizeSource(source) {
 }
 
 function buildCategories({ configuredCategories, packs, skillNames }) {
-  const categories = {};
+  const categories = Object.create(null);
   for (const [category, names] of Object.entries(configuredCategories)) {
     if (!Array.isArray(names)) continue;
     categories[category] = names.filter((name) => skillNames.includes(name)).sort();
