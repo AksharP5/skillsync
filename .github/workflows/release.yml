@@ -32,15 +32,16 @@ jobs:
         if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.sha }}
 
-      - name: Verify recovery version
+      - name: Verify recovery release
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           VERSION: ${{ inputs.version }}
         run: |
+          test "$GITHUB_REF" = "refs/heads/main"
           test "$(node -p "require('./package.json').version")" = "$VERSION"
-          test "$(git describe --tags --exact-match)" = "v$VERSION"
+          git rev-parse --verify "refs/tags/v$VERSION^{commit}" >/dev/null
+          git diff --quiet "v$VERSION" -- LICENSE README.md package.json src
 
       - uses: actions/setup-node@v4
         if: ${{ steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
