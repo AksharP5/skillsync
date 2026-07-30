@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/AksharP5/skillsync/compare/v0.10.0...v0.10.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* detect Claude from the local executable ([#35](https://github.com/AksharP5/skillsync/pull/35)) ([678b146](https://github.com/AksharP5/skillsync/commit/678b146aa82a265e1fd5b712039965785ae9b03e))
+* keep device filesystem paths private ([#37](https://github.com/AksharP5/skillsync/pull/37)) ([627be0d](https://github.com/AksharP5/skillsync/commit/627be0d3e7b923353821ec077d145286e583444b))
+
 ## [0.10.0](https://github.com/AksharP5/skillsync/compare/v0.9.0...v0.10.0) (2026-07-30)
 
 
