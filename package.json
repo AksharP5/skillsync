@@ -27,7 +27,7 @@
     "start": "node src/cli.js"
   },
   "dependencies": {
-    "@inquirer/prompts": "^7.3.2"
+    "@inquirer/prompts": "^8.5.2"
   },
   "devDependencies": {},
   "engines": {
