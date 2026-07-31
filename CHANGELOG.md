@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/AksharP5/skillsync/compare/v0.10.1...v0.10.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* support symlinked instruction directories ([#44](https://github.com/AksharP5/skillsync/issues/44)) ([8711c3a](https://github.com/AksharP5/skillsync/commit/8711c3a13c02d63a7e51dafa33b199be6cfa0ddc))
+
 ## [0.10.1](https://github.com/AksharP5/skillsync/compare/v0.10.0...v0.10.1) (2026-07-30)
 
 
