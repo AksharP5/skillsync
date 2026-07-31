@@ -1,6 +1,12 @@
 import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { setTimeout as wait } from 'node:timers/promises';
 import path from 'node:path';
+
+import { run } from './git.js';
+
+const launchctlBootstrapAttempts = 20;
+const launchctlBootstrapDelay = 250;
 
 function splitPath(pathValue) {
   return String(pathValue || '')
@@ -32,6 +38,23 @@ export async function daemonInvocation({
     return { command: stableCli, args: ['daemon'] };
   }
   return { command: execPath, args: [cliPath, 'daemon'] };
+}
+
+export async function bootstrapLaunchAgent({
+  domain,
+  plistPath,
+  runCommand = run,
+  waitFor = wait,
+}) {
+  for (let attempt = 1; attempt <= launchctlBootstrapAttempts; attempt += 1) {
+    try {
+      return await runCommand('launchctl', ['bootstrap', domain, plistPath]);
+    } catch (error) {
+      const busy = /Bootstrap failed: 5: Input\/output error/.test(error?.message || String(error));
+      if (!busy || attempt === launchctlBootstrapAttempts) throw error;
+      await waitFor(launchctlBootstrapDelay);
+    }
+  }
 }
 
 function xmlEscape(value) {
