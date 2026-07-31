@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/AksharP5/skillsync/compare/v0.10.4...v0.10.5) (2026-07-31)
+
+
+### Bug Fixes
+
+* **cli:** document complete agent setup ([#50](https://github.com/AksharP5/skillsync/issues/50)) ([55df488](https://github.com/AksharP5/skillsync/commit/55df4886b29702ac98ae20849b2635b61aef7e5f))
+
 ## [0.10.4](https://github.com/AksharP5/skillsync/compare/v0.10.3...v0.10.4) (2026-07-31)
 
 
