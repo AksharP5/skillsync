@@ -833,6 +833,8 @@ test('global instruction links work through a symlinked config directory', async
 
   assert.equal(await readFile(opencode, 'utf8'), '# Shared instructions\n');
   assert.equal(await realpath(opencode), await realpath(profile));
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal(await readFile(opencode, 'utf8'), '# Shared instructions\n');
 });
 
 test('global instruction discovery inventories managed and differing provider files', async () => {
