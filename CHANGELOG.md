@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/AksharP5/skillsync/compare/v0.10.2...v0.10.3) (2026-07-31)
+
+
+### Bug Fixes
+
+* recognize canonical instruction links ([#46](https://github.com/AksharP5/skillsync/issues/46)) ([32132c7](https://github.com/AksharP5/skillsync/commit/32132c75aa9ae2f24eb24beed895dd91e9beab24))
+
 ## [0.10.2](https://github.com/AksharP5/skillsync/compare/v0.10.1...v0.10.2) (2026-07-31)
 
 
