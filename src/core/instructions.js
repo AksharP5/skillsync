@@ -124,6 +124,11 @@ function profileFromVaultPath(vaultPath, source) {
 async function ownedProfileAt(destination, vaultPath) {
   const info = await pathInfo(destination);
   if (!info?.isSymbolicLink()) return null;
+  const resolved = await optionalRealpath(destination);
+  if (resolved) {
+    const canonicalVault = await optionalRealpath(vaultPath);
+    return profileFromVaultPath(canonicalVault || vaultPath, resolved);
+  }
   const link = await readlink(destination);
   return profileFromVaultPath(
     vaultPath,
