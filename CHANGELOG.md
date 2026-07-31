@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/AksharP5/skillsync/compare/v0.10.3...v0.10.4) (2026-07-31)
+
+
+### Bug Fixes
+
+* retry busy launchd bootstrap ([#48](https://github.com/AksharP5/skillsync/issues/48)) ([3cb07a9](https://github.com/AksharP5/skillsync/commit/3cb07a9a153d39fa729e1988c627994ad303ac32))
+
 ## [0.10.3](https://github.com/AksharP5/skillsync/compare/v0.10.2...v0.10.3) (2026-07-31)
 
 
