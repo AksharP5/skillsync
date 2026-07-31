@@ -71,7 +71,7 @@ import {
   validateSkillFolder,
 } from './core/registry.js';
 import { cloneSkillSource, discoverSkillFolders, importSourceForAgent, isRemoteSkillSource, selectDiscoveredSkills, supportedImportSources } from './core/source.js';
-import { daemonInvocation, renderLaunchAgent, renderSystemdUserService } from './core/service.js';
+import { bootstrapLaunchAgent, daemonInvocation, renderLaunchAgent, renderSystemdUserService } from './core/service.js';
 import { syncVault } from './core/sync.js';
 
 const args = process.argv.slice(2);
@@ -1520,7 +1520,7 @@ async function service(rest) {
     await writeFile(plistPath, plist);
     const domain = `gui/${process.getuid()}`;
     await run('launchctl', ['bootout', `${domain}/${label}`]).catch(() => {});
-    await run('launchctl', ['bootstrap', domain, plistPath]);
+    await bootstrapLaunchAgent({ domain, plistPath });
     await run('launchctl', ['kickstart', '-k', `${domain}/${label}`]);
     console.log(`Installed LaunchAgent: ${plistPath}`);
     return;

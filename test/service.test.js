@@ -5,10 +5,49 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  bootstrapLaunchAgent,
   daemonInvocation,
   renderLaunchAgent,
   renderSystemdUserService,
 } from '../src/core/service.js';
+
+test('bootstrapLaunchAgent retries while launchd finishes unloading', async () => {
+  const calls = [];
+  const waits = [];
+  const result = await bootstrapLaunchAgent({
+    domain: 'gui/501',
+    plistPath: '/Users/test/Library/LaunchAgents/dev.skillsync.daemon.plist',
+    runCommand: async (command, args) => {
+      calls.push([command, args]);
+      if (calls.length < 3) {
+        throw new Error('Bootstrap failed: 5: Input/output error');
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    },
+    waitFor: async (duration) => waits.push(duration),
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(waits, [250, 250]);
+});
+
+test('bootstrapLaunchAgent preserves non-transient launchctl failures', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => bootstrapLaunchAgent({
+      domain: 'gui/501',
+      plistPath: '/invalid.plist',
+      runCommand: async () => {
+        calls += 1;
+        throw new Error('Bootstrap failed: 5: Permission denied');
+      },
+      waitFor: async () => {},
+    }),
+    /Permission denied/,
+  );
+  assert.equal(calls, 1);
+});
 
 test('daemonInvocation prefers the stable skillsync executable on PATH', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-service-test-'));
