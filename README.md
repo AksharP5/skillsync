@@ -4,6 +4,23 @@ Keep the same AI agent skills available across all of your devices.
 
 SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, or any custom skill folder, and keeps every device in sync in the background.
 
+## Start with an agent
+
+Paste this into any terminal-capable coding agent:
+
+```text
+Set up SkillSync completely on this device.
+
+1. Check for Node.js 20 or newer, Git, GitHub CLI, and an authenticated `gh auth status`. Stop and tell me what is missing before continuing.
+2. Ask whether I already have a SkillSync vault. If I do, run `npx -y @akshar5/skillsync@latest setup --repo OWNER/REPO`. Otherwise, run `npx -y @akshar5/skillsync@latest setup`.
+3. Let setup detect my Codex, OpenCode, Claude Code, and Hermes skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
+4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
+5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex and OpenCode AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file.
+6. Verify `skillsync doctor`, `skillsync status`, `skillsync matrix`, `skillsync instructions status`, and the background service. Report the vault, detected targets, auto-adoption settings, instruction profile, service state, and anything that still needs my decision.
+```
+
+The `npx` command starts setup without requiring an existing installation. The global installation gives the background service a stable executable to run.
+
 ## Quick start
 
 Requirements:
@@ -16,28 +33,25 @@ Requirements:
 Install SkillSync:
 
 ```bash
-npm install -g @akshar5/skillsync
+npm install -g @akshar5/skillsync@latest
 ```
 
-Connect this device to an existing vault:
-
-```bash
-skillsync setup --repo OWNER/skills
-```
-
-Or let SkillSync create or select a private vault interactively:
+Create or select a private vault and detect supported agent folders:
 
 ```bash
 skillsync setup
 ```
 
-Add the local skill folders you want SkillSync to manage:
+Connect to an existing SkillSync vault instead:
 
 ```bash
-skillsync target add codex ~/.codex/skills
-skillsync target add claude ~/.claude/skills
-skillsync target add opencode ~/.config/opencode/skills
-skillsync target add hermes ~/.hermes/skills/personal --scan-path ~/.hermes/skills
+skillsync setup --repo OWNER/REPO
+```
+
+Setup detects Codex, Claude Code, OpenCode, and Hermes folders. Add a custom skill folder only when needed:
+
+```bash
+skillsync target add my-agent ~/.config/my-agent/skills
 ```
 
 Then install the background service:
@@ -46,7 +60,7 @@ Then install the background service:
 skillsync service install
 ```
 
-Repeat those steps on each device using the same private vault.
+Repeat the install, existing-vault setup, and service steps on each device.
 
 ## Interactive UI
 
@@ -67,11 +81,11 @@ skillsync matrix
 The matrix gives you one clean view of your vault:
 
 ```text
-Skill             | archlinux | devbox | macbook
-------------------+-----------+--------+--------
-paper-mcp         | ✓         | ·      | ✓
-product-video     | ○         | ·      | ·
-terminal-control  | ✓         | ✓      | ✓
+Skill          | laptop | workstation | server
+---------------+--------+-------------+-------
+git-helper     | ✓      | ·           | ✓
+docs-writer    | ○      | ·           | ·
+terminal-tools | ✓      | ✓           | ✓
 
 ✓ assigned  ○ detected locally  · absent
 ```
@@ -105,7 +119,7 @@ Codex and OpenCode use `AGENTS.md`. When the Claude Code executable is installed
 Import the version already used by a device:
 
 ```bash
-skillsync instructions import --name macbook --from ~/.config/opencode/AGENTS.md
+skillsync instructions import --name laptop --from ~/.config/opencode/AGENTS.md
 ```
 
 If Codex and OpenCode on that device should use the same profile, link the other global path:
@@ -117,20 +131,20 @@ skillsync instructions link ~/.codex/AGENTS.md
 Import another device’s different version under another name, or switch it to an existing profile:
 
 ```bash
-skillsync instructions import --name linux --from ~/.codex/AGENTS.md
-skillsync instructions use macbook
+skillsync instructions import --name workstation --from ~/.codex/AGENTS.md
+skillsync instructions use laptop
 ```
 
 You can also select the profile used by another device. Remote assignments apply when that device next syncs:
 
 ```bash
-skillsync instructions use-device macbook --device linux
+skillsync instructions use-device laptop --device workstation
 ```
 
 Exact-content imports reuse an existing profile by default. If a device sharing a profile should diverge, fork it before editing:
 
 ```bash
-skillsync instructions fork linux-personal
+skillsync instructions fork workstation-personal
 ```
 
 Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and unmanaged global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups and never overwrites unmanaged replacements during background sync.
@@ -142,7 +156,7 @@ After a profile switch, the old profile remains available while any device still
 Add a local skill folder to the vault:
 
 ```bash
-skillsync add ~/path/to/my-skill --skill my-skill
+skillsync add ~/path/to/my-skill --name my-skill
 ```
 
 Add a skill from GitHub:
@@ -219,14 +233,14 @@ List registered devices and their sync state:
 
 ```bash
 skillsync device list
-skillsync device show archlinux
+skillsync device show workstation
 ```
 
 Assign or remove a skill on another device:
 
 ```bash
-skillsync install my-skill --device archlinux --target codex
-skillsync uninstall my-skill --device archlinux --target codex
+skillsync install my-skill --device workstation --target codex
+skillsync uninstall my-skill --device workstation --target codex
 ```
 
 This changes the desired assignment in the private vault; it does not require SSH. If the other device is offline, the change remains pending. Its SkillSync service pulls and applies the assignment the next time it runs.
@@ -280,7 +294,7 @@ Inspect the current configuration:
 ```bash
 skillsync status
 skillsync installed
-skillsync installed --device archlinux
+skillsync installed --device workstation
 ```
 
 The background service syncs when it starts and then checks every 120 seconds. It uses a macOS LaunchAgent or a Linux systemd user service.
@@ -300,28 +314,34 @@ systemctl --user status skillsync.service --no-pager
 ## Command reference
 
 ```text
-skillsync
-skillsync setup [--name skills] [--repo owner/repo|url]
+skillsync                 Open TUI
+skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]
+skillsync connect <owner/repo|url> [--path path]
 skillsync status
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]
 skillsync instructions status
 skillsync instructions profiles
-skillsync instructions import [--name profile] [--from path] [--to path]
-skillsync instructions use <profile> [--device id]
+skillsync instructions import [--name profile] [--from path] [--to path] [--separate]
+skillsync instructions use <profile> [--device id] [--path path]
 skillsync instructions use-device <source-device> [--device target-device]
 skillsync instructions fork [profile]
 skillsync instructions link <path>
 skillsync instructions unlink <path>
+skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]
 skillsync instructions disable [--device id]
 skillsync device list
 skillsync device show <id>
-skillsync add <folder-or-git-url> [--skill name] [--target target] [--global]
-skillsync import <hermes|codex|opencode>
-skillsync install <skill> [--device id] [--target codex,claude] [--global]
-skillsync uninstall <skill> [--device id] [--target codex,claude] [--global]
-skillsync delete <skill>
+skillsync groups [--summary]
+skillsync pack list
+skillsync pack show <pack>
+skillsync pack install <pack> [--target targets] [--global]
+skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]
+skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]
+skillsync install <skill> [--device id] [--target targets] [--global]
+skillsync uninstall <skill> [--device id] [--target targets] [--global]
+skillsync delete <skill> [--yes]
 skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]
 skillsync target remove <name>
 skillsync target auto-adopt <name> <on|off>
@@ -331,6 +351,7 @@ skillsync policy set delete-unassigned-skills <on|off>
 skillsync scan
 skillsync sync
 skillsync service install
+skillsync doctor
 skillsync daemon
 ```
 
