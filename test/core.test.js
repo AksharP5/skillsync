@@ -6,6 +6,7 @@ import {
   mkdir,
   readFile,
   readlink,
+  realpath,
   symlink,
   unlink,
   writeFile,
@@ -796,6 +797,42 @@ test('one device profile can safely project to both Codex and OpenCode global pa
   assert.equal(await readFile(opencode, 'utf8'), '# Device profile\n');
   const device = await loadLocalDevice(vault, 'macbook');
   assert.deepEqual(device.instructions.agents.paths, [codex, opencode]);
+});
+
+test('global instruction links work through a symlinked config directory', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const home = path.join(root, 'home');
+  const config = path.join(root, 'dotfiles');
+  const source = path.join(root, 'source', 'AGENTS.md');
+  const codex = path.join(home, '.codex', 'AGENTS.md');
+  const opencode = path.join(home, '.config', 'opencode', 'AGENTS.md');
+  await mkdir(path.dirname(source), { recursive: true });
+  await mkdir(path.dirname(codex), { recursive: true });
+  await mkdir(path.join(config, 'opencode'), { recursive: true });
+  await writeFile(source, '# Shared instructions\n');
+  await symlink(config, path.join(home, '.config'), 'dir');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    sourcePath: source,
+    targetPaths: [codex],
+  });
+
+  const profile = globalInstructionsVaultPath(vault, 'shared');
+  await symlink(path.relative(path.dirname(opencode), profile), opencode, 'file');
+  await assert.rejects(() => readFile(opencode), { code: 'ENOENT' });
+
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    targetPaths: [codex, opencode],
+  });
+
+  assert.equal(await readFile(opencode, 'utf8'), '# Shared instructions\n');
+  assert.equal(await realpath(opencode), await realpath(profile));
 });
 
 test('global instruction discovery inventories managed and differing provider files', async () => {

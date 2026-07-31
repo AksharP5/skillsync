@@ -4,6 +4,7 @@ import {
   readFile,
   readdir,
   readlink,
+  realpath,
   rename,
   symlink,
   writeFile,
@@ -83,6 +84,13 @@ async function pathInfo(filePath) {
   });
 }
 
+async function optionalRealpath(filePath) {
+  return realpath(filePath).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+}
+
 async function sameContents(left, right) {
   const contents = await Promise.all([
     readOptionalFile(left),
@@ -124,7 +132,13 @@ async function ownedProfileAt(destination, vaultPath) {
 }
 
 async function isSelectedProfileLink(destination, vaultPath, profile) {
-  return await ownedProfileAt(destination, vaultPath) === profile;
+  if (await ownedProfileAt(destination, vaultPath) !== profile) return false;
+  const source = globalInstructionsVaultPath(vaultPath, profile);
+  const resolved = await Promise.all([
+    optionalRealpath(destination),
+    optionalRealpath(source),
+  ]);
+  return Boolean(resolved[0] && resolved[0] === resolved[1]);
 }
 
 export async function deviceHasClaude({
@@ -331,7 +345,11 @@ async function backupPath(destination) {
 
 async function createOwnedInstructionsSymlink(source, destination) {
   await ensureDir(path.dirname(destination));
-  const relative = path.relative(path.dirname(destination), source);
+  const [parent, target] = await Promise.all([
+    realpath(path.dirname(destination)),
+    realpath(source),
+  ]);
+  const relative = path.relative(parent, target);
   await symlink(relative, destination, 'file');
 }
 
