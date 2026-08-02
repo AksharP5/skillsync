@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor']);
 
 export function expandHome(value) {
   if (!value) return value;
