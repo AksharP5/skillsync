@@ -139,6 +139,8 @@ test('audit --json reports standards findings and active catalog cost', async ()
 test('cleanup previews then consolidates identical target copies', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
+  const hermesRoot = path.join(home, '.hermes', 'skills');
+  const hermes = path.join(hermesRoot, 'personal');
   const agents = path.join(home, '.agents', 'skills');
   const codex = path.join(home, '.codex', 'skills');
   const deviceId = 'test-device';
@@ -147,6 +149,8 @@ test('cleanup previews then consolidates identical target copies', async () => {
   await makeSkill(codex, 'review', '# Identical\n');
   await makeSkill(agents, 'draft', '# Agents version\n');
   await makeSkill(codex, 'draft', '# Codex version\n');
+  await makeSkill(path.join(hermesRoot, 'creative'), 'unique', '# Unique\n');
+  await addTarget({ vaultPath: vault, deviceId, name: 'hermes', targetPath: hermes, scanPath: hermesRoot });
   await addTarget({ vaultPath: vault, deviceId, name: 'agents', targetPath: agents });
   await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: codex });
 
@@ -158,16 +162,19 @@ test('cleanup previews then consolidates identical target copies', async () => {
   assert.match(preview.stdout, /draft: conflicting copies left unchanged/);
   assert.equal((await lstat(path.join(agents, 'review'))).isSymbolicLink(), false);
 
-  const applied = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'cleanup', '--apply'], {
+  const applied = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'cleanup', '--all', '--apply'], {
     cwd: path.resolve('.'),
     env: cliEnv(home),
   });
-  assert.match(applied.stdout, /Cleaned 1 duplicate skill/);
+  assert.match(applied.stdout, /Canonicalized 2 skills/);
   assert.equal((await lstat(path.join(agents, 'review'))).isSymbolicLink(), true);
   assert.equal((await lstat(path.join(codex, 'review'))).isSymbolicLink(), true);
   assert.equal((await lstat(path.join(agents, 'draft'))).isSymbolicLink(), false);
   assert.equal((await lstat(path.join(codex, 'draft'))).isSymbolicLink(), false);
   assert.ok((await loadRegistry(vault)).skills.review);
+  assert.ok((await loadRegistry(vault)).skills.unique);
+  await assert.rejects(() => lstat(path.join(hermesRoot, 'creative', 'unique')));
+  assert.equal((await lstat(path.join(hermes, 'unique'))).isSymbolicLink(), true);
 });
 
 test('pack apply previews by default and exactly reconciles only with --apply', async () => {

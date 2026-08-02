@@ -1,11 +1,11 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import { applyLinks, installSkill, managedProjections, scanTargets } from './device.js';
 import { exists, expandHome, hashDirectory, removePath } from './fs.js';
 import { addSkillToVault } from './registry.js';
 
-export async function planDuplicateCleanup({ vaultPath, device }) {
+export async function planDuplicateCleanup({ vaultPath, device, includeUnique = false }) {
   const managed = new Set((await managedProjections({ vaultPath, deviceId: device.device_id }))
     .filter((projection) => projection.status === 'ok')
     .map((projection) => `${projection.targetName}\0${projection.skillName}`));
@@ -13,10 +13,8 @@ export async function planDuplicateCleanup({ vaultPath, device }) {
 
   for (const [targetName, target] of Object.entries(device.targets || {})) {
     const root = path.resolve(expandHome(target.scan_path || target.path));
-    const installRoot = path.resolve(expandHome(target.path));
     for (const skill of device.detected?.[targetName] || []) {
       const copyPath = path.resolve(root, skill.path);
-      if (copyPath !== path.join(installRoot, skill.name)) continue;
       if (!copiesByName.has(skill.name)) copiesByName.set(skill.name, []);
       copiesByName.get(skill.name).push({ target: targetName, path: copyPath });
     }
@@ -25,7 +23,7 @@ export async function planDuplicateCleanup({ vaultPath, device }) {
   const actions = [];
   const conflicts = [];
   for (const [name, copies] of copiesByName) {
-    if (copies.length < 2) continue;
+    if (!includeUnique && copies.length < 2) continue;
     const vaultSkill = path.join(vaultPath, 'skills', name);
     const vaultExists = await exists(vaultSkill);
     const unmanaged = copies.filter((copy) => !managed.has(`${copy.target}\0${name}`));
@@ -48,6 +46,7 @@ export async function planDuplicateCleanup({ vaultPath, device }) {
           break;
         }
       }
+      if (!source) source = await realpath(unmanaged[0].path);
     }
     if (!source) {
       conflicts.push({ name, copies, reason: 'No standalone directory is available as the canonical source' });

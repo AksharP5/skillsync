@@ -1375,25 +1375,27 @@ async function auditCommand(rest) {
 async function cleanupCommand(rest) {
   const config = await configured();
   const apply = hasFlag(rest, '--apply');
+  const includeUnique = hasFlag(rest, '--all');
   await scanTargets({ vaultPath: config.repoPath, deviceId: config.deviceId });
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
-  const plan = await planDuplicateCleanup({ vaultPath: config.repoPath, device });
+  const plan = await planDuplicateCleanup({ vaultPath: config.repoPath, device, includeUnique });
 
   if (!plan.actions.length) console.log('No identical unmanaged duplicates to clean.');
   for (const action of plan.actions) {
-    console.log(`${apply ? '✓' : '!'} ${action.name}: ${action.paths.length} duplicate${action.paths.length === 1 ? '' : 's'} -> vault (${action.targets.join(', ')})`);
+    const operation = action.paths.length > 1 ? `${action.paths.length} copies` : '1 unmanaged skill';
+    console.log(`${apply ? '✓' : '!'} ${action.name}: ${operation} -> vault (${action.targets.join(', ')})`);
   }
   for (const conflict of plan.conflicts) {
     console.log(`✗ ${conflict.name}: conflicting copies left unchanged${conflict.reason ? ` (${conflict.reason})` : ''}`);
   }
   if (!apply || !plan.actions.length) {
-    if (plan.actions.length) console.log('\nPreview only. Run skillsync cleanup --apply to make these changes.');
+    if (plan.actions.length) console.log(`\nPreview only. Run skillsync cleanup${includeUnique ? ' --all' : ''} --apply to make these changes.`);
     return;
   }
 
   await applyDuplicateCleanup({ vaultPath: config.repoPath, deviceId: config.deviceId, plan });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
-  console.log(`\nCleaned ${plan.actions.length} duplicate skill${plan.actions.length === 1 ? '' : 's'}.`);
+  console.log(`\nCanonicalized ${plan.actions.length} skill${plan.actions.length === 1 ? '' : 's'}.`);
 }
 
 async function updateCommand(rest) {
@@ -2708,5 +2710,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync audit [--json]\n  skillsync cleanup [--apply]\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync pack apply <pack> --target targets [--exact] [--apply]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync update [skill] [--check] [--apply]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync audit [--json]\n  skillsync cleanup [--all] [--apply]\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync pack apply <pack> --target targets [--exact] [--apply]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync update [skill] [--check] [--apply]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }

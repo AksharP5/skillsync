@@ -212,7 +212,11 @@ Consolidate byte-identical copies across configured targets into one vault skill
 ```bash
 skillsync cleanup
 skillsync cleanup --apply
+skillsync cleanup --all
+skillsync cleanup --all --apply
 ```
+
+`--all` also adopts unique unmanaged skills found under configured scan paths, preserving their current target assignments.
 
 ## Reconcile an exact skill pack
 
@@ -354,7 +358,7 @@ skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]
 skillsync connect <owner/repo|url> [--path path]
 skillsync status
 skillsync audit [--json]
-skillsync cleanup [--apply]
+skillsync cleanup [--all] [--apply]
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]
