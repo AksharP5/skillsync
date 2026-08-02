@@ -149,7 +149,10 @@ test('cleanup previews then consolidates identical target copies', async () => {
   await makeSkill(codex, 'review', '# Identical\n');
   await makeSkill(agents, 'draft', '# Agents version\n');
   await makeSkill(codex, 'draft', '# Codex version\n');
-  await makeSkill(path.join(hermesRoot, 'creative'), 'unique', '# Unique\n');
+  const unique = await makeSkill(path.join(hermesRoot, 'creative'), 'unique', '# Unique\n');
+  await mkdir(path.join(unique, 'assets'));
+  await writeFile(path.join(unique, 'assets', 'example.txt'), 'example\n');
+  await symlink('assets', path.join(unique, 'assets-link'), 'dir');
   await addTarget({ vaultPath: vault, deviceId, name: 'hermes', targetPath: hermes, scanPath: hermesRoot });
   await addTarget({ vaultPath: vault, deviceId, name: 'agents', targetPath: agents });
   await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: codex });

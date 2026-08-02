@@ -1167,7 +1167,7 @@ async function createCopyProjection(source, destination, skillName, vaultPath) {
       throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
     }
   }
-  await cp(source, destination, { recursive: true, force: true, dereference: false });
+  await cp(source, destination, { recursive: true, force: true, dereference: false, verbatimSymlinks: true });
   await writeFile(path.join(destination, '.skillsync-owned.json'), JSON.stringify({ skill: skillName, vault: vaultPath }, null, 2));
 }
 
