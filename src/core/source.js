@@ -45,6 +45,17 @@ export function cloneUrlForSource(rawSource) {
   return { cloneUrl, ref };
 }
 
+function sanitizedSourceUrl(cloneUrl) {
+  try {
+    const url = new URL(cloneUrl);
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return cloneUrl;
+  }
+}
+
 export async function cloneSkillSource(rawSource) {
   const { cloneUrl, ref } = cloneUrlForSource(rawSource);
   const dir = await mkdtemp(path.join(tmpdir(), 'skillsync-source-'));
@@ -53,8 +64,12 @@ export async function cloneSkillSource(rawSource) {
   args.push(cloneUrl, dir);
   try {
     await git(args);
+    const { stdout } = await git(['rev-parse', 'HEAD'], dir);
     return {
       path: dir,
+      sourceUrl: sanitizedSourceUrl(cloneUrl),
+      ref,
+      commit: stdout.trim(),
       cleanup: () => rm(dir, { recursive: true, force: true }),
     };
   } catch (error) {

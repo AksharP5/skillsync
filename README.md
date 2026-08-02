@@ -188,6 +188,34 @@ skillsync import hermes
 
 When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly.
 
+Git imports retain their repository, ref, commit, and skill subpath. Check tracked skills without changing the vault, then apply one reviewed update explicitly:
+
+```bash
+skillsync update --check
+skillsync update example-skill
+skillsync update example-skill --apply
+```
+
+## Audit the active catalog
+
+Validate Agent Skills metadata, find duplicate or conflicting copies across configured targets, and estimate the description tokens loaded by each active catalog:
+
+```bash
+skillsync audit
+skillsync audit --json
+```
+
+`skillsync doctor` includes the catalog summary. Audit errors cover malformed frontmatter, non-portable names, directory/name mismatches, missing descriptions, and specification limits. Longer-but-valid descriptions and oversized skill bodies are warnings.
+
+## Reconcile an exact skill pack
+
+Pack application previews changes by default. `--exact` removes SkillSync assignments for skills outside the pack on only the selected targets; unmanaged local folders and assignments on other targets remain untouched.
+
+```bash
+skillsync pack apply core --target codex,claude --exact
+skillsync pack apply core --target codex,claude --exact --apply
+```
+
 ## Automatic skill adoption
 
 New targets automatically adopt new skills created inside their managed folder. For example, if Codex creates `~/.codex/skills/my-new-skill`, the next SkillSync run adds it to the vault, assigns it to Codex on that device, and replaces the standalone folder with a managed projection.
@@ -318,6 +346,7 @@ skillsync                 Open TUI
 skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]
 skillsync connect <owner/repo|url> [--path path]
 skillsync status
+skillsync audit [--json]
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]
@@ -337,11 +366,13 @@ skillsync groups [--summary]
 skillsync pack list
 skillsync pack show <pack>
 skillsync pack install <pack> [--target targets] [--global]
+skillsync pack apply <pack> --target targets [--exact] [--apply]
 skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync install <skill> [--device id] [--target targets] [--global]
 skillsync uninstall <skill> [--device id] [--target targets] [--global]
 skillsync delete <skill> [--yes]
+skillsync update [skill] [--check] [--apply]
 skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]
 skillsync target remove <name>
 skillsync target auto-adopt <name> <on|off>

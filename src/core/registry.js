@@ -105,6 +105,20 @@ export async function validateSkillFolder(sourcePath) {
   }
 }
 
+function normalizeSourceMetadata(source) {
+  if (!source?.url) return undefined;
+  const subpath = source.subpath || '.';
+  if (path.isAbsolute(subpath) || subpath.split(/[\\/]/).includes('..')) {
+    throw new Error(`Skill source subpath must stay inside its repository: ${subpath}`);
+  }
+  return {
+    url: String(source.url),
+    ...(source.ref ? { ref: String(source.ref) } : {}),
+    ...(source.commit ? { commit: String(source.commit) } : {}),
+    subpath,
+  };
+}
+
 export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   await ensureVault(vaultPath);
   await validateSkillFolder(sourcePath);
@@ -128,22 +142,25 @@ export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   };
 }
 
-export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite = false }) {
+export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite = false, source }) {
   const comparison = await compareSkillToVault({ vaultPath, sourcePath, name });
   if (comparison.status === 'different' && !overwrite) {
     throw new Error(`Skill already exists in vault with different content: ${comparison.name}`);
   }
   if (comparison.status === 'identical') {
     const registry = await loadRegistry(vaultPath);
-    if (!registry.skills[comparison.name] || registry.skills[comparison.name].hash !== comparison.vaultHash) {
-      registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+    const sourceMetadata = normalizeSourceMetadata(source) || registry.skills[comparison.name]?.source;
+    if (!registry.skills[comparison.name]
+      || registry.skills[comparison.name].hash !== comparison.vaultHash
+      || JSON.stringify(registry.skills[comparison.name].source) !== JSON.stringify(sourceMetadata)) {
+      registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name, { source: sourceMetadata });
       await saveRegistry(vaultPath, registry);
     }
     return { name: comparison.name, path: comparison.path, status: 'identical' };
   }
   await copyDir(sourcePath, comparison.path);
   const registry = await loadRegistry(vaultPath);
-  registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+  registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name, { source });
   await saveRegistry(vaultPath, registry);
   return {
     name: comparison.name,
@@ -155,24 +172,30 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
 export async function ensureSkillInRegistry(vaultPath, skillName) {
   assertSafePathSegment(skillName, 'Skill name');
   const registry = await loadRegistry(vaultPath);
-  registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
+  registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName, {
+    source: registry.skills[skillName]?.source,
+  });
   await saveRegistry(vaultPath, registry);
   return registry.skills[skillName];
 }
 
-export async function registryEntryForSkill(vaultPath, skillName) {
+export async function registryEntryForSkill(vaultPath, skillName, { source } = {}) {
   assertSafePathSegment(skillName, 'Skill name');
   const skillPath = path.join(vaultPath, 'skills', skillName);
   await validateSkillFolder(skillPath);
-  return {
+  const entry = {
     path: path.posix.join('skills', skillName),
     hash: await hashDirectory(skillPath),
     updated_at: new Date().toISOString(),
   };
+  const sourceMetadata = normalizeSourceMetadata(source);
+  if (sourceMetadata) entry.source = sourceMetadata;
+  return entry;
 }
 
 export async function rebuildRegistry(vaultPath) {
   await ensureVault(vaultPath);
+  const previous = await loadRegistry(vaultPath);
   const skillsDir = path.join(vaultPath, 'skills');
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const registry = emptyRegistry();
@@ -180,7 +203,9 @@ export async function rebuildRegistry(vaultPath) {
     if (!entry.isDirectory()) continue;
     const skillName = assertSafePathSegment(entry.name, 'Skill name');
     if (!await exists(path.join(skillsDir, skillName, 'SKILL.md'))) continue;
-    registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
+    registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName, {
+      source: previous.skills[skillName]?.source,
+    });
   }
   await saveRegistry(vaultPath, registry);
   return registry;

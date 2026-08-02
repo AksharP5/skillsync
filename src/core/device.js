@@ -741,8 +741,10 @@ export async function setSkillTargets({ vaultPath, deviceId = defaultDeviceId(),
   const registry = await loadRegistry(vaultPath);
   if (!registry.skills[skillName]) throw new Error(`Skill not found in vault: ${skillName}`);
   const device = await loadDevice(vaultPath, deviceId);
-  const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
-  const { selectedTargets, wantsGlobalInstall } = await validateRequestedTargets(device, requestedTargets);
+  const requestedTargets = targets === undefined ? Object.keys(device.targets) : targets;
+  const { selectedTargets, wantsGlobalInstall } = requestedTargets.length
+    ? await validateRequestedTargets(device, requestedTargets)
+    : { selectedTargets: [], wantsGlobalInstall: false };
   const previousTargets = device.installed[skillName] || [];
   const previousGlobal = (device.global_installed || []).includes(skillName);
   const changed = JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)

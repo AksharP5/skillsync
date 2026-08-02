@@ -114,6 +114,56 @@ test('installed command marks missing managed projections', async () => {
   assert.match(stdout, /codex: .*paper-mcp \(missing; run skillsync sync\)/);
 });
 
+test('audit --json reports standards findings and active catalog cost', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const target = path.join(home, '.codex', 'skills');
+  const deviceId = 'test-device';
+  await writeConfig(home, vault, deviceId);
+  await makeSkill(path.join(vault, 'skills'), 'review', '---\nname: review\ndescription: Review code changes.\n---\n# Review\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'review', targets: ['codex'] });
+
+  const { stdout } = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'audit', '--json'], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.summary.errors, 0);
+  assert.equal(result.targets.codex.assignedSkills, 1);
+  assert.ok(result.targets.codex.estimatedDescriptionTokens > 0);
+});
+
+test('pack apply previews by default and exactly reconciles only with --apply', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const target = path.join(home, '.codex', 'skills');
+  const deviceId = 'test-device';
+  await writeConfig(home, vault, deviceId);
+  await makeSkill(path.join(vault, 'skills'), 'review');
+  await makeSkill(path.join(vault, 'skills'), 'legacy');
+  await rebuildRegistry(vault);
+  await mkdir(path.join(vault, 'packs'), { recursive: true });
+  await writeFile(path.join(vault, 'packs', 'core.json'), JSON.stringify({ name: 'core', skills: ['review'] }));
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'legacy', targets: ['codex'] });
+
+  const preview = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'), 'pack', 'apply', 'core', '--target', 'codex', '--exact',
+  ], { cwd: path.resolve('.'), env: cliEnv(home) });
+  assert.match(preview.stdout, /Dry run only/);
+  assert.deepEqual((await loadDevice(vault, deviceId)).installed.legacy, ['codex']);
+
+  await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'), 'pack', 'apply', 'core', '--target', 'codex', '--exact', '--apply',
+  ], { cwd: path.resolve('.'), env: cliEnv(home) });
+  const device = await loadDevice(vault, deviceId);
+  assert.deepEqual(device.installed.review, ['codex']);
+  assert.equal(device.installed.legacy, undefined);
+});
+
 test('install --device records a pending assignment without touching remote paths', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');

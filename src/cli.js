@@ -5,6 +5,7 @@ import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
 import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
+import { auditCatalog } from './core/audit.js';
 import {
   addTarget,
   applyLinks,
@@ -40,6 +41,7 @@ import {
 } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { generateGroups } from './core/groups.js';
+import { planPackApplication } from './core/packs.js';
 import {
   DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
   DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
@@ -73,6 +75,7 @@ import {
 import { cloneSkillSource, discoverSkillFolders, importSourceForAgent, isRemoteSkillSource, selectDiscoveredSkills, supportedImportSources } from './core/source.js';
 import { bootstrapLaunchAgent, daemonInvocation, renderLaunchAgent, renderSystemdUserService } from './core/service.js';
 import { syncVault } from './core/sync.js';
+import { inspectSkillUpdate } from './core/update.js';
 
 const args = process.argv.slice(2);
 
@@ -94,6 +97,8 @@ async function main() {
       return connect(rest);
     case 'status':
       return status();
+    case 'audit':
+      return auditCommand(rest);
     case 'list':
       return listSkills();
     case 'installed':
@@ -121,6 +126,8 @@ async function main() {
       return uninstall(rest);
     case 'delete':
       return deleteSkill(rest);
+    case 'update':
+      return updateCommand(rest);
     case 'target':
       return target(rest);
     case 'auto-adopt':
@@ -524,6 +531,9 @@ async function loadPack(config, packName) {
   if (!pack?.name || !Array.isArray(pack.skills)) {
     throw new Error(`Invalid pack manifest: ${packPath}`);
   }
+  const registry = await loadRegistry(config.repoPath);
+  const missing = pack.skills.filter((skillName) => !registry.skills[skillName]);
+  if (missing.length) throw new Error(`Pack contains skills missing from the vault: ${missing.join(', ')}`);
   return pack;
 }
 
@@ -568,7 +578,50 @@ async function packCommand(rest) {
     console.log(`Installed pack ${pack.name} (${pack.skills.length} skills).`);
     return;
   }
-  throw new Error('Usage: skillsync pack list|show <pack>|install <pack> [--target codex,claude] [--global]');
+  if (sub === 'apply') {
+    const packName = rest[1];
+    if (!packName) throw new Error('Usage: skillsync pack apply <pack> --target codex,claude [--exact] [--apply]');
+    const targets = parseTargets(rest.slice(2));
+    if (!targets?.length) throw new Error('Pack apply requires --target <targets> or --global');
+    const deviceId = requestedDeviceId(config, rest);
+    await pullBeforeRemoteEdit(config, deviceId);
+    const device = await requireKnownDevice(config.repoPath, deviceId);
+    for (const targetName of targets.filter((targetName) => targetName !== 'global')) {
+      if (!device.targets?.[targetName]) throw new Error(`Unknown target on ${deviceId}: ${targetName}`);
+    }
+    const pack = await loadPack(config, packName);
+    const changes = planPackApplication({
+      device,
+      skills: pack.skills,
+      targets,
+      exact: hasFlag(rest, '--exact'),
+    });
+    if (!changes.length) {
+      console.log(`Pack ${pack.name} already matches ${targets.join(', ')} on ${deviceId}.`);
+      return;
+    }
+    console.log(`${hasFlag(rest, '--apply') ? 'Applying' : 'Previewing'} ${changes.length} assignment change${changes.length === 1 ? '' : 's'}:`);
+    for (const change of changes) {
+      console.log(`- ${change.skillName}: ${change.before.join(', ') || 'none'} -> ${change.after.join(', ') || 'none'}`);
+    }
+    if (!hasFlag(rest, '--apply')) {
+      console.log('Dry run only. Re-run with --apply to change assignments.');
+      return;
+    }
+    for (const change of changes) {
+      await setSkillTargets({
+        vaultPath: config.repoPath,
+        deviceId,
+        skillName: change.skillName,
+        targets: change.after,
+      });
+    }
+    if (deviceId === config.deviceId) await applyLinks({ vaultPath: config.repoPath, deviceId });
+    await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
+    console.log(`Applied pack ${pack.name} to ${targets.join(', ')} on ${deviceId}.`);
+    return;
+  }
+  throw new Error('Usage: skillsync pack list|show <pack>|install <pack>|apply <pack> --target targets [--exact] [--apply]');
 }
 
 function projectionDetailsBySkill(projections) {
@@ -1039,15 +1092,16 @@ async function renamedSkillName({ rest, currentName }) {
   return input({ message: `New vault name for ${currentName}:`, default: `${currentName}-local` });
 }
 
-async function addSkillWithConflictResolution({ config, sourcePath, name, rest = [], targets = [] }) {
+async function addSkillWithConflictResolution({ config, sourcePath, name, rest = [], targets = [], source }) {
   const comparison = await compareSkillToVault({ vaultPath: config.repoPath, sourcePath, name });
   if (comparison.status === 'new') {
-    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name });
+    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name, source });
     const managed = await installManagedSkill({ config, skillName: added.name, targets, sourcePath });
     return { name: added.name, status: managed.replacedTarget ? 'added-and-linked' : 'added' };
   }
 
   if (comparison.status === 'identical') {
+    await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name, source });
     const managed = await installManagedSkill({ config, skillName: comparison.name, targets, sourcePath });
     return { name: comparison.name, status: managed.replacedTarget ? 'consolidated' : 'identical' };
   }
@@ -1071,14 +1125,14 @@ async function addSkillWithConflictResolution({ config, sourcePath, name, rest =
   }
 
   if (action === 'overwrite-vault') {
-    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name, overwrite: true });
+    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name, overwrite: true, source });
     const managed = await installManagedSkill({ config, skillName: added.name, targets, sourcePath });
     return { name: added.name, status: managed.replacedTarget ? 'overwritten-and-linked' : 'overwritten' };
   }
 
   if (action === 'rename') {
     const newName = await renamedSkillName({ rest, currentName: comparison.name });
-    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name: newName });
+    const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name: newName, source });
     return { name: added.name, status: 'renamed' };
   }
 
@@ -1159,6 +1213,12 @@ async function addRemoteSkills(source, rest, config) {
         name: skill.name,
         rest,
         targets,
+        source: {
+          url: cloned.sourceUrl,
+          ...(cloned.ref ? { ref: cloned.ref } : {}),
+          commit: cloned.commit,
+          subpath: skill.relative,
+        },
       });
       results.push(result);
     }
@@ -1276,6 +1336,70 @@ async function deleteSkill(rest) {
   await deleteSkillFromVault({ vaultPath: config.repoPath, skillName });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(`Deleted ${skillName} from the vault.`);
+}
+
+function printAudit(result) {
+  console.log(`Vault: ${result.summary.skills} skills, ${result.summary.errors} errors, ${result.summary.warnings} warnings`);
+  for (const skill of result.skills) {
+    for (const item of skill.findings) {
+      console.log(`${item.level === 'error' ? '✗' : '!'} ${skill.name} [${item.code}]: ${item.message}`);
+    }
+  }
+  for (const skill of result.externalSkills) {
+    for (const item of skill.findings) {
+      console.log(`${item.level === 'error' ? '✗' : '!'} ${skill.name} in ${skill.targets.join(', ')} [${item.code}]: ${item.message}`);
+    }
+  }
+  for (const duplicate of result.duplicates) {
+    console.log(`${duplicate.status === 'conflicting' ? '✗' : '!'} ${duplicate.name}: ${duplicate.status} copies in ${duplicate.copies.map((copy) => copy.target).join(', ')}`);
+  }
+  for (const [target, catalog] of Object.entries(result.targets)) {
+    console.log(`Catalog ${target}: ${catalog.activeSkills} active skills (${catalog.assignedSkills} assigned), ~${catalog.estimatedDescriptionTokens} description tokens`);
+  }
+}
+
+async function auditCommand(rest) {
+  const config = await configured();
+  await refreshChangedRegistryEntries(config.repoPath);
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
+  const result = await auditCatalog({ vaultPath: config.repoPath, device });
+  if (hasFlag(rest, '--json')) console.log(JSON.stringify(result, null, 2));
+  else printAudit(result);
+  if (result.summary.errors || result.summary.conflictingDuplicates) process.exitCode = 1;
+}
+
+async function updateCommand(rest) {
+  const config = await configured();
+  const requested = rest[0] && !rest[0].startsWith('-') ? rest[0] : null;
+  const apply = hasFlag(rest, '--apply');
+  if (apply && !requested) throw new Error('Applying updates requires one explicit skill name');
+  const registry = await loadRegistry(config.repoPath);
+  const names = requested
+    ? [requested]
+    : Object.keys(registry.skills).filter((name) => registry.skills[name].source?.url).sort();
+  if (!names.length) {
+    console.log('No source-tracked skills in the vault.');
+    return;
+  }
+  for (const skillName of names) {
+    try {
+      const result = await inspectSkillUpdate({ vaultPath: config.repoPath, skillName, apply });
+      if (result.status === 'available') {
+        console.log(`! ${skillName}: update available (${result.currentCommit || 'unknown'} -> ${result.availableCommit})`);
+      } else if (result.status === 'updated') {
+        console.log(`✓ ${skillName}: updated to ${result.commit}`);
+      } else if (result.status === 'current') {
+        console.log(`✓ ${skillName}: current at ${result.commit}`);
+      } else {
+        console.log(`○ ${skillName}: source is not tracked`);
+      }
+    } catch (error) {
+      if (apply) throw error;
+      console.log(`✗ ${skillName}: ${error.message}`);
+      process.exitCode = 1;
+    }
+  }
+  if (apply) await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
 }
 
 function parseTargets(rest) {
@@ -1498,6 +1622,12 @@ async function doctor() {
     console.log(`${await isGitRepo(config.repoPath) ? '✓' : '✗'} vault git repo`);
     await refreshChangedRegistryEntries(config.repoPath);
     console.log('✓ registry checked/rebuilt');
+    const device = await loadLocalDevice(config.repoPath, config.deviceId);
+    const audit = await auditCatalog({ vaultPath: config.repoPath, device });
+    console.log(`${audit.summary.errors ? '✗' : '✓'} catalog: ${audit.summary.skills} skills, ${audit.summary.errors} errors, ${audit.summary.warnings} warnings`);
+    for (const [target, catalog] of Object.entries(audit.targets)) {
+      console.log(`  ${target}: ${catalog.activeSkills} active (${catalog.assignedSkills} assigned), ~${catalog.estimatedDescriptionTokens} description tokens`);
+    }
   } catch (error) {
     console.log(`✗ config/vault: ${error.message}`);
   }
@@ -2550,5 +2680,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync audit [--json]\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync pack apply <pack> --target targets [--exact] [--apply]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync update [skill] [--check] [--apply]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }
