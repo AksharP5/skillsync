@@ -207,6 +207,13 @@ skillsync audit --json
 
 `skillsync doctor` includes the catalog summary. Audit errors cover malformed frontmatter, non-portable names, directory/name mismatches, missing descriptions, and specification limits. Longer-but-valid descriptions and oversized skill bodies are warnings.
 
+Consolidate byte-identical copies across configured targets into one vault skill and managed projections. Cleanup previews by default and leaves same-name conflicts untouched:
+
+```bash
+skillsync cleanup
+skillsync cleanup --apply
+```
+
 ## Reconcile an exact skill pack
 
 Pack application previews changes by default. `--exact` removes SkillSync assignments for skills outside the pack on only the selected targets; unmanaged local folders and assignments on other targets remain untouched.
@@ -347,6 +354,7 @@ skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]
 skillsync connect <owner/repo|url> [--path path]
 skillsync status
 skillsync audit [--json]
+skillsync cleanup [--apply]
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]

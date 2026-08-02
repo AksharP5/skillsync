@@ -136,6 +136,40 @@ test('audit --json reports standards findings and active catalog cost', async ()
   assert.ok(result.targets.codex.estimatedDescriptionTokens > 0);
 });
 
+test('cleanup previews then consolidates identical target copies', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const agents = path.join(home, '.agents', 'skills');
+  const codex = path.join(home, '.codex', 'skills');
+  const deviceId = 'test-device';
+  await writeConfig(home, vault, deviceId);
+  await makeSkill(agents, 'review', '# Identical\n');
+  await makeSkill(codex, 'review', '# Identical\n');
+  await makeSkill(agents, 'draft', '# Agents version\n');
+  await makeSkill(codex, 'draft', '# Codex version\n');
+  await addTarget({ vaultPath: vault, deviceId, name: 'agents', targetPath: agents });
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: codex });
+
+  const preview = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'cleanup'], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.match(preview.stdout, /Preview only/);
+  assert.match(preview.stdout, /draft: conflicting copies left unchanged/);
+  assert.equal((await lstat(path.join(agents, 'review'))).isSymbolicLink(), false);
+
+  const applied = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'cleanup', '--apply'], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.match(applied.stdout, /Cleaned 1 duplicate skill/);
+  assert.equal((await lstat(path.join(agents, 'review'))).isSymbolicLink(), true);
+  assert.equal((await lstat(path.join(codex, 'review'))).isSymbolicLink(), true);
+  assert.equal((await lstat(path.join(agents, 'draft'))).isSymbolicLink(), false);
+  assert.equal((await lstat(path.join(codex, 'draft'))).isSymbolicLink(), false);
+  assert.ok((await loadRegistry(vault)).skills.review);
+});
+
 test('pack apply previews by default and exactly reconciles only with --apply', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
