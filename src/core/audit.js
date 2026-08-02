@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
 
@@ -10,6 +10,23 @@ const RECOMMENDED_DESCRIPTION_LENGTH = 400;
 
 function finding(level, code, message) {
   return { level, code, message };
+}
+
+async function isManagedProjection(skillPath, vaultPath, name) {
+  const info = await lstat(skillPath).catch(() => null);
+  if (info?.isSymbolicLink()) {
+    const [actual, expected] = await Promise.all([
+      realpath(skillPath).catch(() => null),
+      realpath(path.join(vaultPath, 'skills', name)).catch(() => null),
+    ]);
+    return actual !== null && actual === expected;
+  }
+  try {
+    const marker = JSON.parse(await readFile(path.join(skillPath, '.skillsync-owned.json'), 'utf8'));
+    return marker.skill === name && path.resolve(marker.vault) === path.resolve(vaultPath);
+  } catch {
+    return false;
+  }
 }
 
 export async function auditSkillFolder(skillPath, { expectedName = path.basename(skillPath) } = {}) {
@@ -119,19 +136,24 @@ export async function auditCatalog({ vaultPath, device }) {
         if (existing) existing.targets.push(targetName);
         else externalByContent.set(key, { ...audited, targets: [targetName] });
       }
-      if (!copiesByName.has(skill.name)) copiesByName.set(skill.name, []);
-      copiesByName.get(skill.name).push({ target: targetName, path: skill.path, hash });
+      if (!await isManagedProjection(skill.path, vaultPath, skill.name)) {
+        if (!copiesByName.has(skill.name)) copiesByName.set(skill.name, []);
+        copiesByName.get(skill.name).push({ target: targetName, path: skill.path, hash });
+      }
     }
   }
 
   const duplicates = [];
   for (const [name, copies] of copiesByName) {
-    if (copies.length < 2) continue;
-    const hashes = new Set(copies.map((copy) => copy.hash).filter(Boolean));
+    const compared = vaultHashes.has(name)
+      ? [{ target: 'vault', path: path.join(vaultPath, 'skills', name), hash: vaultHashes.get(name) }, ...copies]
+      : copies;
+    if (compared.length < 2) continue;
+    const hashes = new Set(compared.map((copy) => copy.hash).filter(Boolean));
     duplicates.push({
       name,
       status: hashes.size <= 1 ? 'identical' : 'conflicting',
-      copies: copies.map(({ target, path: copyPath }) => ({ target, path: copyPath })),
+      copies: compared.map(({ target, path: copyPath }) => ({ target, path: copyPath })),
     });
   }
 

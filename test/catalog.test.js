@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -63,6 +63,28 @@ test('auditCatalog reports conflicting target copies and active description cost
   assert.equal(result.duplicates[0].status, 'conflicting');
   assert.equal(result.targets.codex.assignedSkills, 1);
   assert.ok(result.targets.codex.estimatedDescriptionTokens > 0);
+});
+
+test('auditCatalog does not report managed projections as duplicates', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, 'codex');
+  await makeSkill(path.join(vault, 'skills'), 'review', 'Review code changes carefully.');
+  await rebuildRegistry(vault);
+  await mkdir(codex);
+  await symlink(path.join(vault, 'skills', 'review'), path.join(codex, 'review'), 'dir');
+
+  const result = await auditCatalog({
+    vaultPath: vault,
+    device: {
+      targets: { codex: { path: codex } },
+      installed: { review: ['codex'] },
+      detected: { codex: [{ name: 'review', path: 'review' }] },
+    },
+  });
+
+  assert.equal(result.summary.identicalDuplicates, 0);
+  assert.equal(result.summary.conflictingDuplicates, 0);
 });
 
 test('planPackApplication can exactly reconcile selected targets while preserving others', () => {
