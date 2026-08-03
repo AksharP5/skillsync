@@ -218,6 +218,13 @@ skillsync cleanup --all --apply
 
 `--all` also adopts unique unmanaged skills found under configured scan paths, preserving their current target assignments.
 
+Search a pack's skill metadata without installing or loading its full skill bodies:
+
+```bash
+skillsync find "humanize AI writing" --pack cold
+skillsync find "debug flaky tests" --pack cold --json
+```
+
 ## Reconcile an exact skill pack
 
 Pack application previews changes by default. `--exact` removes SkillSync assignments for skills outside the pack on only the selected targets; unmanaged local folders and assignments on other targets remain untouched.
@@ -360,6 +367,7 @@ skillsync status
 skillsync audit [--json]
 skillsync cleanup [--all] [--apply]
 skillsync list
+skillsync find <query> [--pack cold] [--limit 5] [--json]
 skillsync installed [--device id]
 skillsync matrix [--edit]
 skillsync instructions status

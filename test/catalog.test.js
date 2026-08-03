@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import { auditCatalog, auditSkillFolder } from '../src/core/audit.js';
 import { addTarget, installSkill, loadDevice, setSkillTargets } from '../src/core/device.js';
+import { findSkills } from '../src/core/find.js';
 import { git } from '../src/core/git.js';
 import { planPackApplication } from '../src/core/packs.js';
 import { addSkillToVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
@@ -121,6 +122,25 @@ test('setSkillTargets accepts an empty exact assignment', async () => {
 
   const device = await loadDevice(vault, 'test');
   assert.equal(device.installed.review, undefined);
+});
+
+test('findSkills ranks matching metadata from the selected pack', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'humanizer', 'Humanize AI writing and add a natural voice.');
+  await makeSkill(path.join(vault, 'skills'), 'make-pdf', 'Turn markdown into a publication-quality PDF.');
+  await rebuildRegistry(vault);
+  await mkdir(path.join(vault, 'packs'));
+  await writeFile(path.join(vault, 'packs', 'cold.json'), JSON.stringify({
+    name: 'cold',
+    skills: ['humanizer', 'make-pdf'],
+  }));
+
+  const results = await findSkills({ vaultPath: vault, query: 'make AI writing sound human', pack: 'cold' });
+
+  assert.equal(results[0].name, 'humanizer');
+  assert.match(results[0].path, /humanizer\/SKILL\.md$/);
+  assert.ok(results[0].score > 0);
 });
 
 test('source provenance survives registry rebuild and supports explicit updates', async () => {

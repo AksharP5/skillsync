@@ -43,6 +43,7 @@ import {
 } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
 import { generateGroups } from './core/groups.js';
+import { findSkills } from './core/find.js';
 import { planPackApplication } from './core/packs.js';
 import {
   DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
@@ -105,6 +106,8 @@ async function main() {
       return cleanupCommand(rest);
     case 'list':
       return listSkills();
+    case 'find':
+      return findSkillsCommand(rest);
     case 'installed':
       return installedCommand(rest);
     case 'matrix':
@@ -439,6 +442,25 @@ async function listSkills() {
     const state = localSkill?.globalInstalled || localSkill?.managedTargets.length ? 'managed' : 'local';
     console.log(`${targetSummary ? '✓' : '○'} ${name}${targetSummary ? `  [${state}: ${targetSummary}]` : ''}`);
   }
+}
+
+async function findSkillsCommand(rest) {
+  const config = await configured();
+  const pack = flagValue(rest, '--pack', 'cold');
+  const limit = Number(flagValue(rest, '--limit', 5));
+  const valueFlags = new Set(['--pack', '--limit']);
+  const query = rest.filter((arg, index) => !arg.startsWith('--') && !valueFlags.has(rest[index - 1])).join(' ');
+  if (!query) throw new Error('Usage: skillsync find <query> [--pack cold] [--limit 5] [--json]');
+  const results = await findSkills({ vaultPath: config.repoPath, query, pack, limit });
+  if (hasFlag(rest, '--json')) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  if (!results.length) {
+    console.log(`No matching skills found in ${pack}.`);
+    return;
+  }
+  for (const result of results) console.log(`${result.name}\t${result.description}`);
 }
 
 function localSkillEntries(device, registry) {
@@ -2710,5 +2732,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync audit [--json]\n  skillsync cleanup [--all] [--apply]\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync pack apply <pack> --target targets [--exact] [--apply]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync update [skill] [--check] [--apply]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync audit [--json]\n  skillsync cleanup [--all] [--apply]\n  skillsync list\n  skillsync find <query> [--pack cold] [--limit 5] [--json]\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync pack apply <pack> --target targets [--exact] [--apply]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync update [skill] [--check] [--apply]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }
