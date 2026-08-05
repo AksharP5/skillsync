@@ -63,10 +63,12 @@ import {
 } from '../src/core/instructions.js';
 import {
   matrixAssignmentChanges,
+  renderSkillSelectionChanges,
   renderSkillDeviceMatrix,
   setDraftSkillAssignmentTargets,
   skillDeviceMarker,
   skillDeviceState,
+  skillSelectionChanges,
 } from '../src/core/matrix.js';
 import { syncVault } from '../src/core/sync.js';
 
@@ -1135,6 +1137,21 @@ test('editable matrix stages exact device assignment changes without mutating th
   ]);
   assert.deepEqual(initial[0].installed, { 'paper-mcp': ['codex'] });
   assert.deepEqual(initial[1].global_installed, []);
+});
+
+test('skill browser summarizes only the install and removal delta', () => {
+  const changes = skillSelectionChanges({
+    skills: ['already-installed', 'new-skill', 'removed-skill'],
+    installed: ['already-installed', 'removed-skill'],
+    selected: ['already-installed', 'new-skill'],
+  });
+
+  assert.deepEqual(changes, {
+    toInstall: ['new-skill'],
+    toUninstall: ['removed-skill'],
+  });
+  assert.equal(renderSkillSelectionChanges(changes), 'Install: new-skill; Remove: removed-skill');
+  assert.equal(renderSkillSelectionChanges({ toInstall: [], toUninstall: [] }), 'No changes');
 });
 
 test('auto-import baselines existing local skills and adopts only newly detected skills', async () => {

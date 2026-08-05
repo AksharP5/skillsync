@@ -24,11 +24,13 @@ import {
 } from './core/device.js';
 import {
   matrixAssignmentChanges,
+  renderSkillSelectionChanges,
   renderSkillDeviceMatrix,
   setDraftSkillAssignmentTargets,
   skillAssignmentTargets,
   skillDeviceMarker,
   skillDeviceState,
+  skillSelectionChanges,
 } from './core/matrix.js';
 import {
   assertSafePathSegment,
@@ -1625,6 +1627,11 @@ async function skillsScreen(config) {
   }
   const localByName = new Map(localSkillEntries(device, registry).map((skill) => [skill.name, skill]));
   const localVaultNames = new Set([...localByName.values()].filter((skill) => skill.inVault).map((skill) => skill.name));
+  const selectionChanges = (selectedNames) => skillSelectionChanges({
+    skills: names,
+    selected: selectedNames,
+    installed: localVaultNames,
+  });
   const selected = await promptWithEscape(checkbox({
     message: `Install skills on ${device.display_name}`,
     loop: false,
@@ -1642,12 +1649,17 @@ async function skillsScreen(config) {
         checked: localVaultNames.has(name),
       };
     }),
+    theme: {
+      style: {
+        renderSelectedChoices: (choices) => renderSkillSelectionChanges(
+          selectionChanges(choices.map((choice) => choice.value)),
+        ),
+      },
+    },
   }));
   if (!selected) return;
 
-  const selectedNames = new Set(selected);
-  const toInstall = names.filter((name) => selectedNames.has(name) && !localVaultNames.has(name));
-  const toUninstall = names.filter((name) => !selectedNames.has(name) && localVaultNames.has(name));
+  const { toInstall, toUninstall } = selectionChanges(selected);
   if (!toInstall.length && !toUninstall.length) {
     console.log('\nNo install changes.\n');
     return;
