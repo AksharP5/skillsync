@@ -88,7 +88,10 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
     await rm(root, { recursive: true, force: true });
   });
 
-  assert.match(captureCharFrame(), /Make writing clearer while preserving its voice\./);
+  const initialFrame = captureCharFrame();
+  assert.match(initialFrame, /SKILL \/ 1/);
+  assert.match(initialFrame, /qa-device/);
+  assert.match(initialFrame, /Make writing clearer while preserving its voice\./);
 
   mockInput.pressKey('e');
   await waitForMode(app, 'edit');
@@ -109,6 +112,8 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
   mockInput.pressEnter();
   await waitForMode(app, 'browse');
   assert.equal((await lstat(path.join(targetPath, 'proof-reader'))).isSymbolicLink(), true);
+  await flush({ maxPasses: 20 });
+  assert.match(captureCharFrame(), /● codex/);
 
   mockInput.pressKey('/');
   await waitForMode(app, 'search');
@@ -133,8 +138,8 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
   await flush({ maxPasses: 30 });
   const rows = captureCharFrame().split('\n');
   assert.ok(
-    rows.findIndex((row) => row.includes('Proof Reader'))
-      > rows.findIndex((row) => row.includes('Skills')),
+    rows.findIndex((row) => row.includes('Destinations'))
+      > rows.findIndex((row) => row.includes('SKILL /')),
   );
 
   mockInput.pressKey('q');

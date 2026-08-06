@@ -35,6 +35,7 @@ import {
   filterSkillNames,
   pendingDeviceCount,
   skillAssignmentTargets,
+  skillDevicePlacements,
   splitSkillDocument,
   targetDetectedCount,
   truncateLine,
@@ -48,40 +49,40 @@ import {
 } from './preferences.js';
 
 const COLORS = {
-  bg: '#0B0D10',
-  surface: '#111419',
-  surfaceRaised: '#171B22',
-  border: '#292E37',
-  borderActive: '#7396CE',
-  text: '#E6E9EF',
-  muted: '#9198A3',
-  faint: '#626A76',
-  accent: '#7FA6E0',
-  accentSoft: '#19263A',
-  selectedText: '#F4F7FC',
-  selectedMuted: '#AFBED3',
-  success: '#86C995',
-  warning: '#D8B16D',
-  danger: '#E67E82',
+  bg: '#030403',
+  surface: '#080A08',
+  surfaceRaised: '#10130D',
+  border: '#3D4435',
+  borderActive: '#D9FF43',
+  text: '#E2E5DC',
+  muted: '#7E8479',
+  faint: '#42473F',
+  accent: '#D9FF43',
+  accentSoft: '#11150D',
+  selectedText: '#D9FF43',
+  selectedMuted: '#A7AF9D',
+  success: '#A5E66F',
+  warning: '#FFB547',
+  danger: '#F07178',
 };
 
 function syntaxStyle() {
   return SyntaxStyle.fromStyles({
     default: { fg: COLORS.text },
     'markup.heading': { fg: COLORS.accent, bold: true },
-    'markup.heading.1': { fg: '#9ABAF0', bold: true },
-    'markup.heading.2': { fg: '#89ABE2', bold: true },
+    'markup.heading.1': { fg: '#E8FF8F', bold: true },
+    'markup.heading.2': { fg: '#D9FF43', bold: true },
     'markup.bold': { fg: COLORS.text, bold: true },
-    'markup.italic': { fg: '#B6C7CE', italic: true },
-    'markup.raw': { fg: '#B8C8DF', bg: COLORS.surfaceRaised },
+    'markup.italic': { fg: '#B8BDAF', italic: true },
+    'markup.raw': { fg: '#DDE6C5', bg: COLORS.surfaceRaised },
     'markup.link': { fg: COLORS.accent, underline: true },
     'markup.list': { fg: COLORS.muted },
     comment: { fg: COLORS.muted, italic: true },
-    string: { fg: '#A8D59D' },
-    keyword: { fg: '#D4A5E7' },
-    function: { fg: '#8FC9F0' },
-    number: { fg: '#E7C787' },
-    punctuation: { fg: '#91A2AC' },
+    string: { fg: '#A5E66F' },
+    keyword: { fg: '#D9FF43' },
+    function: { fg: '#E8FF8F' },
+    number: { fg: '#FFB547' },
+    punctuation: { fg: '#9BA291' },
   });
 }
 
@@ -98,6 +99,30 @@ function box(ctx, options) {
     backgroundColor: COLORS.bg,
     ...options,
   });
+}
+
+function tableCell(value, width) {
+  const textValue = String(value || '');
+  if (textValue.length <= width) return textValue.padEnd(width);
+  if (width <= 1) return '…';
+  return `${textValue.slice(0, width - 1)}…`;
+}
+
+function placementMarker(status) {
+  if (status === 'managed') return '●';
+  if (status === 'pending') return '!';
+  if (status === 'detected') return '○';
+  return '·';
+}
+
+function placementTargets(placement) {
+  if (placement.assignedTargets.length) return placement.assignedTargets.join('+');
+  if (placement.detectedTargets.length) return `${placement.detectedTargets.join('+')}*`;
+  return 'none';
+}
+
+function placementCell(placement) {
+  return `${placementMarker(placement.status)} ${placementTargets(placement)}`;
 }
 
 function pendingHighlights(renderable) {
@@ -281,6 +306,7 @@ export class SkillSyncTui {
       selectedDescriptionColor: COLORS.selectedMuted,
       showDescription: true,
       showSelectionIndicator: true,
+      showScrollIndicator: true,
       wrapSelection: false,
       itemSpacing: 0,
     });
@@ -359,7 +385,7 @@ export class SkillSyncTui {
           width: '100%',
           height: 'auto',
           flexShrink: 0,
-          fg: '#B8C8DF',
+          fg: '#DDE6C5',
           bg: COLORS.surfaceRaised,
           selectable: true,
           wrapMode: 'char',
@@ -430,22 +456,87 @@ export class SkillSyncTui {
     this.renderChrome();
   }
 
+  skillTableLayout() {
+    const devices = this.snapshot?.devices || [];
+    const contentWidth = Math.max(32, this.renderer.width - 5);
+    const skillWidth = Math.max(14, Math.min(30, Math.floor(contentWidth * 0.25)));
+    const updatedWidth = contentWidth - skillWidth - devices.length > devices.length * 10 + 9 ? 9 : 0;
+    const separators = devices.length + (updatedWidth ? 1 : 0);
+    const deviceWidth = devices.length
+      ? Math.max(1, Math.floor((contentWidth - skillWidth - updatedWidth - separators) / devices.length))
+      : 0;
+    return { devices, skillWidth, updatedWidth, deviceWidth };
+  }
+
+  skillTableHeader() {
+    const { devices, skillWidth, updatedWidth, deviceWidth } = this.skillTableLayout();
+    return [
+      tableCell(`SKILL / ${this.snapshot?.skills.length || 0}`, skillWidth),
+      ...(updatedWidth ? [tableCell('UPDATED', updatedWidth)] : []),
+      ...devices.map((device) => tableCell(device.display_name || device.device_id, deviceWidth)),
+    ].join(' ');
+  }
+
+  skillTableRow(skillName) {
+    const { devices, skillWidth, updatedWidth, deviceWidth } = this.skillTableLayout();
+    const entry = this.snapshot.registry.skills[skillName];
+    const placements = skillDevicePlacements(devices, skillName);
+    const updatedAt = entry?.updated_at ? new Date(entry.updated_at) : null;
+    const age = updatedAt && Number.isFinite(updatedAt.getTime())
+      ? this.compactAge(Date.now() - updatedAt.getTime())
+      : 'unknown';
+    return [
+      tableCell(skillName, skillWidth),
+      ...(updatedWidth ? [tableCell(age, updatedWidth)] : []),
+      ...placements.map((placement) => tableCell(placementCell(placement), deviceWidth)),
+    ].join(' ');
+  }
+
+  compactAge(milliseconds) {
+    const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+  }
+
+  skillDestinationMarkdown(skillName) {
+    const placements = skillDevicePlacements(this.snapshot.devices, skillName);
+    return placements.flatMap((placement) => {
+      if (placement.status === 'absent') {
+        return [`### ${placement.displayName}`, '', '- · Not installed', ''];
+      }
+      const currentDevice = placement.deviceId === this.config.deviceId;
+      const locations = placement.locations.map((location) => {
+        const state = location.target === 'global'
+          ? 'device-level assignment'
+          : location.assigned && location.detected
+            ? `managed${location.mode ? ` ${location.mode}` : ''}`
+            : location.assigned
+              ? 'assigned · not detected'
+              : `detected · unmanaged${location.inVault ? ' · in vault' : ' · local only'}`;
+        const path = currentDevice && location.path
+          ? ` · \`${location.path}\``
+          : location.target === 'global'
+            ? ''
+            : ' · path private to device';
+        const marker = location.assigned && (location.detected || location.target === 'global')
+          ? '●'
+          : location.assigned ? '!' : '○';
+        return `- ${marker} **${location.target}** · ${state}${path}`;
+      });
+      return [`### ${placement.displayName}`, '', ...locations, ''];
+    });
+  }
+
   pageItems() {
     if (!this.snapshot) return [];
     if (this.page === 'skills') {
-      return filterSkillNames(this.snapshot.skills, this.query, this.documents).map((name) => {
-        const document = this.documents.get(name);
-        const targets = skillAssignmentTargets(this.snapshot.localDevice, name);
-        const description = splitSkillDocument(document?.content).description;
-        return {
-          value: name,
-          name: `${targets.length ? '+' : ' '} ${name}`,
-          description: truncateLine(
-            description || (targets.length ? `Installed: ${targets.join(', ')}` : 'Vault skill'),
-            Math.max(18, this.listPane.width - 6),
-          ),
-        };
-      });
+      return filterSkillNames(this.snapshot.skills, this.query, this.documents).map((name) => ({
+        value: name,
+        name: this.skillTableRow(name),
+        description: '',
+      }));
     }
     if (this.page === 'devices') {
       return this.snapshot.devices.map((device) => {
@@ -511,8 +602,13 @@ export class SkillSyncTui {
     } finally {
       this.updatingList = false;
     }
-    this.listTitle.content = TUI_PAGES.find((page) => page.id === this.page)?.label || 'Skills';
-    this.listCount.content = String(items.length);
+    if (this.page === 'skills') {
+      this.listTitle.content = this.skillTableHeader();
+      this.listCount.content = '';
+    } else {
+      this.listTitle.content = TUI_PAGES.find((page) => page.id === this.page)?.label || 'Skills';
+      this.listCount.content = String(items.length);
+    }
     if (!items.length) {
       this.detailMeta.content = '';
       this.markdown.content = this.page === 'skills'
@@ -664,11 +760,36 @@ export class SkillSyncTui {
 
   renderSkillDocument(skillName, document) {
     this.activeDocument = document;
-    const { body } = splitSkillDocument(document.content);
-    const assigned = skillAssignmentTargets(this.snapshot.localDevice, skillName);
+    const { body, description } = splitSkillDocument(document.content);
+    const placements = skillDevicePlacements(this.snapshot.devices, skillName);
+    const managed = placements.filter((placement) => placement.status === 'managed').length;
+    const pending = placements.filter((placement) => placement.status === 'pending').length;
+    const unmanaged = placements.filter((placement) => placement.status === 'detected').length;
     const updated = document.updatedAt ? new Date(document.updatedAt).toLocaleString() : 'unknown';
-    this.detailMeta.content = `${skillName}  ·  ${assigned.length ? `installed in ${assigned.join(', ')}` : 'not installed here'}\n${document.relativePath}  ·  updated ${updated}`;
-    this.markdown.content = body.trim() || '_This skill has no Markdown body._';
+    this.detailMeta.content = [
+      skillName,
+      '',
+      document.relativePath,
+      `updated ${updated}`,
+      '',
+      `${managed} managed`,
+      `${pending} assigned · missing`,
+      `${unmanaged} unmanaged`,
+      '',
+      '● managed',
+      '! assigned · missing',
+      '○ detected · unmanaged',
+      '· not installed',
+    ].join('\n');
+    this.markdown.content = [
+      ...(description ? [`# ${description}`, ''] : []),
+      '## Destinations',
+      '',
+      ...this.skillDestinationMarkdown(skillName),
+      '---',
+      '',
+      body.trim() || '_This skill has no Markdown body._',
+    ].join('\n');
     this.updateListDescriptions(skillName);
   }
 
@@ -760,6 +881,7 @@ export class SkillSyncTui {
     this.page = page;
     this.focusArea = 'list';
     this.query = page === 'skills' ? this.query : '';
+    this.configureWorkspaceLayout();
     this.updateList({ preserveSelection: true });
     this.setBrowseFocus('list');
   }
@@ -1425,13 +1547,46 @@ export class SkillSyncTui {
     });
   }
 
-  updateResponsiveLayout() {
+  configureWorkspaceLayout() {
     const narrow = this.renderer.width < 72;
     const compact = this.renderer.width < 86;
-    this.brand.visible = !narrow;
+    const index = this.page === 'skills';
+
+    this.list.showDescription = !index;
+    this.list.showSelectionIndicator = true;
+    this.list.showScrollIndicator = index;
+    this.listHeader.paddingX = index ? 0 : 1;
+    this.listCount.visible = !index;
+    this.listTitle.attributes = 1;
+
+    if (index) {
+      const tableHeight = Math.max(9, Math.min(17, Math.floor(this.renderer.height * 0.4)));
+      this.workspace.flexDirection = 'column';
+      this.listPane.border = ['bottom'];
+      this.listPane.width = '100%';
+      this.listPane.height = tableHeight;
+      this.listPane.minWidth = 0;
+      this.listPane.maxWidth = '100%';
+      this.detailPane.width = '100%';
+      this.detailPane.height = '100%';
+      this.detailPane.minWidth = 0;
+      this.detailPane.flexDirection = narrow ? 'column' : 'row';
+      this.detailHeader.width = narrow ? '100%' : '29%';
+      this.detailHeader.height = narrow ? 6 : '100%';
+      this.detailHeader.flexShrink = 0;
+      this.detailHeader.border = narrow ? ['bottom'] : ['right'];
+      this.detailHeader.justifyContent = 'flex-start';
+      this.detailHeader.paddingX = 2;
+      this.detailHeader.paddingY = 1;
+      this.detailMeta.height = 'auto';
+      this.previewScroll.width = narrow ? '100%' : '71%';
+      this.previewScroll.height = '100%';
+      this.previewScroll.paddingX = 2;
+      this.previewScroll.paddingY = 1;
+      return;
+    }
+
     this.workspace.flexDirection = narrow ? 'column' : 'row';
-    this.workspace.rowGap = 0;
-    this.workspace.columnGap = 0;
     this.listPane.border = narrow ? ['bottom'] : ['right'];
     this.listPane.width = narrow ? '100%' : compact ? '40%' : '36%';
     this.listPane.height = narrow ? '45%' : '100%';
@@ -1440,6 +1595,27 @@ export class SkillSyncTui {
     this.detailPane.width = '100%';
     this.detailPane.height = narrow ? '55%' : '100%';
     this.detailPane.minWidth = narrow ? 0 : 32;
+    this.detailPane.flexDirection = 'column';
+    this.detailHeader.width = '100%';
+    this.detailHeader.height = 3;
+    this.detailHeader.flexShrink = 0;
+    this.detailHeader.border = ['bottom'];
+    this.detailHeader.justifyContent = 'center';
+    this.detailHeader.paddingX = 2;
+    this.detailHeader.paddingY = 0;
+    this.detailMeta.height = 2;
+    this.previewScroll.width = '100%';
+    this.previewScroll.height = '100%';
+    this.previewScroll.paddingX = 2;
+    this.previewScroll.paddingY = 1;
+  }
+
+  updateResponsiveLayout() {
+    const narrow = this.renderer.width < 72;
+    this.brand.visible = !narrow;
+    this.workspace.rowGap = 0;
+    this.workspace.columnGap = 0;
+    this.configureWorkspaceLayout();
     this.headerMeta.visible = this.renderer.width >= 76;
     if (this.snapshot && this.mode === 'browse') this.updateList({ preserveSelection: true });
   }

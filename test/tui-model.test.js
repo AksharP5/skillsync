@@ -10,6 +10,7 @@ import {
   filterSkillNames,
   pendingDeviceCount,
   skillAssignmentTargets,
+  skillDevicePlacements,
   splitSkillDocument,
 } from '../src/tui/model.js';
 
@@ -110,4 +111,46 @@ test('device inventory expands local home-relative target paths', () => {
   });
 
   assert.equal(skill.locations[0].path, path.join(homedir(), '.codex', 'skills', 'local-skill'));
+});
+
+test('skill placements distinguish managed, missing, unmanaged, and absent devices', () => {
+  const placements = skillDevicePlacements([
+    {
+      device_id: 'macbook',
+      display_name: 'MacBook',
+      targets: { codex: { path: '/Users/me/.codex/skills', mode: 'symlink' } },
+      installed: { shared: ['codex'] },
+      detected: { codex: [{ name: 'shared', path: 'shared', in_vault: true }] },
+    },
+    {
+      device_id: 'linux',
+      display_name: 'Linux',
+      targets: { codex: { path: '/home/me/.codex/skills', mode: 'symlink' } },
+      installed: { shared: ['codex'] },
+      detected: { codex: [] },
+    },
+    {
+      device_id: 'devbox',
+      display_name: 'Devbox',
+      targets: { agents: { path: '/home/me/.agents/skills', mode: 'copy' } },
+      installed: {},
+      detected: { agents: [{ name: 'shared', path: 'shared', in_vault: true }] },
+    },
+    {
+      device_id: 'server',
+      display_name: 'Server',
+      installed: {},
+      detected: {},
+    },
+  ], 'shared');
+
+  assert.deepEqual(placements.map(({ deviceId, status }) => ({ deviceId, status })), [
+    { deviceId: 'macbook', status: 'managed' },
+    { deviceId: 'linux', status: 'pending' },
+    { deviceId: 'devbox', status: 'detected' },
+    { deviceId: 'server', status: 'absent' },
+  ]);
+  assert.deepEqual(placements[0].assignedTargets, ['codex']);
+  assert.deepEqual(placements[2].detectedTargets, ['agents']);
+  assert.equal(placements[0].locations[0].path, '/Users/me/.codex/skills/shared');
 });

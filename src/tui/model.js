@@ -71,6 +71,28 @@ export function countAssignedDeviceSkills(device) {
   return deviceSkillInventory(device).filter((skill) => skill.assigned).length;
 }
 
+export function skillDevicePlacements(devices, skillName) {
+  return devices.map((device) => {
+    const skill = deviceSkillInventory(device).find((candidate) => candidate.name === skillName);
+    const locations = skill?.locations || [];
+    const assigned = locations.filter((location) => location.assigned);
+    const detectedOnly = locations.filter((location) => location.detected && !location.assigned);
+    const missing = assigned.filter((location) => location.target !== 'global' && !location.detected);
+    const status = assigned.length
+      ? missing.length ? 'pending' : 'managed'
+      : detectedOnly.length ? 'detected' : 'absent';
+
+    return {
+      deviceId: device.device_id,
+      displayName: device.display_name || device.device_id,
+      status,
+      assignedTargets: assigned.map((location) => location.target),
+      detectedTargets: detectedOnly.map((location) => location.target),
+      locations,
+    };
+  });
+}
+
 function targetSkillPath(target, skillName) {
   if (!target?.path) return null;
   return path.join(expandHome(target.path), skillName);

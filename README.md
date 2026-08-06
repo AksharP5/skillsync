@@ -71,7 +71,7 @@ Run SkillSync without a command to open the full-screen OpenTUI interface:
 skillsync
 ```
 
-The main workspace uses OpenTUI's alternate screen and the full terminal viewport. It has a searchable skill list and rendered Markdown preview, plus devices, local targets, pending state, and vault settings without leaving the terminal.
+The main workspace uses OpenTUI's alternate screen and the full terminal viewport. Its dense skill index keeps every device visible as a column while you browse: `●` is managed, `!` is assigned but missing, `○` is detected but unmanaged, and `·` is absent. The selected skill shows every destination, exact paths for the current device, private-path markers for remote devices, and the rendered Markdown document below the index.
 
 - `/` filters skills. `h` and `l` focus the list or detail pane; `j` and `k` move or scroll the focused pane.
 - `e` opens the selected canonical `SKILL.md` in Vim-style NORMAL mode. Use `i`, `a`, `I`, `A`, `o`, or `O` to enter INSERT mode; `Esc` returns to NORMAL mode and `Ctrl+S` saves and syncs.
