@@ -61,8 +61,9 @@ async function atomicWriteFile(filePath, content) {
   );
   let file;
   try {
-    file = await open(temporaryPath, 'wx', info.mode);
+    file = await open(temporaryPath, 'wx', 0o600);
     await file.writeFile(content, 'utf8');
+    await file.chmod(info.mode & 0o7777);
     await file.sync();
     await file.close();
     file = null;
