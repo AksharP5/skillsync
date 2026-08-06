@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  countAssignedDeviceSkills,
+  countDeviceSkills,
+  deviceSkillInventory,
   filterSkillNames,
   pendingDeviceCount,
   skillAssignmentTargets,
@@ -45,4 +48,55 @@ test('assignment summaries preserve global and concrete targets', () => {
     { desired_generation: 2, applied_generation: 2 },
     { desired_generation: 4, applied_generation: 3 },
   ]), 1);
+});
+
+test('device inventory combines assignments and detected locations without hiding unmanaged skills', () => {
+  const device = {
+    targets: {
+      codex: { path: '/home/me/.codex/skills', mode: 'symlink' },
+      opencode: { path: '/home/me/.config/opencode/skills', mode: 'copy' },
+    },
+    installed: {
+      shared: ['codex', 'opencode'],
+      missing: ['codex'],
+    },
+    global_installed: ['global-only'],
+    detected: {
+      codex: [
+        { name: 'shared', path: '/home/me/.codex/skills/shared', in_vault: true },
+        { name: 'local-only', path: 'local-only', in_vault: false },
+      ],
+      opencode: [
+        { name: 'shared', path: '/home/me/.config/opencode/skills/shared', in_vault: true },
+      ],
+    },
+  };
+
+  const inventory = deviceSkillInventory(device);
+
+  assert.equal(countDeviceSkills(device), 4);
+  assert.equal(countAssignedDeviceSkills(device), 3);
+  assert.deepEqual(inventory.map((skill) => skill.name), ['global-only', 'local-only', 'missing', 'shared']);
+  assert.deepEqual(inventory.find((skill) => skill.name === 'shared').locations, [
+    {
+      target: 'codex',
+      assigned: true,
+      detected: true,
+      inVault: true,
+      path: '/home/me/.codex/skills/shared',
+      mode: 'symlink',
+    },
+    {
+      target: 'opencode',
+      assigned: true,
+      detected: true,
+      inVault: true,
+      path: '/home/me/.config/opencode/skills/shared',
+      mode: 'copy',
+    },
+  ]);
+  const localOnly = inventory.find((skill) => skill.name === 'local-only');
+  assert.equal(localOnly.assigned, false);
+  assert.equal(localOnly.locations[0].path, '/home/me/.codex/skills/local-only');
+  assert.equal(inventory.find((skill) => skill.name === 'missing').detected, false);
 });

@@ -71,12 +71,33 @@ Run SkillSync without a command to open the full-screen OpenTUI interface:
 skillsync
 ```
 
-The main workspace has a searchable skill list and a rendered Markdown preview. It also shows devices, local targets, pending state, and vault settings without leaving the terminal.
+The main workspace uses OpenTUI's alternate screen and the full terminal viewport. It has a searchable skill list and rendered Markdown preview, plus devices, local targets, pending state, and vault settings without leaving the terminal.
 
-- `/` filters skills. `e` edits the selected canonical `SKILL.md`; `Ctrl+S` saves and syncs it.
+- `/` filters skills. `h` and `l` focus the list or detail pane; `j` and `k` move or scroll the focused pane.
+- `e` opens the selected canonical `SKILL.md` in Vim-style NORMAL mode. Use `i`, `a`, `I`, `A`, `o`, or `O` to enter INSERT mode; `Esc` returns to NORMAL mode and `Ctrl+S` saves and syncs.
 - `Enter` chooses install destinations. `Space` toggles a destination or target setting.
 - `1` through `4` switch sections. `Ctrl+P` opens commands. `s` syncs. `?` shows every shortcut.
 - Quick edits use the private vault as the source of truth and refuse stale saves if the skill changed after the editor opened.
+
+The Devices section reconciles assigned and detected skills instead of treating them as the same thing. On the current device it shows exact target and skill paths, distinguishes managed symlinks/copies from unmanaged folders, and flags assigned skills that are not detected. Remote devices show the same inventory metadata while keeping their private filesystem paths local.
+
+Every SkillSync action can be rebound per user in `~/.config/skillsync/tui.json`. Unspecified actions keep their defaults; an empty array disables an action:
+
+```json
+{
+  "keybindings": {
+    "move.down": ["j", "down"],
+    "move.up": ["k", "up"],
+    "focus.detail": ["l", "right"],
+    "focus.list": ["h", "left"],
+    "editor.insert.before": ["i"],
+    "editor.insert.after": ["a"],
+    "sync": ["ctrl+y"]
+  }
+}
+```
+
+Open **Settings → Keybindings** to inspect every current action and binding. Press `Enter` there after editing the file to reload it without restarting SkillSync.
 
 Choose **Advanced management** from Settings or the command palette for the editable device matrix, remote assignments, add/import flows, packs and groups, deletion, diagnostics, background service, vault connections, global instructions, and target management. The compact prompt interface remains available directly with:
 

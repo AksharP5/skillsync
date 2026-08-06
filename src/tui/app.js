@@ -29,7 +29,9 @@ import { syncVault } from '../core/sync.js';
 import { loadSkillDocument, saveSkillDocument } from '../core/skills.js';
 import {
   TUI_PAGES,
+  countAssignedDeviceSkills,
   countDeviceSkills,
+  deviceSkillInventory,
   filterSkillNames,
   pendingDeviceCount,
   skillAssignmentTargets,
@@ -37,34 +39,43 @@ import {
   targetDetectedCount,
   truncateLine,
 } from './model.js';
+import {
+  DEFAULT_KEYBINDINGS,
+  bindingLabel,
+  defaultTuiPreferencesPath,
+  keyMatches,
+  loadTuiPreferences,
+} from './preferences.js';
 
 const COLORS = {
-  bg: '#0A0E13',
-  surface: '#101720',
-  surfaceRaised: '#17212B',
-  border: '#263443',
-  borderActive: '#52D3C6',
-  text: '#DCE7EA',
-  muted: '#7E909C',
-  faint: '#50616D',
-  accent: '#52D3C6',
-  accentSoft: '#163A3B',
-  success: '#8BD49C',
-  warning: '#E6BE77',
-  danger: '#F08A8A',
+  bg: '#0B0D10',
+  surface: '#111419',
+  surfaceRaised: '#171B22',
+  border: '#292E37',
+  borderActive: '#7396CE',
+  text: '#E6E9EF',
+  muted: '#9198A3',
+  faint: '#626A76',
+  accent: '#7FA6E0',
+  accentSoft: '#19263A',
+  selectedText: '#F4F7FC',
+  selectedMuted: '#AFBED3',
+  success: '#86C995',
+  warning: '#D8B16D',
+  danger: '#E67E82',
 };
 
 function syntaxStyle() {
   return SyntaxStyle.fromStyles({
     default: { fg: COLORS.text },
     'markup.heading': { fg: COLORS.accent, bold: true },
-    'markup.heading.1': { fg: '#80E4D9', bold: true },
-    'markup.heading.2': { fg: '#6CD8CE', bold: true },
+    'markup.heading.1': { fg: '#9ABAF0', bold: true },
+    'markup.heading.2': { fg: '#89ABE2', bold: true },
     'markup.bold': { fg: COLORS.text, bold: true },
     'markup.italic': { fg: '#B6C7CE', italic: true },
-    'markup.raw': { fg: '#A7C7E7', bg: '#111D28' },
-    'markup.link': { fg: '#7EB6E8', underline: true },
-    'markup.list': { fg: COLORS.warning },
+    'markup.raw': { fg: '#B8C8DF', bg: COLORS.surfaceRaised },
+    'markup.link': { fg: COLORS.accent, underline: true },
+    'markup.list': { fg: COLORS.muted },
     comment: { fg: COLORS.muted, italic: true },
     string: { fg: '#A8D59D' },
     keyword: { fg: '#D4A5E7' },
@@ -98,7 +109,7 @@ function pendingHighlights(renderable) {
 }
 
 export class SkillSyncTui {
-  constructor({ config, renderer, onExit }) {
+  constructor({ config, renderer, onExit, preferences = null }) {
     this.config = config;
     this.renderer = renderer;
     this.onExit = onExit;
@@ -117,6 +128,10 @@ export class SkillSyncTui {
     this.updatingList = false;
     this.cancelRequested = false;
     this.exitWhenIdle = false;
+    this.focusArea = 'list';
+    this.editorMode = null;
+    this.bindings = preferences?.keybindings || DEFAULT_KEYBINDINGS;
+    this.preferencesPath = preferences?.path || defaultTuiPreferencesPath();
     this.theme = syntaxStyle();
     this.handleKey = this.handleKey.bind(this);
   }
@@ -127,7 +142,7 @@ export class SkillSyncTui {
     this.renderer.keyInput.on('keypress', this.handleKey);
     this.renderer.on(CliRenderEvents.RESIZE, () => this.updateResponsiveLayout());
     await this.reload({ refreshRegistry: true });
-    this.list.focus();
+    this.setBrowseFocus('list');
   }
 
   buildLayout() {
@@ -136,18 +151,19 @@ export class SkillSyncTui {
       width: '100%',
       height: '100%',
       flexDirection: 'column',
-      paddingX: 1,
     });
     this.renderer.root.add(this.root);
 
     const header = box(this.renderer, {
-      height: 3,
+      height: 2,
       flexShrink: 0,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       border: ['bottom'],
       borderColor: COLORS.border,
+      backgroundColor: COLORS.surface,
+      paddingX: 1,
     });
     this.brand = text(this.renderer, {
       content: 'skillsync',
@@ -170,13 +186,14 @@ export class SkillSyncTui {
     this.root.add(header);
 
     this.searchBar = box(this.renderer, {
-      height: 3,
+      height: 2,
       flexShrink: 0,
       flexDirection: 'row',
       alignItems: 'center',
       visible: false,
       border: ['bottom'],
       borderColor: COLORS.borderActive,
+      paddingX: 1,
     });
     this.searchBar.add(text(this.renderer, {
       content: '/ ',
@@ -209,8 +226,6 @@ export class SkillSyncTui {
       flexGrow: 1,
       minHeight: 6,
       flexDirection: 'row',
-      columnGap: 1,
-      paddingY: 1,
     });
     this.root.add(this.workspace);
 
@@ -222,14 +237,35 @@ export class SkillSyncTui {
       height: '100%',
       flexShrink: 0,
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'rounded',
+      border: ['right'],
       borderColor: COLORS.border,
       focusedBorderColor: COLORS.borderActive,
-      title: ' Skills ',
-      titleColor: COLORS.muted,
-      padding: 1,
     });
+    this.listHeader = box(this.renderer, {
+      height: 2,
+      flexShrink: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      border: ['bottom'],
+      borderColor: COLORS.border,
+      paddingX: 1,
+    });
+    this.listTitle = text(this.renderer, {
+      content: 'Skills',
+      attributes: 1,
+      height: 1,
+      width: 'auto',
+    });
+    this.listCount = text(this.renderer, {
+      content: '',
+      fg: COLORS.muted,
+      height: 1,
+      width: 'auto',
+    });
+    this.listHeader.add(this.listTitle);
+    this.listHeader.add(this.listCount);
+    this.listPane.add(this.listHeader);
     this.list = new SelectRenderable(this.renderer, {
       id: 'primary-list',
       width: '100%',
@@ -240,9 +276,9 @@ export class SkillSyncTui {
       focusedBackgroundColor: COLORS.bg,
       focusedTextColor: COLORS.text,
       selectedBackgroundColor: COLORS.accentSoft,
-      selectedTextColor: '#C9FFF8',
+      selectedTextColor: COLORS.selectedText,
       descriptionColor: COLORS.muted,
-      selectedDescriptionColor: '#91BDBA',
+      selectedDescriptionColor: COLORS.selectedMuted,
       showDescription: true,
       showSelectionIndicator: true,
       wrapSelection: false,
@@ -265,21 +301,23 @@ export class SkillSyncTui {
       flexGrow: 1,
       minWidth: 32,
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'rounded',
+    });
+    this.detailHeader = box(this.renderer, {
+      height: 3,
+      flexShrink: 0,
+      border: ['bottom'],
       borderColor: COLORS.border,
-      title: ' Preview ',
-      titleColor: COLORS.muted,
-      padding: 1,
+      paddingX: 2,
+      justifyContent: 'center',
     });
     this.detailMeta = text(this.renderer, {
       content: '',
       height: 2,
-      flexShrink: 0,
       fg: COLORS.muted,
       wrapMode: 'word',
     });
-    this.detailPane.add(this.detailMeta);
+    this.detailHeader.add(this.detailMeta);
+    this.detailPane.add(this.detailHeader);
     this.previewScroll = new ScrollBoxRenderable(this.renderer, {
       id: 'skill-preview-scroll',
       flexGrow: 1,
@@ -293,6 +331,8 @@ export class SkillSyncTui {
       verticalScrollbarOptions: {
         trackOptions: { backgroundColor: COLORS.bg },
       },
+      paddingX: 2,
+      paddingY: 1,
     });
     this.markdown = new MarkdownRenderable(this.renderer, {
       id: 'skill-preview',
@@ -319,8 +359,8 @@ export class SkillSyncTui {
           width: '100%',
           height: 'auto',
           flexShrink: 0,
-          fg: '#A7C7E7',
-          bg: '#111D28',
+          fg: '#B8C8DF',
+          bg: COLORS.surfaceRaised,
           selectable: true,
           wrapMode: 'char',
         });
@@ -337,6 +377,8 @@ export class SkillSyncTui {
       alignItems: 'center',
       border: ['top'],
       borderColor: COLORS.border,
+      backgroundColor: COLORS.surface,
+      paddingX: 1,
     });
     this.footerHints = text(this.renderer, {
       content: '',
@@ -368,10 +410,16 @@ export class SkillSyncTui {
       listDevices(this.config.repoPath),
       loadVaultConfig(this.config.repoPath),
     ]);
+    const visibleDevices = devices.map((device) => (
+      device.device_id === this.config.deviceId ? localDevice : device
+    ));
+    if (!visibleDevices.some((device) => device.device_id === this.config.deviceId)) {
+      visibleDevices.push(localDevice);
+    }
     this.snapshot = {
       registry,
       localDevice,
-      devices,
+      devices: visibleDevices,
       vaultConfig,
       skills: Object.keys(registry.skills).sort(),
     };
@@ -392,16 +440,23 @@ export class SkillSyncTui {
         return {
           value: name,
           name: `${targets.length ? '+' : ' '} ${name}`,
-          description: truncateLine(description || (targets.length ? `Installed: ${targets.join(', ')}` : 'Vault skill'), 58),
+          description: truncateLine(
+            description || (targets.length ? `Installed: ${targets.join(', ')}` : 'Vault skill'),
+            Math.max(18, this.listPane.width - 6),
+          ),
         };
       });
     }
     if (this.page === 'devices') {
-      return this.snapshot.devices.map((device) => ({
-        value: device.device_id,
-        name: `${device.device_id === this.config.deviceId ? '+' : ' '} ${device.display_name}`,
-        description: `${countDeviceSkills(device)} skills · ${device.desired_generation === device.applied_generation ? 'synced' : 'pending'}`,
-      }));
+      return this.snapshot.devices.map((device) => {
+        const visible = countDeviceSkills(device);
+        const assigned = countAssignedDeviceSkills(device);
+        return {
+          value: device.device_id,
+          name: `${device.device_id === this.config.deviceId ? '+' : ' '} ${device.display_name}`,
+          description: `${visible} visible · ${assigned} assigned · ${device.desired_generation === device.applied_generation ? 'synced' : 'pending'}`,
+        };
+      });
     }
     if (this.page === 'targets') {
       return Object.entries(this.snapshot.localDevice.targets || {}).sort(([left], [right]) => left.localeCompare(right)).map(([name, target]) => ({
@@ -432,6 +487,11 @@ export class SkillSyncTui {
         description: 'Vault-wide cleanup policy',
       },
       {
+        value: 'keybindings',
+        name: 'Keybindings',
+        description: 'Vim defaults · user-local overrides',
+      },
+      {
         value: 'advanced',
         name: 'Advanced management',
         description: 'Open matrix, imports, packs, maintenance, and connection tools',
@@ -451,7 +511,8 @@ export class SkillSyncTui {
     } finally {
       this.updatingList = false;
     }
-    this.listPane.title = ` ${TUI_PAGES.find((page) => page.id === this.page)?.label || 'Skills'} `;
+    this.listTitle.content = TUI_PAGES.find((page) => page.id === this.page)?.label || 'Skills';
+    this.listCount.content = String(items.length);
     if (!items.length) {
       this.detailMeta.content = '';
       this.markdown.content = this.page === 'skills'
@@ -493,15 +554,28 @@ export class SkillSyncTui {
     if (this.page === 'devices') {
       const device = this.snapshot.devices.find((candidate) => candidate.device_id === value);
       if (!device) return;
-      const assignments = [...new Set([
-        ...Object.keys(device.installed || {}),
-        ...(device.global_installed || []),
-      ])].sort();
+      const inventory = deviceSkillInventory(device);
+      const assigned = inventory.filter((skill) => skill.assigned).length;
+      const detected = inventory.filter((skill) => skill.detected).length;
       const targets = Object.entries(device.targets || {}).map(([name, target]) => (
-        `- **${name}** · ${target.mode} · ${target.auto_import ? 'auto-adopt on' : 'auto-adopt off'}${target.path ? ` · \`${target.path}\`` : ''}`
+        `- **${name}**${target.path ? ` · ${target.mode} · \`${target.path}\`` : ' · path private to device'} · ${target.auto_import ? 'auto-adopt on' : 'auto-adopt off'}`
       ));
+      const skills = inventory.flatMap((skill) => [
+        `### ${skill.name}`,
+        '',
+        ...skill.locations.map((location) => {
+          if (location.target === 'global') return '- **global** · device-level assignment';
+          const state = location.assigned && location.detected
+            ? location.mode ? `managed ${location.mode}` : 'assigned and detected'
+            : location.assigned
+              ? 'assigned · not detected'
+              : `detected${location.inVault ? ' · in vault' : ' · local only'}`;
+          return `- **${location.target}** · ${state}${location.path ? ` · \`${location.path}\`` : ' · path private to device'}`;
+        }),
+        '',
+      ]);
       this.detailPane.title = ' Device ';
-      this.detailMeta.content = `${device.display_name}\n${device.device_id === this.config.deviceId ? 'This device' : 'Remote device'}`;
+      this.detailMeta.content = `${device.display_name}\n${device.device_id === this.config.deviceId ? 'This device · exact local paths' : 'Remote device · paths remain private'}`;
       this.markdown.content = [
         `# ${device.display_name}`,
         '',
@@ -513,9 +587,11 @@ export class SkillSyncTui {
         '',
         ...(targets.length ? targets : ['_No reported targets._']),
         '',
-        `## Assigned skills (${assignments.length})`,
+        `## Skills (${inventory.length})`,
         '',
-        ...(assignments.length ? assignments.map((name) => `- ${name} · ${skillAssignmentTargets(device, name).join(', ')}`) : ['_No assigned skills._']),
+        `**${assigned} assigned · ${detected} detected**`,
+        '',
+        ...(skills.length ? skills : ['_No assigned or detected skills._']),
       ].join('\n');
       return;
     }
@@ -536,18 +612,49 @@ export class SkillSyncTui {
         '',
         `## Detected skills (${detected.length})`,
         '',
-        ...(detected.length ? detected.map((skill) => `- ${skill.name}${skill.in_vault ? ' · in vault' : ' · local only'}`) : ['_Nothing detected._']),
+        ...(detected.length ? detected.map((skill) => `- ${skill.name}${skill.in_vault ? ' · in vault' : ' · local only'}${skill.path ? ` · \`${skill.path}\`` : ''}`) : ['_Nothing detected._']),
         '',
         'Press `space` to toggle auto-adopt for this target.',
       ].join('\n');
       return;
     }
 
+    const keybindingRows = Object.entries(this.bindings).map(([action, bindings]) => (
+      `- \`${action}\`: ${bindings.length ? bindings.map((binding) => `\`${binding}\``).join(', ') : '_disabled_'}`
+    ));
     const descriptions = {
       sync: '# Sync now\n\nPull the latest vault, apply desired assignments, auto-adopt new local skills, refresh projections, commit real changes, and push.',
       scan: '# Scan local targets\n\nRun the local reconciliation pass without pulling first.',
       'auto-adopt': '# Auto-adopt\n\nWhen enabled, genuinely new skill folders created inside managed agent targets are adopted into the private vault on the next sync.',
       'delete-unassigned': '# Delete fully unassigned skills\n\nWhen enabled, SkillSync only removes a skill after every device has removed its assignment and reported the local copy gone.',
+      keybindings: [
+        '# Keybindings',
+        '',
+        `User-local config: \`${this.preferencesPath}\``,
+        '',
+        'Every SkillSync action can be rebound or disabled. Edit the file, then press `enter` here to reload it.',
+        '',
+        '```json',
+        '{',
+        '  "keybindings": {',
+        '    "move.down": ["j", "down"],',
+        '    "move.up": ["k", "up"],',
+        '    "focus.detail": ["l", "right"],',
+        '    "focus.list": ["h", "left"],',
+        '    "editor.insert.before": ["i"],',
+        '    "editor.insert.after": ["a"],',
+        '    "sync": ["ctrl+y"],',
+        '    "quit": []',
+        '  }',
+        '}',
+        '```',
+        '',
+        'An empty array disables an action. Unspecified actions keep their defaults.',
+        '',
+        '## Current bindings',
+        '',
+        ...keybindingRows,
+      ].join('\n'),
       advanced: '# Advanced management\n\nOpen the complete interactive menu for the skill matrix, remote assignments, add/import flows, packs, groups, deletion, diagnostics, background service, vault connections, global instructions, and targets.',
     };
     this.detailPane.title = ' Action ';
@@ -577,26 +684,31 @@ export class SkillSyncTui {
 
   renderChrome() {
     const nav = TUI_PAGES.map((item) => (
-      item.id === this.page ? `[${item.key} ${item.label}]` : `${item.key} ${item.label}`
+      item.id === this.page
+        ? `[${bindingLabel(this.bindings, `page.${item.id}`)} ${item.label}]`
+        : `${bindingLabel(this.bindings, `page.${item.id}`)} ${item.label}`
     )).join('   ');
     this.navText.content = nav;
     if (this.snapshot) {
       const pending = pendingDeviceCount(this.snapshot.devices);
       this.headerMeta.content = `${this.config.deviceId}  ·  ${this.snapshot.skills.length} skills${pending ? `  ·  ${pending} pending` : ''}`;
     }
+    const key = (action) => bindingLabel(this.bindings, action) || 'unbound';
     const modeHints = {
-      edit: 'ctrl+s save   esc cancel   ctrl+z undo',
-      search: 'type to filter   enter keep   esc clear',
-      confirm: '↑↓ choose   enter apply   esc cancel',
-      palette: '↑↓ choose   enter run   esc close',
-      targets: '↑↓ choose   space toggle   enter apply   esc cancel',
-      help: 'esc close',
+      edit: this.editorMode === 'insert'
+        ? `INSERT   ${key('editor.normal')} normal   ${key('editor.save')} save`
+        : `NORMAL   ${key('editor.move.left')}/${key('editor.move.down')}/${key('editor.move.up')}/${key('editor.move.right')} move   ${key('editor.insert.before')}/${key('editor.insert.after')} insert   ${key('editor.save')} save   ${key('editor.cancel')} close`,
+      search: `type to filter   ${key('activate')} keep   ${key('close')} clear`,
+      confirm: `${key('move.up')}/${key('move.down')} choose   ${key('activate')} apply   ${key('close')} cancel`,
+      palette: `${key('palette.move.up')}/${key('palette.move.down')} choose   ${key('activate')} run   ${key('close')} close`,
+      targets: `${key('move.up')}/${key('move.down')} choose   ${key('toggle')} toggle   ${key('activate')} apply   ${key('close')} cancel`,
+      help: `${key('close')} close`,
     };
     const pageHints = {
-      skills: '↑↓ browse   enter install   e edit   / filter   s sync   ctrl+p commands   ? help',
-      targets: '↑↓ browse   space auto-adopt   s sync   ctrl+p commands   ? help',
-      settings: '↑↓ browse   enter run   ctrl+p commands   ? help',
-      devices: '↑↓ browse   s sync   ctrl+p commands   ? help',
+      skills: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} install   ${key('edit')} edit   ${key('search')} filter`,
+      targets: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('toggle')} auto-adopt   ${key('sync')} sync`,
+      settings: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} run   ${key('commands')} commands`,
+      devices: `${key('move.down')}/${key('move.up')} move/scroll   ${key('focus.list')}/${key('focus.detail')} pane   ${key('sync')} sync   ${key('commands')} commands`,
     };
     const hints = modeHints[this.mode] || pageHints[this.page];
     this.footerHints.content = hints;
@@ -640,16 +752,31 @@ export class SkillSyncTui {
       await this.exit('quit');
       return;
     }
-    if (this.mode === 'browse') this.list.focus();
+    if (this.mode === 'browse') this.setBrowseFocus(this.focusArea);
   }
 
   setPage(page) {
     if (!TUI_PAGES.some((candidate) => candidate.id === page) || this.mode !== 'browse') return;
     this.page = page;
+    this.focusArea = 'list';
     this.query = page === 'skills' ? this.query : '';
-    this.listPane.title = ` ${TUI_PAGES.find((item) => item.id === page).label} `;
     this.updateList({ preserveSelection: true });
-    this.list.focus();
+    this.setBrowseFocus('list');
+  }
+
+  setBrowseFocus(area) {
+    if (this.mode !== 'browse' || !['list', 'detail'].includes(area)) return;
+    this.focusArea = area;
+    if (area === 'list') {
+      this.previewScroll.blur();
+      this.list.focus();
+    } else {
+      this.list.blur();
+      this.previewScroll.focus();
+    }
+    this.listPane.borderColor = area === 'list' ? COLORS.borderActive : COLORS.border;
+    this.detailHeader.borderColor = area === 'detail' ? COLORS.borderActive : COLORS.border;
+    this.renderChrome();
   }
 
   openSearch() {
@@ -670,7 +797,7 @@ export class SkillSyncTui {
     this.mode = 'browse';
     this.searchBar.visible = false;
     this.updateList({ preserveSelection: true });
-    this.list.focus();
+    this.setBrowseFocus('list');
   }
 
   async beginEdit() {
@@ -694,6 +821,7 @@ export class SkillSyncTui {
 
   openEditor(document) {
     this.mode = 'edit';
+    this.editorMode = 'normal';
     this.discardWarningContent = null;
     this.listPane.visible = false;
     this.detailPane.visible = false;
@@ -702,13 +830,33 @@ export class SkillSyncTui {
       width: '100%',
       height: '100%',
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: COLORS.borderActive,
-      title: ` Edit ${document.name} `,
-      titleColor: COLORS.accent,
-      padding: 1,
+      backgroundColor: COLORS.bg,
     });
+    this.editorHeader = box(this.renderer, {
+      height: 2,
+      flexShrink: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      border: ['bottom'],
+      borderColor: COLORS.border,
+      backgroundColor: COLORS.surface,
+      paddingX: 1,
+    });
+    this.editorModeText = text(this.renderer, {
+      content: '',
+      width: 10,
+      height: 1,
+      attributes: 1,
+    });
+    this.editorTitle = text(this.renderer, {
+      content: `${document.name}  ·  ${document.relativePath}`,
+      fg: COLORS.muted,
+      height: 1,
+      flexGrow: 1,
+    });
+    this.editorHeader.add(this.editorModeText);
+    this.editorHeader.add(this.editorTitle);
+    this.editorPane.add(this.editorHeader);
     this.editor = new TextareaRenderable(this.renderer, {
       id: 'skill-editor',
       width: '100%',
@@ -723,12 +871,85 @@ export class SkillSyncTui {
       wrapMode: 'word',
       tabIndicatorColor: COLORS.faint,
       syntaxStyle: this.theme,
+      padding: 1,
       traits: { capture: ['escape', 'tab'] },
     });
     this.editorPane.add(this.editor);
     this.workspace.add(this.editorPane);
     this.editor.focus();
+    this.renderEditorMode();
     this.renderChrome();
+  }
+
+  renderEditorMode() {
+    if (!this.editor) return;
+    const insert = this.editorMode === 'insert';
+    this.editorModeText.content = insert ? ' INSERT ' : ' NORMAL ';
+    this.editorModeText.fg = insert ? COLORS.success : COLORS.accent;
+    this.editor.cursorStyle = { style: insert ? 'line' : 'block', blinking: insert };
+  }
+
+  enterInsertMode(action) {
+    if (!this.editor || this.editorMode !== 'normal') return;
+    if (action === 'editor.insert.after') this.editor.moveCursorRight();
+    if (action === 'editor.insert.line-start') this.editor.gotoLineHome();
+    if (action === 'editor.insert.line-end') this.editor.gotoLineEnd();
+    if (action === 'editor.insert.below') {
+      this.editor.gotoLineEnd();
+      this.editor.newLine();
+    }
+    if (action === 'editor.insert.above') {
+      this.editor.gotoLineHome();
+      this.editor.newLine();
+      this.editor.moveCursorUp();
+    }
+    this.editorMode = 'insert';
+    this.discardWarningContent = null;
+    this.renderEditorMode();
+    this.renderChrome();
+  }
+
+  handleEditorKey(key) {
+    if (keyMatches(this.bindings, 'editor.save', key)) {
+      key.preventDefault();
+      void this.saveEditor();
+      return;
+    }
+    if (this.editorMode === 'insert') {
+      if (keyMatches(this.bindings, 'editor.normal', key)) {
+        key.preventDefault();
+        this.editorMode = 'normal';
+        this.renderEditorMode();
+        this.renderChrome();
+      }
+      return;
+    }
+
+    key.preventDefault();
+    if (keyMatches(this.bindings, 'editor.cancel', key)) return this.closeEditor();
+    const insertAction = [
+      'editor.insert.before',
+      'editor.insert.after',
+      'editor.insert.line-start',
+      'editor.insert.line-end',
+      'editor.insert.below',
+      'editor.insert.above',
+    ].find((action) => keyMatches(this.bindings, action, key));
+    if (insertAction) return this.enterInsertMode(insertAction);
+    if (keyMatches(this.bindings, 'editor.move.left', key)) return this.editor.moveCursorLeft();
+    if (keyMatches(this.bindings, 'editor.move.down', key)) return this.editor.moveCursorDown();
+    if (keyMatches(this.bindings, 'editor.move.up', key)) return this.editor.moveCursorUp();
+    if (keyMatches(this.bindings, 'editor.move.right', key)) return this.editor.moveCursorRight();
+    if (keyMatches(this.bindings, 'editor.move.word-forward', key)) return this.editor.moveWordForward();
+    if (keyMatches(this.bindings, 'editor.move.word-backward', key)) return this.editor.moveWordBackward();
+    if (keyMatches(this.bindings, 'editor.move.line-start', key)) return this.editor.gotoLineHome();
+    if (keyMatches(this.bindings, 'editor.move.line-end', key)) return this.editor.gotoLineEnd();
+    if (keyMatches(this.bindings, 'editor.move.buffer-start', key)) return this.editor.gotoBufferHome();
+    if (keyMatches(this.bindings, 'editor.move.buffer-end', key)) return this.editor.gotoBufferEnd();
+    if (keyMatches(this.bindings, 'editor.delete', key)) return this.editor.deleteChar();
+    if (keyMatches(this.bindings, 'editor.delete.to-line-end', key)) return this.editor.deleteToLineEnd();
+    if (keyMatches(this.bindings, 'editor.undo', key)) return this.editor.undo();
+    if (keyMatches(this.bindings, 'editor.redo', key)) return this.editor.redo();
   }
 
   closeEditor() {
@@ -736,7 +957,7 @@ export class SkillSyncTui {
     const content = this.editor.plainText;
     if (content !== this.activeDocument.content && this.discardWarningContent !== content) {
       this.discardWarningContent = content;
-      this.setStatus('Unsaved changes · press esc again to discard', 'warning');
+      this.setStatus(`Unsaved changes · press ${bindingLabel(this.bindings, 'editor.cancel')} again to discard`, 'warning');
       this.editor.focus();
       return;
     }
@@ -749,12 +970,16 @@ export class SkillSyncTui {
     this.workspace.remove(this.editorPane);
     this.editorPane.destroyRecursively();
     this.editorPane = null;
+    this.editorHeader = null;
+    this.editorModeText = null;
+    this.editorTitle = null;
     this.editor = null;
+    this.editorMode = null;
     this.discardWarningContent = null;
     this.listPane.visible = true;
     this.detailPane.visible = true;
     this.mode = 'browse';
-    this.list.focus();
+    this.setBrowseFocus('list');
   }
 
   async saveEditor() {
@@ -850,10 +1075,10 @@ export class SkillSyncTui {
       backgroundColor: COLORS.surface,
       focusedBackgroundColor: COLORS.surface,
       selectedBackgroundColor: COLORS.accentSoft,
-      selectedTextColor: '#C9FFF8',
+      selectedTextColor: COLORS.selectedText,
       textColor: COLORS.text,
       descriptionColor: COLORS.muted,
-      selectedDescriptionColor: '#91BDBA',
+      selectedDescriptionColor: COLORS.selectedMuted,
       showDescription: true,
       showSelectionIndicator: true,
     });
@@ -884,8 +1109,7 @@ export class SkillSyncTui {
     this.targetModal = null;
     this.targetList = null;
     this.mode = 'browse';
-    this.list.focus();
-    this.renderChrome();
+    this.setBrowseFocus(this.focusArea);
   }
 
   async applyTargetPicker() {
@@ -962,10 +1186,10 @@ export class SkillSyncTui {
       backgroundColor: COLORS.surface,
       focusedBackgroundColor: COLORS.surface,
       selectedBackgroundColor: COLORS.accentSoft,
-      selectedTextColor: '#C9FFF8',
+      selectedTextColor: COLORS.selectedText,
       textColor: COLORS.text,
       descriptionColor: COLORS.muted,
-      selectedDescriptionColor: '#91BDBA',
+      selectedDescriptionColor: COLORS.selectedMuted,
       showDescription: true,
       showSelectionIndicator: true,
     });
@@ -983,8 +1207,7 @@ export class SkillSyncTui {
     this.confirmModal = null;
     this.confirmList = null;
     this.mode = 'browse';
-    this.list.focus();
-    this.renderChrome();
+    this.setBrowseFocus(this.focusArea);
   }
 
   async applyConfirmation() {
@@ -1029,10 +1252,10 @@ export class SkillSyncTui {
       backgroundColor: COLORS.surface,
       focusedBackgroundColor: COLORS.surface,
       selectedBackgroundColor: COLORS.accentSoft,
-      selectedTextColor: '#C9FFF8',
+      selectedTextColor: COLORS.selectedText,
       textColor: COLORS.text,
       descriptionColor: COLORS.muted,
-      selectedDescriptionColor: '#91BDBA',
+      selectedDescriptionColor: COLORS.selectedMuted,
       showDescription: true,
       showSelectionIndicator: true,
     });
@@ -1060,8 +1283,7 @@ export class SkillSyncTui {
     this.paletteInput = null;
     this.paletteList = null;
     this.mode = 'browse';
-    this.list.focus();
-    this.renderChrome();
+    this.setBrowseFocus(this.focusArea);
   }
 
   async runPaletteCommand() {
@@ -1099,20 +1321,28 @@ export class SkillSyncTui {
   openHelp() {
     if (this.mode !== 'browse') return;
     this.mode = 'help';
-    this.helpModal = this.createModal({ title: ' Keyboard ', width: Math.min(76, Math.max(52, this.renderer.width - 8)), height: 22 });
+    this.helpModal = this.createModal({ title: ' Keyboard ', width: Math.min(84, Math.max(58, this.renderer.width - 8)), height: 27 });
+    const key = (action) => bindingLabel(this.bindings, action) || 'unbound';
     const help = [
-      ['1–4', 'Switch Skills, Devices, Targets, Settings'],
-      ['↑ / ↓ or j / k', 'Move through the current list'],
-      ['enter', 'Choose install destinations or run an action'],
-      ['e', 'Edit the selected canonical SKILL.md'],
-      ['ctrl+s', 'Save an edit and sync the vault'],
-      ['/', 'Filter skills'],
-      ['space', 'Toggle a target setting or install destination'],
-      ['s', 'Sync now'],
-      ['r', 'Refresh the current view'],
-      ['ctrl+p', 'Open command palette'],
-      ['esc', 'Close the current overlay'],
-      ['q / ctrl+c', 'Quit'],
+      [TUI_PAGES.map((page) => key(`page.${page.id}`)).join(' / '), 'Switch sections'],
+      [`${key('move.down')} / ${key('move.up')}`, 'Move in a list or scroll the focused preview'],
+      [`${key('focus.list')} / ${key('focus.detail')}`, 'Focus the left list or right preview'],
+      [key('activate'), 'Choose install destinations or run an action'],
+      [key('edit'), 'Open the selected canonical SKILL.md in NORMAL mode'],
+      [`${key('editor.insert.before')} / ${key('editor.insert.after')} / ${key('editor.insert.line-start')} / ${key('editor.insert.line-end')}`, 'Enter INSERT mode before/after the cursor or line'],
+      [`${key('editor.insert.below')} / ${key('editor.insert.above')}`, 'Open a line below/above and enter INSERT mode'],
+      [`${key('editor.move.left')} / ${key('editor.move.down')} / ${key('editor.move.up')} / ${key('editor.move.right')}`, 'Move the editor cursor in NORMAL mode'],
+      [`${key('editor.move.word-forward')} / ${key('editor.move.word-backward')} / ${key('editor.move.line-start')} / ${key('editor.move.line-end')}`, 'Move by word or line in NORMAL mode'],
+      [`${key('editor.delete')} / ${key('editor.delete.to-line-end')} / ${key('editor.undo')} / ${key('editor.redo')}`, 'Delete, delete to end, undo, redo'],
+      [key('editor.normal'), 'Return to NORMAL mode'],
+      [key('editor.save'), 'Save an edit and sync the vault'],
+      [key('search'), 'Filter skills'],
+      [key('toggle'), 'Toggle a target setting or install destination'],
+      [key('sync'), 'Sync now'],
+      [key('refresh'), 'Refresh the current view'],
+      [key('commands'), 'Open command palette'],
+      [key('close'), 'Close the current overlay'],
+      [`${key('quit')} / ${key('force-quit')}`, 'Quit'],
     ];
     this.helpModal.add(text(this.renderer, {
       content: help.map(([key, description]) => `${key.padEnd(18)}${description}`).join('\n'),
@@ -1131,14 +1361,20 @@ export class SkillSyncTui {
     this.helpModal.destroyRecursively();
     this.helpModal = null;
     this.mode = 'browse';
-    this.list.focus();
-    this.renderChrome();
+    this.setBrowseFocus(this.focusArea);
   }
 
   async runSelectedSetting() {
     const action = this.list.getSelectedOption()?.value;
     if (!action) return;
     if (['sync', 'scan', 'advanced'].includes(action)) return this.runAction(action);
+    if (action === 'keybindings') {
+      return this.perform('Reloading keybindings…', async () => {
+        const preferences = await loadTuiPreferences(this.preferencesPath);
+        this.bindings = preferences.keybindings;
+        return 'Keybindings reloaded';
+      });
+    }
     if (action === 'auto-adopt') {
       const enabled = this.deviceAutoAdoptState() !== 'on';
       return this.perform('Updating auto-adopt…', async () => {
@@ -1194,26 +1430,33 @@ export class SkillSyncTui {
     const compact = this.renderer.width < 86;
     this.brand.visible = !narrow;
     this.workspace.flexDirection = narrow ? 'column' : 'row';
-    this.workspace.rowGap = narrow ? 1 : 0;
-    this.workspace.columnGap = narrow ? 0 : 1;
-    this.listPane.width = narrow ? '100%' : compact ? '40%' : '34%';
-    this.listPane.height = narrow ? '42%' : '100%';
+    this.workspace.rowGap = 0;
+    this.workspace.columnGap = 0;
+    this.listPane.border = narrow ? ['bottom'] : ['right'];
+    this.listPane.width = narrow ? '100%' : compact ? '40%' : '36%';
+    this.listPane.height = narrow ? '45%' : '100%';
     this.listPane.minWidth = narrow ? 0 : compact ? 24 : 28;
-    this.listPane.maxWidth = narrow ? '100%' : compact ? 34 : 46;
+    this.listPane.maxWidth = narrow ? '100%' : compact ? 36 : 52;
     this.detailPane.width = '100%';
-    this.detailPane.height = narrow ? 'auto' : '100%';
+    this.detailPane.height = narrow ? '55%' : '100%';
     this.detailPane.minWidth = narrow ? 0 : 32;
     this.headerMeta.visible = this.renderer.width >= 76;
+    if (this.snapshot && this.mode === 'browse') this.updateList({ preserveSelection: true });
   }
 
   async handleKey(key) {
     if (key.eventType === 'release') return;
-    if ((key.ctrl && key.name === 'c') || (this.mode === 'browse' && key.name === 'q')) {
+    const forceQuit = keyMatches(this.bindings, 'force-quit', key);
+    const quit = this.mode === 'browse' && keyMatches(this.bindings, 'quit', key);
+    if (forceQuit || quit) {
       key.preventDefault();
       if (this.busy) {
         if (!this.cancelRequested) {
           this.cancelRequested = true;
-          const quitKey = this.mode === 'browse' ? 'q or ctrl+c' : 'ctrl+c';
+          const quitKey = [
+            ...(this.mode === 'browse' ? this.bindings.quit : []),
+            ...this.bindings['force-quit'],
+          ].join(' or ');
           this.setStatus(`Operation running · press ${quitKey} again to cancel and quit`, 'warning');
           return;
         }
@@ -1226,61 +1469,75 @@ export class SkillSyncTui {
       return;
     }
     if (this.mode === 'edit') {
-      if (key.ctrl && key.name === 's') {
-        key.preventDefault();
-        await this.saveEditor();
-      } else if (key.name === 'escape') {
-        key.preventDefault();
-        this.closeEditor();
-      }
+      this.handleEditorKey(key);
       return;
     }
     if (this.mode === 'search') {
-      if (key.name === 'escape') {
+      if (keyMatches(this.bindings, 'close', key)) {
         key.preventDefault();
         this.closeSearch({ clear: true });
+      } else if (keyMatches(this.bindings, 'activate', key)) {
+        key.preventDefault();
+        this.closeSearch();
       }
       return;
     }
     if (this.mode === 'confirm') {
-      if (key.name === 'escape') {
+      if (keyMatches(this.bindings, 'close', key)) {
         key.preventDefault();
         this.confirmAction = null;
         this.closeConfirmation();
-      } else if (key.name === 'return' || key.name === 'enter') {
+      } else if (keyMatches(this.bindings, 'activate', key)) {
         key.preventDefault();
         await this.applyConfirmation();
+      } else if (keyMatches(this.bindings, 'move.up', key)) {
+        key.preventDefault();
+        this.confirmList.moveUp();
+      } else if (keyMatches(this.bindings, 'move.down', key)) {
+        key.preventDefault();
+        this.confirmList.moveDown();
       }
       return;
     }
     if (this.mode === 'palette') {
-      if (key.name === 'escape') {
+      if (keyMatches(this.bindings, 'close', key)) {
         key.preventDefault();
         this.closePalette();
-      } else if (key.name === 'up') {
+      } else if (keyMatches(this.bindings, 'activate', key)) {
+        key.preventDefault();
+        await this.runPaletteCommand();
+      } else if (keyMatches(this.bindings, 'palette.move.up', key)) {
         key.preventDefault();
         this.paletteList.moveUp();
-      } else if (key.name === 'down') {
+      } else if (keyMatches(this.bindings, 'palette.move.down', key)) {
         key.preventDefault();
         this.paletteList.moveDown();
       }
       return;
     }
     if (this.mode === 'targets') {
-      if (key.name === 'escape') {
+      if (keyMatches(this.bindings, 'close', key)) {
         key.preventDefault();
         this.closeTargetPicker();
-      } else if (key.name === 'space') {
+      } else if (keyMatches(this.bindings, 'toggle', key)) {
         key.preventDefault();
         this.toggleTargetChoice();
-      } else if (key.name === 'return' || key.name === 'enter') {
+      } else if (keyMatches(this.bindings, 'activate', key)) {
         key.preventDefault();
         await this.applyTargetPicker();
+      } else if (keyMatches(this.bindings, 'move.up', key)) {
+        key.preventDefault();
+        this.targetList.moveUp();
+      } else if (keyMatches(this.bindings, 'move.down', key)) {
+        key.preventDefault();
+        this.targetList.moveDown();
       }
       return;
     }
     if (this.mode === 'help') {
-      if (key.name === 'escape' || key.name === '?' || key.name === 'return' || key.name === 'enter') {
+      if (keyMatches(this.bindings, 'close', key)
+        || keyMatches(this.bindings, 'help', key)
+        || keyMatches(this.bindings, 'activate', key)) {
         key.preventDefault();
         this.closeHelp();
       }
@@ -1288,58 +1545,78 @@ export class SkillSyncTui {
     }
     if (this.busy) return;
 
-    const page = TUI_PAGES.find((candidate) => candidate.key === key.name);
+    const page = TUI_PAGES.find((candidate) => keyMatches(this.bindings, `page.${candidate.id}`, key));
     if (page) {
       key.preventDefault();
       this.setPage(page.id);
       return;
     }
-    if (key.ctrl && key.name === 'p') {
+    if (keyMatches(this.bindings, 'commands', key)) {
       key.preventDefault();
       this.openPalette();
       return;
     }
-    if (key.name === '?') {
+    if (keyMatches(this.bindings, 'help', key)) {
       key.preventDefault();
       this.openHelp();
       return;
     }
-    if (key.name === '/' && this.page === 'skills') {
+    if (keyMatches(this.bindings, 'search', key) && this.page === 'skills') {
       key.preventDefault();
       this.openSearch();
       return;
     }
-    if (key.name === 'e') {
+    if (keyMatches(this.bindings, 'edit', key)) {
       key.preventDefault();
       await this.beginEdit();
       return;
     }
-    if (key.name === 's') {
+    if (keyMatches(this.bindings, 'sync', key)) {
       key.preventDefault();
       await this.runAction('sync');
       return;
     }
-    if (key.name === 'r') {
+    if (keyMatches(this.bindings, 'refresh', key)) {
       key.preventDefault();
       await this.runAction('refresh');
       return;
     }
-    if (key.name === 'space' && this.page === 'targets') {
+    if (keyMatches(this.bindings, 'focus.list', key)) {
+      key.preventDefault();
+      this.setBrowseFocus('list');
+      return;
+    }
+    if (keyMatches(this.bindings, 'focus.detail', key)) {
+      key.preventDefault();
+      this.setBrowseFocus('detail');
+      return;
+    }
+    if (keyMatches(this.bindings, 'toggle', key) && this.page === 'targets') {
       key.preventDefault();
       await this.toggleCurrentTargetAutoAdopt();
       return;
     }
-    if ((key.name === 'return' || key.name === 'enter') && this.page === 'settings') {
+    if (keyMatches(this.bindings, 'activate', key)) {
       key.preventDefault();
-      await this.runSelectedSetting();
+      if (this.page === 'skills') {
+        await this.openTargetPicker(this.list.getSelectedOption()?.value);
+      } else if (this.page === 'settings') {
+        await this.runSelectedSetting();
+      } else {
+        this.setBrowseFocus('detail');
+      }
       return;
     }
-    if (key.name === 'j') {
+    if (keyMatches(this.bindings, 'move.down', key)) {
       key.preventDefault();
-      this.list.moveDown();
-    } else if (key.name === 'k') {
+      if (this.focusArea === 'detail') this.previewScroll.scrollBy(1);
+      else this.list.moveDown();
+      return;
+    }
+    if (keyMatches(this.bindings, 'move.up', key)) {
       key.preventDefault();
-      this.list.moveUp();
+      if (this.focusArea === 'detail') this.previewScroll.scrollBy(-1);
+      else this.list.moveUp();
     }
   }
 
@@ -1360,6 +1637,7 @@ export class SkillSyncTui {
 }
 
 export async function createSkillSyncTui({ config }) {
+  const preferences = await loadTuiPreferences();
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     clearOnShutdown: true,
@@ -1369,9 +1647,10 @@ export async function createSkillSyncTui({ config }) {
     useMouse: true,
     enableMouseMovement: false,
     openConsoleOnError: false,
+    screenMode: 'alternate-screen',
   });
   return new Promise((resolve, reject) => {
-    const app = new SkillSyncTui({ config, renderer, onExit: resolve });
+    const app = new SkillSyncTui({ config, renderer, onExit: resolve, preferences });
     app.start().catch((error) => {
       renderer.destroy();
       reject(error);

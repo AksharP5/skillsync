@@ -52,7 +52,7 @@ Make writing **clearer** while preserving its voice.
   return { root, vaultPath, skillPath, targetPath };
 }
 
-async function startApp(vaultPath, dimensions = { width: 126, height: 36 }) {
+async function startApp(vaultPath, dimensions = { width: 126, height: 36 }, preferences = null) {
   const { createTestRenderer } = await import('@opentui/core/testing');
   const { SkillSyncTui } = await import('../src/tui/app.js');
   const setup = await createTestRenderer(dimensions);
@@ -62,6 +62,7 @@ async function startApp(vaultPath, dimensions = { width: 126, height: 36 }) {
     config: { repoPath: vaultPath, deviceId: 'qa-device' },
     renderer: setup.renderer,
     onExit: resolveExit,
+    preferences,
   });
   await app.start();
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -91,6 +92,11 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
 
   mockInput.pressKey('e');
   await waitForMode(app, 'edit');
+  assert.equal(app.editorMode, 'normal');
+  await mockInput.typeText('z');
+  assert.doesNotMatch(app.editor.plainText, /z/);
+  mockInput.pressKey('i');
+  assert.equal(app.editorMode, 'insert');
   await mockInput.typeText('\nQA verified edit.\n');
   mockInput.pressKey('s', { ctrl: true });
   await waitForMode(app, 'browse');
@@ -127,8 +133,8 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
   await flush({ maxPasses: 30 });
   const rows = captureCharFrame().split('\n');
   assert.ok(
-    rows.findIndex((row) => row.includes('╭─ Preview '))
-      > rows.findIndex((row) => row.includes('╭─ Skills ')),
+    rows.findIndex((row) => row.includes('Proof Reader'))
+      > rows.findIndex((row) => row.includes('Skills')),
   );
 
   mockInput.pressKey('q');
@@ -148,6 +154,7 @@ test('a sync failure after saving leaves a current, reopenable document', {
 
   mockInput.pressKey('e');
   await waitForMode(app, 'edit');
+  mockInput.pressKey('i');
   await mockInput.typeText('\nSaved before push.\n');
   mockInput.pressKey('s', { ctrl: true });
   await waitForMode(app, 'browse');
@@ -157,8 +164,41 @@ test('a sync failure after saving leaves a current, reopenable document', {
   mockInput.pressKey('e');
   await waitForMode(app, 'edit');
   assert.match(app.activeDocument.content, /Saved before push\./);
-  mockInput.pressEscape();
+  mockInput.pressKey('q');
   await waitForMode(app, 'browse');
   mockInput.pressKey('q');
+  await exited;
+});
+
+test('user keybindings replace default actions', {
+  skip: nativeRuntime ? false : 'requires Node with --experimental-ffi',
+}, async (context) => {
+  const { DEFAULT_KEYBINDINGS } = await import('../src/tui/preferences.js');
+  const { root, vaultPath } = await fixture();
+  const preferences = {
+    path: '/tmp/skillsync-test-tui.json',
+    keybindings: {
+      ...DEFAULT_KEYBINDINGS,
+      edit: ['v'],
+      quit: ['z'],
+    },
+  };
+  const { app, exited, mockInput, renderer } = await startApp(
+    vaultPath,
+    { width: 126, height: 36 },
+    preferences,
+  );
+  context.after(async () => {
+    if (!app.exiting) renderer.destroy();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  mockInput.pressKey('e');
+  assert.equal(app.mode, 'browse');
+  mockInput.pressKey('v');
+  await waitForMode(app, 'edit');
+  mockInput.pressKey('q');
+  await waitForMode(app, 'browse');
+  mockInput.pressKey('z');
   await exited;
 });

@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 export const TUI_PAGES = [
   { id: 'skills', label: 'Skills', key: '1' },
   { id: 'devices', label: 'Devices', key: '2' },
@@ -60,10 +62,73 @@ export function pendingDeviceCount(devices) {
 }
 
 export function countDeviceSkills(device) {
-  return new Set([
-    ...Object.keys(device?.installed || {}),
-    ...(device?.global_installed || []),
-  ]).size;
+  return deviceSkillInventory(device).length;
+}
+
+export function countAssignedDeviceSkills(device) {
+  return deviceSkillInventory(device).filter((skill) => skill.assigned).length;
+}
+
+function targetSkillPath(target, skillName) {
+  if (!target?.path) return null;
+  const separator = target.path.includes('\\') && !target.path.includes('/') ? '\\' : '/';
+  return `${target.path.replace(/[\\/]$/, '')}${separator}${skillName}`;
+}
+
+export function deviceSkillInventory(device) {
+  const inventory = new Map();
+  const ensureSkill = (name) => {
+    if (!inventory.has(name)) inventory.set(name, { name, locations: new Map() });
+    return inventory.get(name);
+  };
+  const ensureLocation = (name, targetName) => {
+    const skill = ensureSkill(name);
+    if (!skill.locations.has(targetName)) {
+      const target = device?.targets?.[targetName];
+      skill.locations.set(targetName, {
+        target: targetName,
+        assigned: false,
+        detected: false,
+        inVault: false,
+        path: targetSkillPath(target, name),
+        mode: target?.path ? target.mode : null,
+      });
+    }
+    return skill.locations.get(targetName);
+  };
+
+  for (const [name, targets] of Object.entries(device?.installed || {})) {
+    for (const targetName of targets) ensureLocation(name, targetName).assigned = true;
+  }
+  for (const name of device?.global_installed || []) {
+    ensureLocation(name, 'global').assigned = true;
+  }
+  for (const [targetName, detected] of Object.entries(device?.detected || {})) {
+    for (const skill of Array.isArray(detected) ? detected : []) {
+      if (!skill?.name) continue;
+      const location = ensureLocation(skill.name, targetName);
+      location.detected = true;
+      location.inVault = Boolean(skill.in_vault);
+      if (skill.path) {
+        const root = device?.targets?.[targetName]?.scan_path || device?.targets?.[targetName]?.path;
+        location.path = root && !path.isAbsolute(skill.path)
+          ? path.join(root, skill.path)
+          : skill.path;
+      }
+    }
+  }
+
+  return [...inventory.values()].map((skill) => {
+    const locations = [...skill.locations.values()].sort((left, right) => (
+      left.target === 'global' ? -1 : right.target === 'global' ? 1 : left.target.localeCompare(right.target)
+    ));
+    return {
+      name: skill.name,
+      assigned: locations.some((location) => location.assigned),
+      detected: locations.some((location) => location.detected),
+      locations,
+    };
+  }).sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function targetDetectedCount(device, targetName) {
