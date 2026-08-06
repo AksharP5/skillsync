@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
+import path from 'node:path';
 
 import {
   countAssignedDeviceSkills,
@@ -99,4 +101,13 @@ test('device inventory combines assignments and detected locations without hidin
   assert.equal(localOnly.assigned, false);
   assert.equal(localOnly.locations[0].path, '/home/me/.codex/skills/local-only');
   assert.equal(inventory.find((skill) => skill.name === 'missing').detected, false);
+});
+
+test('device inventory expands local home-relative target paths', () => {
+  const [skill] = deviceSkillInventory({
+    targets: { codex: { path: '~/.codex/skills', mode: 'symlink' } },
+    detected: { codex: [{ name: 'local-skill', path: 'local-skill', in_vault: true }] },
+  });
+
+  assert.equal(skill.locations[0].path, path.join(homedir(), '.codex', 'skills', 'local-skill'));
 });

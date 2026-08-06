@@ -569,7 +569,7 @@ export class SkillSyncTui {
             ? location.mode ? `managed ${location.mode}` : 'assigned and detected'
             : location.assigned
               ? 'assigned · not detected'
-              : `detected${location.inVault ? ' · in vault' : ' · local only'}`;
+              : `unmanaged · detected${location.inVault ? ' · in vault' : ' · local only'}`;
           return `- **${location.target}** · ${state}${location.path ? ` · \`${location.path}\`` : ' · path private to device'}`;
         }),
         '',

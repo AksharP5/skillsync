@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { expandHome } from '../core/fs.js';
+
 export const TUI_PAGES = [
   { id: 'skills', label: 'Skills', key: '1' },
   { id: 'devices', label: 'Devices', key: '2' },
@@ -71,8 +73,7 @@ export function countAssignedDeviceSkills(device) {
 
 function targetSkillPath(target, skillName) {
   if (!target?.path) return null;
-  const separator = target.path.includes('\\') && !target.path.includes('/') ? '\\' : '/';
-  return `${target.path.replace(/[\\/]$/, '')}${separator}${skillName}`;
+  return path.join(expandHome(target.path), skillName);
 }
 
 export function deviceSkillInventory(device) {
@@ -110,7 +111,8 @@ export function deviceSkillInventory(device) {
       location.detected = true;
       location.inVault = Boolean(skill.in_vault);
       if (skill.path) {
-        const root = device?.targets?.[targetName]?.scan_path || device?.targets?.[targetName]?.path;
+        const configuredRoot = device?.targets?.[targetName]?.scan_path || device?.targets?.[targetName]?.path;
+        const root = expandHome(configuredRoot);
         location.path = root && !path.isAbsolute(skill.path)
           ? path.join(root, skill.path)
           : skill.path;
