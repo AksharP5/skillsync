@@ -930,8 +930,8 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
           status = 'missing';
         } else if (mode === 'copy') {
           status = info.ownedCopy ? 'ok' : 'unmanaged';
-        } else if (info.ownedSymlink && info.resolved === path.resolve(source)) {
-          status = 'ok';
+        } else if (info.ownedSymlink && info.reachable) {
+          status = info.resolved === await realpathOrResolve(source) ? 'ok' : 'wrong-source';
         } else if (info.ownedSymlink || info.ownedCopy) {
           status = 'wrong-source';
         } else {
@@ -1125,10 +1125,13 @@ async function removeStaleOwnedProjections({ vaultPath, targetPath, desired }) {
 
 async function createSymlinkProjection(source, destination) {
   const vaultPath = path.dirname(path.dirname(source));
-  const existing = await projectionInfo(destination, vaultPath);
+  const [existing, canonicalSource] = await Promise.all([
+    projectionInfo(destination, vaultPath),
+    realpath(source),
+  ]);
   if (existing.exists) {
     if (existing.ownedSymlink) {
-      if (existing.resolved === path.resolve(source)) return;
+      if (existing.reachable && existing.resolved === canonicalSource) return;
       await removePath(destination);
     } else if (existing.ownedCopy) {
       await removePath(destination);
@@ -1140,13 +1143,17 @@ async function createSymlinkProjection(source, destination) {
 }
 
 async function writeSymlinkProjection(source, destination, vaultPath) {
-  const relativeSource = path.relative(path.dirname(destination), source);
+  const [parent, target] = await Promise.all([
+    realpath(path.dirname(destination)),
+    realpath(source),
+  ]);
+  const relativeSource = path.relative(parent, target);
   try {
     await symlink(relativeSource, destination, 'dir');
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const existing = await projectionInfo(destination, vaultPath);
-    if (existing.ownedSymlink && existing.resolved === path.resolve(source)) return;
+    if (existing.ownedSymlink && existing.reachable && existing.resolved === target) return;
     if (existing.ownedSymlink || existing.ownedCopy) {
       await removePath(destination);
       await symlink(relativeSource, destination, 'dir');
@@ -1169,15 +1176,32 @@ async function createCopyProjection(source, destination, skillName, vaultPath) {
   await writeFile(path.join(destination, '.skillsync-owned.json'), JSON.stringify({ skill: skillName, vault: vaultPath }, null, 2));
 }
 
+async function realpathOrResolve(targetPath) {
+  try {
+    return await realpath(targetPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return path.resolve(targetPath);
+    throw error;
+  }
+}
+
 async function symlinkInfo(targetPath, vaultPath) {
   try {
     const info = await lstat(targetPath);
     if (!info.isSymbolicLink()) return null;
     const linked = await readlink(targetPath);
-    const resolved = path.resolve(path.dirname(targetPath), linked);
+    const canonical = await realpath(targetPath).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    const resolved = canonical || path.resolve(path.dirname(targetPath), linked);
+    const vaultSkills = path.resolve(vaultPath, 'skills');
+    const canonicalVaultSkills = await realpathOrResolve(vaultSkills);
     return {
       resolved,
-      owned: resolved.startsWith(path.join(vaultPath, 'skills') + path.sep),
+      reachable: Boolean(canonical),
+      owned: [vaultSkills, canonicalVaultSkills]
+        .some((root) => resolved.startsWith(root + path.sep)),
     };
   } catch (error) {
     if (error.code === 'ENOENT') return null;
@@ -1189,7 +1213,15 @@ async function projectionInfo(targetPath, vaultPath) {
   try {
     await lstat(targetPath);
   } catch (error) {
-    if (error.code === 'ENOENT') return { exists: false, ownedSymlink: false, ownedCopy: false, resolved: null };
+    if (error.code === 'ENOENT') {
+      return {
+        exists: false,
+        ownedSymlink: false,
+        ownedCopy: false,
+        reachable: false,
+        resolved: null,
+      };
+    }
     throw error;
   }
   const link = await symlinkInfo(targetPath, vaultPath);
@@ -1197,6 +1229,7 @@ async function projectionInfo(targetPath, vaultPath) {
     exists: true,
     ownedSymlink: Boolean(link?.owned),
     ownedCopy: link ? false : await isOwnedCopy(targetPath, vaultPath),
+    reachable: Boolean(link?.reachable),
     resolved: link?.resolved || null,
   };
 }
