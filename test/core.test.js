@@ -32,6 +32,7 @@ import {
   listUnusedSkills,
   loadDevice,
   loadLocalDevice,
+  managedProjections,
   markDeviceApplied,
   migrateLegacyLocalPathState,
   removeTargetAndPrune,
@@ -223,6 +224,33 @@ test('applyLinks replaces broken vault-owned symlinks instead of failing with EE
   assert.equal(stat.isSymbolicLink(), true);
   const resolved = path.resolve(path.dirname(link), await readlink(link));
   assert.equal(resolved, path.join(vault, 'skills', 'design-taste-frontend'));
+});
+
+test('applyLinks repairs skill links through a symlinked target directory', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const home = path.join(root, 'home');
+  const physicalTarget = path.join(root, 'dotfiles', 'opencode', 'skills');
+  const target = path.join(home, '.config', 'opencode', 'skills');
+  await mkdir(path.join(home, '.config'), { recursive: true });
+  await mkdir(physicalTarget, { recursive: true });
+  await symlink(path.dirname(physicalTarget), path.join(home, '.config', 'opencode'), 'dir');
+  const source = await makeSkill(path.join(vault, 'skills'), 'cohall', '# Cohall\n');
+  await rebuildRegistry(vault);
+
+  const deviceId = 'test-device';
+  await addTarget({ vaultPath: vault, deviceId, name: 'opencode', targetPath: target, mode: 'symlink' });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'cohall', targets: ['opencode'] });
+
+  const link = path.join(target, 'cohall');
+  await symlink(path.relative(target, source), link, 'dir');
+  await assert.rejects(() => realpath(link), { code: 'ENOENT' });
+
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  assert.equal(await realpath(link), await realpath(source));
+  const [projection] = await managedProjections({ vaultPath: vault, deviceId });
+  assert.equal(projection.status, 'ok');
 });
 
 test('installSkill tracks device-global installs without an agent target', async () => {
