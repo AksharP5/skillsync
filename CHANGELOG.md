@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.6](https://github.com/AksharP5/skillsync/compare/v0.10.5...v0.10.6) (2026-08-06)
+
+
+### Bug Fixes
+
+* **cli:** show only skill selection changes ([#54](https://github.com/AksharP5/skillsync/issues/54)) ([9d3f0d7](https://github.com/AksharP5/skillsync/commit/9d3f0d7d2015c3686c1800797159b79c5a311769))
+* support symlinked skill directories ([#56](https://github.com/AksharP5/skillsync/issues/56)) ([9277321](https://github.com/AksharP5/skillsync/commit/92773214fff95406ac8f91d53972ab4d7ed7f0c6))
+
 ## [0.10.5](https://github.com/AksharP5/skillsync/compare/v0.10.4...v0.10.5) (2026-07-31)
 
 
