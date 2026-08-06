@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { assertSafePathSegment, exists } from './fs.js';
 import path from 'node:path';
 
+const runningCommands = new Set();
+
 export function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -9,18 +11,34 @@ export function run(command, args, options = {}) {
       env: { ...process.env, ...(options.env || {}) },
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });
+    runningCommands.add(child);
     let stdout = '';
     let stderr = '';
     if (!options.inherit) {
       child.stdout?.on('data', (chunk) => { stdout += chunk; });
       child.stderr?.on('data', (chunk) => { stderr += chunk; });
     }
-    child.on('error', reject);
+    child.on('error', (error) => {
+      runningCommands.delete(child);
+      reject(error);
+    });
     child.on('close', (code) => {
+      runningCommands.delete(child);
       if (code === 0) resolve({ stdout, stderr, code });
       else reject(new Error(`${command} ${args.join(' ')} failed (${code})\n${stderr || stdout}`));
     });
   });
+}
+
+export function cancelRunningCommands() {
+  for (const child of runningCommands) {
+    child.kill('SIGTERM');
+    const forceKill = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }, 1_000);
+    forceKill.unref();
+  }
+  return runningCommands.size;
 }
 
 export async function commandExists(command) {

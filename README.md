@@ -26,6 +26,7 @@ The `npx` command starts setup without requiring an existing installation. The g
 Requirements:
 
 - Node.js 20 or newer
+- Bun, or Node.js 26.4 or newer, for the OpenTUI interface
 - Git
 - [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`
 - A private GitHub repository for your skill vault
@@ -64,13 +65,26 @@ Repeat the install, existing-vault setup, and service steps on each device.
 
 ## Interactive UI
 
-Run SkillSync without a command:
+Run SkillSync without a command to open the full-screen OpenTUI interface:
 
 ```bash
 skillsync
 ```
 
-Use the UI to browse skills, toggle installs, view the skill matrix, manage devices and targets, or change settings. Arrow keys move, Space toggles selected items, Enter applies, and Esc goes back.
+The main workspace has a searchable skill list and a rendered Markdown preview. It also shows devices, local targets, pending state, and vault settings without leaving the terminal.
+
+- `/` filters skills. `e` edits the selected canonical `SKILL.md`; `Ctrl+S` saves and syncs it.
+- `Enter` chooses install destinations. `Space` toggles a destination or target setting.
+- `1` through `4` switch sections. `Ctrl+P` opens commands. `s` syncs. `?` shows every shortcut.
+- Quick edits use the private vault as the source of truth and refuse stale saves if the skill changed after the editor opened.
+
+Choose **Advanced management** from Settings or the command palette for the editable device matrix, remote assignments, add/import flows, packs and groups, deletion, diagnostics, background service, vault connections, global instructions, and target management. The compact prompt interface remains available directly with:
+
+```bash
+skillsync ui --classic
+```
+
+All subcommands continue to support Node.js 20 and newer. When SkillSync is launched with Node 26.4+, it enables OpenTUI's native renderer automatically; on older Node versions it uses Bun when available and otherwise falls back to the compact interface.
 
 ## See every skill across every device
 

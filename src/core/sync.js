@@ -11,9 +11,10 @@ import {
   applyGlobalInstructions,
   reconcileGlobalInstructionProviders,
 } from './instructions.js';
+import { withVaultLock } from './lock.js';
 import { refreshChangedRegistryEntries } from './registry.js';
 
-export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
+async function syncVaultUnlocked({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
   if (deviceId) {
     await migrateLegacyLocalPathState({ vaultPath, deviceId });
   }
@@ -59,4 +60,8 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
     prunedInstructionProfiles,
     prunedSkills,
   };
+}
+
+export async function syncVault(options = {}) {
+  return withVaultLock(options.vaultPath, () => syncVaultUnlocked(options));
 }

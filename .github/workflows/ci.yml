@@ -37,3 +37,23 @@ jobs:
       - run: npm test
 
       - run: npm pack --dry-run
+
+  tui:
+    name: OpenTUI on Node and Bun
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run test:tui
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: npm run test:tui:bun

@@ -24,12 +24,14 @@
   },
   "scripts": {
     "test": "node --test",
+    "test:tui": "node --experimental-ffi --disable-warning=ExperimentalWarning --test test/tui.test.js",
+    "test:tui:bun": "bun test test/tui.test.js",
     "start": "node src/cli.js"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.5.2"
+    "@inquirer/prompts": "^8.5.2",
+    "@opentui/core": "0.5.1"
   },
-  "devDependencies": {},
   "engines": {
     "node": ">=20"
   },

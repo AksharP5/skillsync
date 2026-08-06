@@ -20,13 +20,20 @@ import {
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import { exists } from '../src/core/fs.js';
-import { git, gitPrivatePath, pushWithPullRebaseRetry } from '../src/core/git.js';
+import { cancelRunningCommands, git, gitPrivatePath, pushWithPullRebaseRetry, run } from '../src/core/git.js';
 import { ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-git-test-'));
 }
+
+test('running child commands can be cancelled by the interactive UI', async () => {
+  const pending = run(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(cancelRunningCommands(), 1);
+  await assert.rejects(pending, /failed/);
+});
 
 async function configureUser(repoPath) {
   await git(['config', 'user.email', 'test@example.invalid'], repoPath);

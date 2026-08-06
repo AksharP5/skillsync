@@ -88,8 +88,9 @@ async function main() {
   const [command, ...rest] = args;
   switch (command) {
     case undefined:
+      return runUi([]);
     case 'ui':
-      return runUi();
+      return runUi(rest);
     case 'setup':
       return setup(rest);
     case 'connect':
@@ -1567,8 +1568,17 @@ async function daemon(rest) {
   }
 }
 
-async function runUi() {
+const OPENTUI_RUNTIME_FLAG = '--opentui-runtime';
+
+function nodeSupportsOpenTui() {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  return major > 26 || (major === 26 && minor >= 4);
+}
+
+async function runUi(rest = []) {
   if (!process.stdin.isTTY) return listSkills();
+  if (hasFlag(rest, '--classic')) return runClassicUi();
+
   let config;
   try {
     config = await configured();
@@ -1577,6 +1587,46 @@ async function runUi() {
     if (!shouldSetup) return;
     await setup([]);
     config = await configured();
+  }
+
+  const hasNativeRuntime = Boolean(process.versions.bun)
+    || process.execArgv.includes('--experimental-ffi');
+  if (!hasNativeRuntime && !hasFlag(rest, OPENTUI_RUNTIME_FLAG)) {
+    const cliPath = path.resolve(process.argv[1]);
+    if (nodeSupportsOpenTui()) {
+      await run(process.execPath, [
+        '--experimental-ffi',
+        '--disable-warning=ExperimentalWarning',
+        cliPath,
+        'ui',
+        OPENTUI_RUNTIME_FLAG,
+      ], { inherit: true });
+      return;
+    }
+    if (await commandExists('bun')) {
+      await run('bun', [cliPath, 'ui', OPENTUI_RUNTIME_FLAG], { inherit: true });
+      return;
+    }
+    return runClassicUi(config);
+  }
+
+  const { createSkillSyncTui } = await import('./tui/index.js');
+  const result = await createSkillSyncTui({ config });
+  if (result === 'advanced') return runClassicUi(config);
+}
+
+async function runClassicUi(existingConfig = null) {
+  if (!process.stdin.isTTY) return listSkills();
+  let config = existingConfig;
+  if (!config) {
+    try {
+      config = await configured();
+    } catch {
+      const shouldSetup = await confirm({ message: 'SkillSync is not set up. Run setup now?', default: true });
+      if (!shouldSetup) return;
+      await setup([]);
+      config = await configured();
+    }
   }
 
   while (true) {
@@ -1590,6 +1640,7 @@ async function runUi() {
       { name: 'Settings', value: 'settings', description: 'Manage vault-wide behavior.' },
       { name: 'Add skill from folder', value: 'add', description: 'Copy a local SKILL.md folder into the vault.' },
       { name: 'Import local agent skills', value: 'import-local', description: 'Import detected Hermes, Codex, or OpenCode skills into the vault.' },
+      { name: 'Tools and maintenance', value: 'tools', description: 'Packs, groups, delete, doctor, background service, and vault connection.' },
       { name: 'Scan local targets', value: 'scan', description: 'Refresh detected local skills.' },
       { name: 'Sync now', value: 'sync', description: 'Pull, link, scan, commit, and push vault changes.' },
       { name: 'Quit', value: 'quit' },
@@ -1612,9 +1663,114 @@ async function runUi() {
       const source = await chooseImportSource();
       if (source) await importSkills([source]);
     }
+    if (choice === 'tools' && await toolsScreen(config) === 'reconfigured') {
+      config = await configured();
+    }
     if (choice === 'scan') await scanCommand();
     if (choice === 'sync') await syncCommand([]);
   }
+}
+
+async function toolsScreen(config) {
+  const choices = [
+    { name: 'Packs', value: 'packs', description: 'Browse and install generated skill packs.' },
+    { name: 'Regenerate groups and packs', value: 'groups', description: 'Analyze the vault, write group files, commit, and push.' },
+    { name: 'Delete a vault skill', value: 'delete', description: 'Remove one skill from the vault and every device.' },
+    { name: 'Run doctor', value: 'doctor', description: 'Check Git, GitHub authentication, config, and registry.' },
+    { name: 'Install background sync service', value: 'service', description: 'Install or replace the user-level SkillSync service.' },
+    { name: 'Connect another vault', value: 'connect', description: 'Switch this device to another private SkillSync repository.' },
+    { name: 'Back', value: 'back' },
+  ];
+  const choice = await promptWithEscape(select({
+    message: 'Tools and maintenance',
+    loop: false,
+    choices,
+  }));
+  if (!choice || choice === 'back') return null;
+  if (choice === 'packs') return packsScreen(config);
+  if (choice === 'groups') return groupsCommand([]);
+  if (choice === 'doctor') return doctor();
+  if (choice === 'delete') {
+    const registry = await loadRegistry(config.repoPath);
+    const skillName = await promptWithEscape(select({
+      message: 'Delete which skill?',
+      loop: false,
+      pageSize: promptPageSize(Object.keys(registry.skills).length + 1, { min: 8, max: 24 }),
+      choices: [
+        ...Object.keys(registry.skills).sort().map((name) => ({ name, value: name })),
+        { name: 'Back', value: 'back' },
+      ],
+    }));
+    if (skillName && skillName !== 'back') await deleteSkill([skillName]);
+    return null;
+  }
+  if (choice === 'service') {
+    const confirmed = await confirm({
+      message: 'Install or replace the background sync service for this user?',
+      default: false,
+    });
+    if (confirmed) await service(['install']);
+    return null;
+  }
+  if (choice === 'connect') {
+    const repo = await input({ message: 'Private GitHub repository or URL:' });
+    const repoPath = await input({ message: 'Local vault path:', default: config.repoPath });
+    const confirmed = await confirm({
+      message: `Connect this device to ${repo} at ${repoPath}?`,
+      default: false,
+    });
+    if (!confirmed) return null;
+    await connect([repo, '--path', repoPath]);
+    return 'reconfigured';
+  }
+  return null;
+}
+
+async function packsScreen(config) {
+  const packsDirectory = path.join(config.repoPath, 'packs');
+  const files = await import('node:fs/promises')
+    .then(({ readdir }) => readdir(packsDirectory).catch(() => []));
+  const packs = await Promise.all(files
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((name) => readJson(path.join(packsDirectory, name))));
+  if (!packs.length) {
+    console.log('\nNo packs yet. Run Regenerate groups and packs first.\n');
+    return;
+  }
+  const packName = await promptWithEscape(select({
+    message: 'Packs',
+    loop: false,
+    choices: [
+      ...packs.map((pack) => ({
+        name: `${pack.title || pack.name} (${pack.skills.length})`,
+        value: pack.name,
+        description: pack.description || '',
+      })),
+      { name: 'Back', value: 'back' },
+    ],
+  }));
+  if (!packName || packName === 'back') return;
+  const action = await promptWithEscape(select({
+    message: packName,
+    loop: false,
+    choices: [
+      { name: 'Show skills', value: 'show' },
+      { name: 'Install pack', value: 'install' },
+      { name: 'Back', value: 'back' },
+    ],
+  }));
+  if (action === 'show') return packCommand(['show', packName]);
+  if (action !== 'install') return;
+  const targets = await chooseTargets(config);
+  if (!targets.length) return;
+  const concreteTargets = targets.filter((targetName) => targetName !== 'global');
+  await packCommand([
+    'install',
+    packName,
+    ...(targets.includes('global') ? ['--global'] : []),
+    ...(concreteTargets.length ? ['--target', concreteTargets.join(',')] : []),
+  ]);
 }
 
 async function skillsScreen(config) {
@@ -2562,5 +2718,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync ui [--classic]\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }
