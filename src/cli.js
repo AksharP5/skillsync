@@ -72,6 +72,17 @@ import {
   setVaultPolicy,
   validateSkillFolder,
 } from './core/registry.js';
+import {
+  assignPluginProfile,
+  importablePluginSelectors,
+  inspectCodexPlugins,
+  listPluginAssignments,
+  listPluginProfiles,
+  listPluginStates,
+  loadPluginProfile,
+  pluginProfileHash,
+  savePluginProfile,
+} from './core/plugins.js';
 import { cloneSkillSource, discoverSkillFolders, importSourceForAgent, isRemoteSkillSource, selectDiscoveredSkills, supportedImportSources } from './core/source.js';
 import { bootstrapLaunchAgent, daemonInvocation, renderLaunchAgent, renderSystemdUserService } from './core/service.js';
 import { syncVault } from './core/sync.js';
@@ -105,6 +116,9 @@ async function main() {
     case 'instructions':
     case 'agents':
       return instructionsCommand(rest);
+    case 'plugin':
+    case 'plugins':
+      return pluginsCommand(rest);
     case 'devices':
     case 'device':
       return deviceCommand(rest);
@@ -648,6 +662,172 @@ async function installedCommand(rest = []) {
     for (const projection of projectionsBySkill.get(skill.name) || []) {
       console.log(`  -> ${projectionDetailLabel(projection)}`);
     }
+  }
+}
+
+async function pluginsCommand(rest = []) {
+  const subcommand = rest[0] || 'status';
+  const config = await configured();
+
+  if (subcommand === 'profiles') {
+    const profiles = await listPluginProfiles(config.repoPath);
+    if (!profiles.length) {
+      console.log('No Codex plugin profiles are configured.');
+      return;
+    }
+    for (const profile of profiles) {
+      console.log(`${profile.name}\t${profile.plugins.length} plugins`);
+    }
+    return;
+  }
+
+  if (subcommand === 'show') {
+    const name = rest[1];
+    if (!name) throw new Error('Usage: skillsync plugins show <profile>');
+    const profile = await loadPluginProfile(config.repoPath, name);
+    console.log(`${profile.name} (${profile.plugins.length} plugins)`);
+    for (const selector of profile.plugins) console.log(`- ${selector}`);
+    return;
+  }
+
+  if (subcommand === 'import') {
+    const name = flagValue(rest, '--name') || rest[1];
+    if (!name || name.startsWith('-')) {
+      throw new Error('Usage: skillsync plugins import --name <profile> [--plugin plugin@marketplace]');
+    }
+    const inspection = await inspectCodexPlugins();
+    if (!inspection.available) throw new Error(inspection.error);
+    const importable = importablePluginSelectors(inspection.installed);
+    if (!importable.length) {
+      throw new Error('No enabled, user-managed Codex plugins are installed on this device');
+    }
+    const requested = flagList(rest, ['--plugin', '--plugins']);
+    if (!requested.length && !process.stdin.isTTY) {
+      throw new Error('Non-interactive plugin import requires --plugin plugin@marketplace');
+    }
+    const selected = requested.length
+      ? requested
+      : await promptWithEscape(checkbox({
+        message: 'Which Codex plugins should this profile manage?',
+        choices: importable.map((selector) => ({ name: selector, value: selector })),
+      }), []);
+    if (!selected.length) return;
+    const unknown = selected.filter((selector) => !importable.includes(selector));
+    if (unknown.length) {
+      throw new Error(`Plugins are not enabled user-managed installs on this device: ${unknown.join(', ')}`);
+    }
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: true,
+    });
+    const profile = await savePluginProfile({
+      vaultPath: config.repoPath,
+      name,
+      plugins: selected,
+    });
+    await assignPluginProfile({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      profile: profile.name,
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    console.log(`Imported ${profile.plugins.length} Codex plugins into ${profile.name} and assigned it to ${config.deviceId}.`);
+    return;
+  }
+
+  if (subcommand === 'use') {
+    const profile = rest[1];
+    if (!profile) throw new Error('Usage: skillsync plugins use <profile> [--device id]');
+    const deviceId = requestedDeviceId(config, rest);
+    await pullBeforeRemoteEdit(config, deviceId);
+    await requireKnownDevice(config.repoPath, deviceId);
+    await assignPluginProfile({ vaultPath: config.repoPath, deviceId, profile });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    if (deviceId === config.deviceId) {
+      console.log(`Applied Codex plugin profile ${profile} on ${deviceId}. Start a new Codex session to load its plugins.`);
+      return;
+    }
+    console.log(`Assigned Codex plugin profile ${profile} to ${deviceId}; it will apply on that device's next sync.`);
+    return;
+  }
+
+  if (subcommand !== 'status') {
+    throw new Error('Usage: skillsync plugins status|profiles|show <profile>|import --name <profile>|use <profile> [--device id]');
+  }
+
+  const [profiles, assignments, states, devices, localInspection] = await Promise.all([
+    listPluginProfiles(config.repoPath),
+    listPluginAssignments(config.repoPath),
+    listPluginStates(config.repoPath),
+    listDevices(config.repoPath),
+    inspectCodexPlugins(),
+  ]);
+  const profileByName = new Map(profiles.map((profile) => [profile.name, profile]));
+  const assignmentByDevice = new Map(assignments.map((assignment) => [assignment.device_id, assignment]));
+  const stateByDevice = new Map(states.map((state) => [state.device_id, state]));
+  console.log('Codex plugin profiles:');
+  if (!profiles.length) console.log('- none');
+  for (const profile of profiles) console.log(`- ${profile.name}: ${profile.plugins.length} plugins`);
+  console.log('Devices:');
+  for (const device of devices) {
+    const assignment = assignmentByDevice.get(device.device_id);
+    const profile = assignment ? profileByName.get(assignment.profile) : null;
+    let state = stateByDevice.get(device.device_id);
+    if (device.device_id === config.deviceId) {
+      const installedBySelector = new Map(
+        localInspection.installed.map((plugin) => [plugin.selector, plugin]),
+      );
+      const missing = profile?.plugins.filter((selector) => !installedBySelector.has(selector)) || [];
+      const disabled = profile?.plugins.filter(
+        (selector) => installedBySelector.get(selector)?.enabled === false,
+      ) || [];
+      const applied = Boolean(
+        assignment
+        && profile
+        && localInspection.available
+        && !missing.length
+        && !disabled.length,
+      );
+      state = {
+        ...state,
+        available: localInspection.available,
+        installed: localInspection.installed,
+        applied_profile: applied ? assignment.profile : null,
+        applied_profile_hash: applied ? pluginProfileHash(profile) : null,
+        missing,
+        disabled,
+        errors: localInspection.error ? [localInspection.error] : [],
+      };
+    }
+    const desired = assignment?.profile || 'unmanaged';
+    const missing = state?.missing?.length || 0;
+    const disabled = state?.disabled?.length || 0;
+    const applied = Boolean(
+      assignment
+      && profile
+      && state?.applied_profile === assignment.profile
+      && state?.applied_profile_hash === pluginProfileHash(profile)
+      && !missing
+      && !disabled,
+    );
+    const status = assignment ? applied ? 'applied' : 'pending' : 'observed only';
+    console.log(`- ${device.device_id}: ${desired} (${status}; ${state?.installed?.length || 0} installed)`);
+    if (missing) console.log(`  missing: ${state.missing.join(', ')}`);
+    if (disabled) console.log(`  disabled: ${state.disabled.join(', ')}`);
+    for (const error of state?.errors || []) console.log(`  error: ${error}`);
+    const auth = (state?.installed || [])
+      .filter((plugin) => profile?.plugins.includes(plugin.selector) && plugin.auth_policy)
+      .map((plugin) => `${plugin.selector} (${plugin.auth_policy})`);
+    if (auth.length) console.log(`  authentication may be required: ${auth.join(', ')}`);
   }
 }
 
@@ -2562,5 +2742,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status\n  skillsync plugins profiles\n  skillsync plugins show <profile>\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace]\n  skillsync plugins use <profile> [--device id]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan\n  skillsync sync\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }

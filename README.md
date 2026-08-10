@@ -1,8 +1,8 @@
 # SkillSync
 
-Keep the same AI agent skills available across all of your devices.
+Keep the same AI agent skills and Codex plugins available across all of your devices.
 
-SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, or any custom skill folder, and keeps every device in sync in the background.
+SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, or any custom skill folder, and keeps every device in sync in the background. It can also apply named Codex plugin profiles across devices.
 
 ## Start with an agent
 
@@ -16,7 +16,8 @@ Set up SkillSync completely on this device.
 3. Let setup detect my Codex, OpenCode, Claude Code, and Hermes skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
 4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
 5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex and OpenCode AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file.
-6. Verify `skillsync doctor`, `skillsync status`, `skillsync matrix`, `skillsync instructions status`, and the background service. Report the vault, detected targets, auto-adoption settings, instruction profile, service state, and anything that still needs my decision.
+6. Ask whether I want to sync installed Codex plugins. If I do, inspect `codex plugin list --json`, ask which enabled user-managed plugins are portable, then pass those exact selectors to `skillsync plugins import --name shared --plugin PLUGIN@MARKETPLACE`. Assign that profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied.
+7. Verify `skillsync doctor`, `skillsync status`, `skillsync matrix`, `skillsync instructions status`, `skillsync plugins status`, and the background service. Report the vault, detected targets, auto-adoption settings, instruction and plugin profiles, service state, and anything that still needs my decision.
 ```
 
 The `npx` command starts setup without requiring an existing installation. The global installation gives the background service a stable executable to run.
@@ -151,6 +152,37 @@ Editing a shared profile updates every device assigned to that profile. View pro
 
 After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
 
+## Sync Codex plugins
+
+Codex installs plugins per environment. SkillSync stores the selected plugin identifiers in a named profile, assigns that profile per device, and additively installs anything missing during sync.
+
+On the device whose plugin selection you want to copy:
+
+```bash
+skillsync plugins import --name shared
+```
+
+In an interactive terminal, select the user-managed plugins that belong in the profile. For a non-interactive import, list them explicitly:
+
+```bash
+skillsync plugins import --name shared \
+  --plugin gmail@openai-curated,github@openai-curated
+```
+
+Assign the profile to other registered devices:
+
+```bash
+skillsync plugins use shared --device arch
+skillsync plugins use shared --device devbox
+skillsync plugins status
+```
+
+The other device installs missing plugins on its next sync. Existing extra plugins remain installed, and SkillSync never removes plugins. A disabled desired plugin stays pending; enable it from Codex's `/plugins` interface. Profiles synchronize plugin selection, while Codex continues to manage bundle versions and upgrades. Start a new Codex session after plugins are installed.
+
+Plugin installation and connector authorization are separate. For example, SkillSync can install the Gmail plugin on a VPS, but it does not copy the Mac's Google OAuth session, API keys, cookies, or other credentials. If both Codex environments use the same account or workspace, its connector authorization may already be available; otherwise Gmail requires sign-in there. Environments that cannot complete the connector's sign-in flow may have the plugin installed but still be unable to use Gmail.
+
+SkillSync imports durable, user-managed installs reported by `codex plugin list`. It ignores product-managed runtime plugins, marketplace caches, and plugins injected only into a hosted session. A T3 Code session may expose a plugin even when the machine's standalone Codex CLI does not consider it installed; that session provisioning is owned by the host and is not synchronized by SkillSync.
+
 ## Add and install skills
 
 Add a local skill folder to the vault:
@@ -253,6 +285,9 @@ devices/         desired assignments, editable from any connected device
 state/           local targets and inventory reported by each device
 globals/agents/  named global instruction profiles
 globals/assignments/  each device's selected instruction profile
+plugins/profiles/  named Codex plugin selections
+plugins/assignments/  each device's selected plugin profile
+plugins/state/  installed, missing, disabled, and applied plugin state
 registry.json    generated skill index
 vault.json       vault-wide settings
 ```
@@ -331,6 +366,11 @@ skillsync instructions link <path>
 skillsync instructions unlink <path>
 skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]
 skillsync instructions disable [--device id]
+skillsync plugins status
+skillsync plugins profiles
+skillsync plugins show <profile>
+skillsync plugins import --name <profile> [--plugin plugin@marketplace]
+skillsync plugins use <profile> [--device id]
 skillsync device list
 skillsync device show <id>
 skillsync groups [--summary]
@@ -360,6 +400,7 @@ skillsync daemon
 - SkillSync will not silently overwrite an unmanaged local folder.
 - Symlinked content outside a configured target is not auto-adopted.
 - Different same-name skills require explicit conflict resolution.
+- Plugin sync is additive and never copies connector credentials.
 - Vault deletion is explicit unless you enable the last-assignment deletion policy.
 - Your skills and device configuration stay in the private GitHub vault you control.
 
