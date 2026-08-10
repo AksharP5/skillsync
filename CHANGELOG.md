@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/AksharP5/skillsync/compare/v0.10.6...v0.11.0) (2026-08-10)
+
+
+### Features
+
+* propagate new plugins across shared profiles ([#59](https://github.com/AksharP5/skillsync/issues/59)) ([ffd8801](https://github.com/AksharP5/skillsync/commit/ffd8801cf81511b993d2725f763431bae5194e2e))
+* sync Codex plugin profiles ([#57](https://github.com/AksharP5/skillsync/issues/57)) ([a3725d6](https://github.com/AksharP5/skillsync/commit/a3725d6568dd995f5782b77af5f8eace0c10da55))
+
 ## [0.10.6](https://github.com/AksharP5/skillsync/compare/v0.10.5...v0.10.6) (2026-08-06)
 
 
