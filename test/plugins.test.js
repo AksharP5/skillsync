@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import {
   assignPluginProfile,
+  effectivePluginProfile,
   importablePluginSelectors,
   loadPluginAssignment,
   loadPluginProfile,
@@ -14,6 +15,7 @@ import {
   normalizePluginSelector,
   pluginProfileHash,
   savePluginProfile,
+  setPluginProfileAutoAdopt,
   syncCodexPlugins,
 } from '../src/core/plugins.js';
 
@@ -74,6 +76,7 @@ test('plugin profiles are normalized and assigned per device', async () => {
     'github@openai-curated',
     'gmail@openai-curated',
   ]);
+  assert.equal((await loadPluginProfile(vaultPath, 'shared')).auto_adopt, false);
   assert.deepEqual(await loadPluginAssignment(vaultPath, 'arch'), {
     version: 1,
     device_id: 'arch',
@@ -81,6 +84,53 @@ test('plugin profiles are normalized and assigned per device', async () => {
   });
   assert.equal(pluginProfileHash(saved), pluginProfileHash(await loadPluginProfile(vaultPath, 'shared')));
   assert.throws(() => normalizePluginSelector('gmail'), /plugin@marketplace/);
+
+  await setPluginProfileAutoAdopt({ vaultPath, name: 'shared', enabled: true });
+  assert.equal((await loadPluginProfile(vaultPath, 'shared')).auto_adopt, true);
+});
+
+test('auto-adopting profiles use eligible plugins from assigned device inventories', () => {
+  const profile = effectivePluginProfile({
+    version: 1,
+    name: 'shared',
+    provider: 'codex',
+    auto_adopt: true,
+    plugins: ['github@openai-curated'],
+  }, {
+    assignments: [
+      { device_id: 'mac', profile: 'shared' },
+      { device_id: 'vps', profile: 'shared' },
+      { device_id: 'personal', profile: 'other' },
+    ],
+    states: [
+      {
+        device_id: 'mac',
+        installed: normalizePluginList({
+          installed: [
+            { pluginId: 'notion@openai-curated', enabled: true },
+            { pluginId: 'gmail@openai-curated', enabled: false },
+            { pluginId: 'sites@openai-bundled', enabled: true },
+          ],
+        }),
+      },
+      {
+        device_id: 'personal',
+        installed: normalizePluginList({
+          installed: [{ pluginId: 'private@custom-marketplace', enabled: true }],
+        }),
+      },
+    ],
+    deviceId: 'vps',
+    installed: normalizePluginList({
+      installed: [{ pluginId: 'vercel@openai-curated', enabled: true }],
+    }),
+  });
+
+  assert.deepEqual(profile.plugins, [
+    'github@openai-curated',
+    'notion@openai-curated',
+    'vercel@openai-curated',
+  ]);
 });
 
 test('plugin sync installs only missing selections and preserves extra plugins', async () => {
@@ -149,6 +199,59 @@ test('plugin sync installs only missing selections and preserves extra plugins',
   assert.deepEqual(await loadPluginState(vaultPath, deviceId), state);
 });
 
+test('auto-adopted plugins propagate from any assigned device without rewriting the profile', async () => {
+  const vaultPath = await tempDir();
+  await savePluginProfile({
+    vaultPath,
+    name: 'shared',
+    plugins: ['github@openai-curated'],
+    autoAdopt: true,
+  });
+  await assignPluginProfile({ vaultPath, deviceId: 'mac', profile: 'shared' });
+  await assignPluginProfile({ vaultPath, deviceId: 'vps', profile: 'shared' });
+
+  const runner = (initial) => {
+    const installed = initial.map((pluginId) => ({ pluginId, enabled: true }));
+    const added = [];
+    return {
+      added,
+      runCommand: async (_command, args) => {
+        if (args[1] === 'list') {
+          return { stdout: JSON.stringify({ installed }), stderr: '', code: 0 };
+        }
+        added.push(args[2]);
+        installed.push({ pluginId: args[2], enabled: true });
+        return { stdout: '{}', stderr: '', code: 0 };
+      },
+    };
+  };
+  const vps = runner([
+    'github@openai-curated',
+    'notion@openai-curated',
+    'sites@openai-bundled',
+  ]);
+  const vpsState = await syncCodexPlugins({
+    vaultPath,
+    deviceId: 'vps',
+    commandAvailable: async () => true,
+    runCommand: vps.runCommand,
+  });
+  const mac = runner(['github@openai-curated']);
+  const macState = await syncCodexPlugins({
+    vaultPath,
+    deviceId: 'mac',
+    commandAvailable: async () => true,
+    runCommand: mac.runCommand,
+  });
+
+  assert.deepEqual(vps.added, []);
+  assert.deepEqual(mac.added, ['notion@openai-curated']);
+  assert.equal(vpsState.profile_hash, macState.profile_hash);
+  assert.deepEqual((await loadPluginProfile(vaultPath, 'shared')).plugins, [
+    'github@openai-curated',
+  ]);
+});
+
 test('plugin sync reports disabled selections without deleting or reinstalling them', async () => {
   const vaultPath = await tempDir();
   const deviceId = 'mac';
@@ -209,6 +312,45 @@ test('plugin sync never writes raw authentication failures to the vault', async 
     'Could not install gmail@openai-curated; install or authenticate it from Codex /plugins',
   ]);
   assert.equal(JSON.stringify(await loadPluginState(vaultPath, deviceId)).includes('SECRET-123'), false);
+});
+
+test('failed inspection retains the last safe inventory for automatic adoption', async () => {
+  const vaultPath = await tempDir();
+  const deviceId = 'vps';
+  await savePluginProfile({
+    vaultPath,
+    name: 'shared',
+    plugins: ['github@openai-curated'],
+    autoAdopt: true,
+  });
+  await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
+  await syncCodexPlugins({
+    vaultPath,
+    deviceId,
+    commandAvailable: async () => true,
+    runCommand: async () => ({
+      stdout: JSON.stringify({
+        installed: [
+          { pluginId: 'github@openai-curated', enabled: true },
+          { pluginId: 'notion@openai-curated', enabled: true },
+        ],
+      }),
+      stderr: '',
+      code: 0,
+    }),
+  });
+
+  const state = await syncCodexPlugins({
+    vaultPath,
+    deviceId,
+    commandAvailable: async () => false,
+  });
+
+  assert.equal(state.available, false);
+  assert.deepEqual(state.installed.map(({ selector }) => selector), [
+    'github@openai-curated',
+    'notion@openai-curated',
+  ]);
 });
 
 test('devices without a plugin assignment remain unmanaged', async () => {
