@@ -16,7 +16,7 @@ Set up SkillSync completely on this device.
 3. Let setup detect my Codex, OpenCode, Claude Code, and Hermes skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
 4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
 5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex and OpenCode AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file.
-6. Ask whether I want to sync installed Codex plugins. If I do, inspect `codex plugin list --json`, ask which enabled user-managed plugins are portable, then pass those exact selectors to `skillsync plugins import --name shared --plugin PLUGIN@MARKETPLACE`. Assign that profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied.
+6. Ask whether I want to sync installed Codex plugins. If I want one universal profile, run `skillsync plugins import --name shared --auto-adopt`; every current and future enabled user-managed plugin on an assigned device will join it. If I want a selected profile instead, inspect `codex plugin list --json`, ask which plugins are portable, and pass those exact selectors with `--plugin PLUGIN@MARKETPLACE`. Assign the profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied.
 7. Verify `skillsync doctor`, `skillsync status`, `skillsync matrix`, `skillsync instructions status`, `skillsync plugins status`, and the background service. Report the vault, detected targets, auto-adoption settings, instruction and plugin profiles, service state, and anything that still needs my decision.
 ```
 
@@ -156,13 +156,19 @@ After a profile switch, the old profile remains available while any device still
 
 Codex installs plugins per environment. SkillSync stores the selected plugin identifiers in a named profile, assigns that profile per device, and additively installs anything missing during sync.
 
-On the device whose plugin selection you want to copy:
+For one universal profile containing every current and future eligible plugin on its assigned devices:
 
 ```bash
-skillsync plugins import --name shared
+skillsync plugins import --name shared --auto-adopt
 ```
 
-In an interactive terminal, select the user-managed plugins that belong in the profile. For a non-interactive import, list them explicitly:
+For a selected profile instead, choose plugins interactively:
+
+```bash
+skillsync plugins import --name selected
+```
+
+Or list them explicitly in a non-interactive environment:
 
 ```bash
 skillsync plugins import --name shared \
@@ -177,7 +183,18 @@ skillsync plugins use shared --device devbox
 skillsync plugins status
 ```
 
-The other device installs missing plugins on its next sync. Existing extra plugins remain installed, and SkillSync never removes plugins. A disabled desired plugin stays pending; enable it from Codex's `/plugins` interface. Profiles synchronize plugin selection, while Codex continues to manage bundle versions and upgrades. Start a new Codex session after plugins are installed.
+The other device installs missing plugins on its next sync. With auto-adoption enabled, every assigned device also contributes its durable, enabled user-managed plugins to the effective profile. Installing a plugin on the VPS therefore adds it to `shared` during the VPS's next sync, and the Mac and other assigned devices install it after they sync.
+
+SkillSync derives this union from separate per-device reports instead of having devices rewrite one profile file. Concurrent device syncs therefore update different files. Product-managed, disabled, cached, and hosted-session-only plugins never join the union.
+
+Automatic adoption is off unless `--auto-adopt` is supplied. Change it later with:
+
+```bash
+skillsync plugins auto-adopt shared on
+skillsync plugins auto-adopt shared off
+```
+
+Existing extra plugins remain installed, and SkillSync never removes plugins. Once an automatically adopted plugin propagates to other devices, it remains part of their reported inventories; disabling auto-adoption stops future additions but does not uninstall anything already present. A disabled desired plugin stays pending; enable it from Codex's `/plugins` interface. Profiles synchronize plugin selection, while Codex continues to manage bundle versions and upgrades. Start a new Codex session after plugins are installed.
 
 Plugin installation and connector authorization are separate. For example, SkillSync can install the Gmail plugin on a VPS, but it does not copy the Mac's Google OAuth session, API keys, cookies, or other credentials. If both Codex environments use the same account or workspace, its connector authorization may already be available; otherwise Gmail requires sign-in there. Environments that cannot complete the connector's sign-in flow may have the plugin installed but still be unable to use Gmail.
 
@@ -369,8 +386,9 @@ skillsync instructions disable [--device id]
 skillsync plugins status
 skillsync plugins profiles
 skillsync plugins show <profile>
-skillsync plugins import --name <profile> [--plugin plugin@marketplace]
+skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]
 skillsync plugins use <profile> [--device id]
+skillsync plugins auto-adopt <profile> <on|off>
 skillsync device list
 skillsync device show <id>
 skillsync groups [--summary]

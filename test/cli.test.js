@@ -291,18 +291,17 @@ exit 1
     'import',
     '--name',
     'shared',
-    '--plugin',
-    'gmail@openai-curated',
+    '--auto-adopt',
   ], {
     cwd: path.resolve('.'),
     env,
   });
 
-  assert.match(imported.stdout, /Imported 1 Codex plugins into shared and assigned it to macbook/);
-  assert.deepEqual(
-    JSON.parse(await readFile(path.join(vault, 'plugins', 'profiles', 'shared.json'), 'utf8')).plugins,
-    ['gmail@openai-curated'],
-  );
+  assert.match(imported.stdout, /Imported 1 Codex plugins into shared, assigned it to macbook, and set auto-adopt on/);
+  const profilePath = path.join(vault, 'plugins', 'profiles', 'shared.json');
+  const profile = JSON.parse(await readFile(profilePath, 'utf8'));
+  assert.deepEqual(profile.plugins, ['gmail@openai-curated']);
+  assert.equal(profile.auto_adopt, true);
   const status = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
     'plugins',
@@ -313,6 +312,19 @@ exit 1
   });
   assert.match(status.stdout, /macbook: shared \(applied; 2 installed\)/);
   assert.match(status.stdout, /authentication may be required: gmail@openai-curated \(ON_INSTALL\)/);
+
+  const disabled = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'plugins',
+    'auto-adopt',
+    'shared',
+    'off',
+  ], {
+    cwd: path.resolve('.'),
+    env,
+  });
+  assert.match(disabled.stdout, /Plugin auto-adoption for shared: off/);
+  assert.equal(JSON.parse(await readFile(profilePath, 'utf8')).auto_adopt, false);
 });
 
 test('instructions enable adopts the global AGENTS.md and disable leaves a local copy', async () => {

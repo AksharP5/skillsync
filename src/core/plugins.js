@@ -63,6 +63,7 @@ function normalizeProfile(value, profile) {
     version: 1,
     name,
     provider: 'codex',
+    auto_adopt: value.auto_adopt === true,
     plugins: [...new Set(selectors.map(normalizePluginSelector))].sort(),
   };
 }
@@ -71,10 +72,20 @@ export function pluginProfileHash(profile) {
   return `sha256:${createHash('sha256').update(JSON.stringify(profile)).digest('hex')}`;
 }
 
-export async function savePluginProfile({ vaultPath, name, plugins }) {
-  const profile = normalizeProfile({ name, plugins }, name);
+export async function savePluginProfile({ vaultPath, name, plugins, autoAdopt = false }) {
+  const profile = normalizeProfile({ name, plugins, auto_adopt: autoAdopt }, name);
   await writeJson(pluginProfilePath(vaultPath, profile.name), profile);
   return profile;
+}
+
+export async function setPluginProfileAutoAdopt({ vaultPath, name, enabled }) {
+  const profile = await loadPluginProfile(vaultPath, name);
+  return savePluginProfile({
+    vaultPath,
+    name: profile.name,
+    plugins: profile.plugins,
+    autoAdopt: enabled,
+  });
 }
 
 export async function loadPluginProfile(vaultPath, name) {
@@ -175,6 +186,31 @@ export function importablePluginSelectors(plugins) {
     .sort();
 }
 
+export function effectivePluginProfile(profile, {
+  assignments = [],
+  states = [],
+  deviceId = null,
+  installed = null,
+} = {}) {
+  const normalized = normalizeProfile(profile, profile.name);
+  if (!normalized.auto_adopt) return normalized;
+  const stateByDevice = new Map(states.map((state) => [state.device_id, state]));
+  const plugins = new Set(normalized.plugins);
+  for (const assignment of assignments) {
+    if (assignment.profile !== normalized.name) continue;
+    const inventory = assignment.device_id === deviceId && Array.isArray(installed)
+      ? installed
+      : stateByDevice.get(assignment.device_id)?.installed || [];
+    for (const selector of importablePluginSelectors(normalizePluginList({ installed: inventory }))) {
+      plugins.add(selector);
+    }
+  }
+  return {
+    ...normalized,
+    plugins: [...plugins].sort(),
+  };
+}
+
 export async function inspectCodexPlugins({
   commandAvailable = commandExists,
   runCommand = run,
@@ -255,6 +291,20 @@ export async function syncCodexPlugins({
   }
 
   let inspection = await inspectCodexPlugins({ commandAvailable, runCommand });
+  let previousState = null;
+  if (profile) {
+    const [assignments, states] = await Promise.all([
+      listPluginAssignments(vaultPath),
+      listPluginStates(vaultPath),
+    ]);
+    previousState = states.find((state) => state.device_id === deviceId) || null;
+    profile = effectivePluginProfile(profile, {
+      assignments,
+      states,
+      deviceId,
+      installed: inspection.available ? inspection.installed : null,
+    });
+  }
   if (profile && inspection.available) {
     const installed = new Set(inspection.installed.map((plugin) => plugin.selector));
     let attemptedInstall = false;
@@ -272,13 +322,30 @@ export async function syncCodexPlugins({
     }
   }
 
-  const state = pluginState({ deviceId, assignment, profile, inspection, errors });
+  const reportedInspection = !inspection.available && previousState?.installed
+    ? { ...inspection, installed: previousState.installed }
+    : inspection;
+  const state = pluginState({
+    deviceId,
+    assignment,
+    profile,
+    inspection: reportedInspection,
+    errors,
+  });
   await writeJson(pluginStatePath(vaultPath, deviceId), state);
   return state;
 }
 
 export async function loadPluginState(vaultPath, deviceId) {
-  return readJson(pluginStatePath(vaultPath, deviceId), null);
+  const state = await readJson(pluginStatePath(vaultPath, deviceId), null);
+  if (!state) return null;
+  const expectedDeviceId = assertSafePathSegment(deviceId, 'Device ID');
+  if (state.device_id !== expectedDeviceId) {
+    throw new Error(
+      `Plugin state device does not match its file: ${state.device_id || 'unknown'} != ${expectedDeviceId}`,
+    );
+  }
+  return state;
 }
 
 export async function listPluginStates(vaultPath) {
@@ -287,7 +354,8 @@ export async function listPluginStates(vaultPath) {
   const files = await readdir(directory);
   const states = [];
   for (const file of files.filter((name) => name.endsWith('.json')).sort()) {
-    const state = await readJson(path.join(directory, file), null);
+    const deviceId = file.slice(0, -'.json'.length);
+    const state = await loadPluginState(vaultPath, deviceId);
     if (state) states.push(state);
   }
   return states;
