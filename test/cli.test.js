@@ -253,6 +253,68 @@ test('matrix --edit requires an interactive terminal', async () => {
   );
 });
 
+test('plugins import creates a reusable profile and reports local state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const bin = path.join(home, 'bin');
+  await writeConfig(home, vault, 'macbook');
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, 'codex'), `#!/bin/sh
+if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+  printf '%s\\n' '{"installed":[{"pluginId":"gmail@openai-curated","name":"gmail","marketplaceName":"openai-curated","version":"0.1.7","enabled":true,"authPolicy":"ON_INSTALL"},{"pluginId":"sites@openai-bundled","name":"sites","marketplaceName":"openai-bundled","version":"0.1.34","enabled":true,"authPolicy":"ON_INSTALL"}]}'
+  exit 0
+fi
+exit 1
+`, { mode: 0o755 });
+  const env = {
+    ...cliEnv(home),
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+  };
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      path.resolve('src/cli.js'),
+      'plugins',
+      'import',
+      '--name',
+      'shared',
+    ], {
+      cwd: path.resolve('.'),
+      env,
+    }),
+    /Non-interactive plugin import requires --plugin/,
+  );
+
+  const imported = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'plugins',
+    'import',
+    '--name',
+    'shared',
+    '--plugin',
+    'gmail@openai-curated',
+  ], {
+    cwd: path.resolve('.'),
+    env,
+  });
+
+  assert.match(imported.stdout, /Imported 1 Codex plugins into shared and assigned it to macbook/);
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(vault, 'plugins', 'profiles', 'shared.json'), 'utf8')).plugins,
+    ['gmail@openai-curated'],
+  );
+  const status = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'plugins',
+    'status',
+  ], {
+    cwd: path.resolve('.'),
+    env,
+  });
+  assert.match(status.stdout, /macbook: shared \(applied; 2 installed\)/);
+  assert.match(status.stdout, /authentication may be required: gmail@openai-curated \(ON_INSTALL\)/);
+});
+
 test('instructions enable adopts the global AGENTS.md and disable leaves a local copy', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');

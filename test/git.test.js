@@ -20,7 +20,7 @@ import {
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import { exists } from '../src/core/fs.js';
-import { git, gitPrivatePath, pushWithPullRebaseRetry } from '../src/core/git.js';
+import { git, gitPrivatePath, pushWithPullRebaseRetry, run } from '../src/core/git.js';
 import { ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
 
@@ -71,6 +71,13 @@ async function writeDesiredDevice(vaultPath, deviceId, installed = {}) {
     global_installed: [],
   }, null, 2)}\n`);
 }
+
+test('run terminates commands that exceed their timeout', async () => {
+  await assert.rejects(
+    run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 50 }),
+    /timed out after 50ms/,
+  );
+});
 
 test('pushWithPullRebaseRetry rebases and retries after a fetch-first rejection', async () => {
   const root = await tempDir();

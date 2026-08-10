@@ -11,6 +11,7 @@ import {
   applyGlobalInstructions,
   reconcileGlobalInstructionProviders,
 } from './instructions.js';
+import { syncCodexPlugins } from './plugins.js';
 import { refreshChangedRegistryEntries } from './registry.js';
 
 export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull = true } = {}) {
@@ -25,12 +26,14 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
   let instructionProviders = { changed: false, conflicts: [], backups: [] };
   let prunedInstructionProfiles = [];
   let prunedSkills = [];
+  let plugins = null;
   if (deviceId) {
     autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
     await applyLinks({ vaultPath, deviceId });
     instructionProviders = await reconcileGlobalInstructionProviders({ vaultPath, deviceId });
     const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
     prunedInstructionProfiles = instructions.prunedProfiles || [];
+    plugins = await syncCodexPlugins({ vaultPath, deviceId });
     await markDeviceApplied({ vaultPath, deviceId });
     await scanTargets({ vaultPath, deviceId });
     if (pull) {
@@ -56,6 +59,7 @@ export async function syncVault({ vaultPath, deviceId, pushChanges = true, pull 
     autoImportConflicts: autoImport.conflicts,
     instructionProviderConflicts: instructionProviders.conflicts,
     instructionProviderBackups: instructionProviders.backups || [],
+    plugins,
     prunedInstructionProfiles,
     prunedSkills,
   };
