@@ -75,11 +75,11 @@ The main workspace uses OpenTUI's alternate screen and the full terminal viewpor
 
 - `/` filters skills. `h` and `l` focus the list or detail pane; `j` and `k` move or scroll the focused pane.
 - `e` opens the selected canonical `SKILL.md` in Vim-style NORMAL mode. Use `i`, `a`, `I`, `A`, `o`, or `O` to enter INSERT mode; `Esc` returns to NORMAL mode and `Ctrl+S` saves and syncs.
-- `Enter` chooses install destinations. `Space` toggles a destination or target setting.
+- `Enter` on a skill chooses a device, then opens that device's destinations. `Space` toggles a destination; an empty selection removes the skill from that device.
 - `1` through `4` switch sections. `Ctrl+P` opens commands. `s` syncs. `?` shows every shortcut.
 - Quick edits use the private vault as the source of truth and refuse stale saves if the skill changed after the editor opened.
 
-The Devices section reconciles assigned and detected skills instead of treating them as the same thing. On the current device it shows exact target and skill paths, distinguishes managed symlinks/copies from unmanaged folders, and flags assigned skills that are not detected. Remote devices show the same inventory metadata while keeping their private filesystem paths local.
+The Devices section reconciles assigned and detected skills instead of treating them as the same thing. On the current device it shows exact target and skill paths, distinguishes managed symlinks/copies from unmanaged folders, and flags assigned skills that are not detected. Remote devices show the same inventory metadata while keeping their private filesystem paths local. Changes made from the skill matrix update the remote device's desired assignment and apply the next time that device syncs.
 
 Every SkillSync action can be rebound per user in `~/.config/skillsync/tui.json`. Unspecified actions keep their defaults; an empty array disables an action:
 

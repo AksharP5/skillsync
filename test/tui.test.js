@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 const nativeRuntime = Boolean(process.versions.bun)
   || process.execArgv.includes('--experimental-ffi');
 
-async function fixture({ git = false } = {}) {
+async function fixture({ git = false, remote = false } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-tui-test-'));
   const vaultPath = path.join(root, 'vault');
   const skillPath = path.join(vaultPath, 'skills', 'proof-reader', 'SKILL.md');
@@ -26,7 +26,7 @@ description: Make text precise without making it sterile.
 Make writing **clearer** while preserving its voice.
 `);
 
-  const [{ rebuildRegistry }, { addTarget, initializeLocalPathState }] = await Promise.all([
+  const [{ rebuildRegistry }, { addTarget, initializeLocalPathState, newDevice, saveDevice }] = await Promise.all([
     import('../src/core/registry.js'),
     import('../src/core/device.js'),
   ]);
@@ -44,6 +44,18 @@ Make writing **clearer** while preserving its voice.
     targetPath,
     autoImport: false,
   });
+  if (remote) {
+    const device = newDevice('devbox');
+    device.display_name = 'Devbox';
+    device.targets = {
+      claude: {
+        path: '/home/devbox/.claude/skills',
+        mode: 'copy',
+        auto_import: false,
+      },
+    };
+    await saveDevice(vaultPath, device);
+  }
   if (git) {
     await execFileAsync('git', ['add', '.'], { cwd: vaultPath });
     await execFileAsync('git', ['commit', '-m', 'test: initial vault'], { cwd: vaultPath });
@@ -106,6 +118,8 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
   assert.match(await readFile(skillPath, 'utf8'), /QA verified edit\./);
 
   mockInput.pressEnter();
+  await waitForMode(app, 'skill-device');
+  mockInput.pressEnter();
   await waitForMode(app, 'targets');
   mockInput.pressArrow('down');
   mockInput.pressKey(' ');
@@ -145,6 +159,56 @@ test('OpenTUI renders, edits, filters, resizes, and restores the terminal', {
   mockInput.pressKey('q');
   await exited;
   assert.equal(app.exiting, true);
+});
+
+test('skill matrix manages assignments on remote devices', {
+  skip: nativeRuntime ? false : 'requires Node with --experimental-ffi',
+}, async (context) => {
+  const { root, vaultPath } = await fixture({ remote: true });
+  const { app, exited, mockInput, flush, captureCharFrame, renderer } = await startApp(vaultPath);
+  context.after(async () => {
+    if (!app.exiting) renderer.destroy();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  assert.match(captureCharFrame(), /Devbox/);
+  mockInput.pressEnter();
+  await waitForMode(app, 'skill-device');
+  await flush({ maxPasses: 20 });
+  assert.match(captureCharFrame(), /Choose a device, then add or remove its destinations/);
+
+  mockInput.pressEnter();
+  await waitForMode(app, 'targets');
+  await flush({ maxPasses: 20 });
+  assert.match(captureCharFrame(), /proof-reader → Devbox/);
+  assert.match(captureCharFrame(), /path private to device/);
+  mockInput.pressArrow('down');
+  mockInput.pressKey(' ');
+  mockInput.pressEnter();
+  await waitForMode(app, 'browse');
+
+  const { loadDevice } = await import('../src/core/device.js');
+  let remote = await loadDevice(vaultPath, 'devbox');
+  assert.deepEqual(remote.installed['proof-reader'], ['claude']);
+  assert.equal(remote.desired_generation, 1);
+  assert.equal(remote.applied_generation, 0);
+  await flush({ maxPasses: 20 });
+  assert.match(captureCharFrame(), /! claude/);
+
+  mockInput.pressEnter();
+  await waitForMode(app, 'skill-device');
+  mockInput.pressEnter();
+  await waitForMode(app, 'targets');
+  mockInput.pressArrow('down');
+  mockInput.pressKey(' ');
+  mockInput.pressEnter();
+  await waitForMode(app, 'browse');
+  remote = await loadDevice(vaultPath, 'devbox');
+  assert.equal(remote.installed['proof-reader'], undefined);
+  assert.equal(remote.desired_generation, 2);
+
+  mockInput.pressKey('q');
+  await exited;
 });
 
 test('a sync failure after saving leaves a current, reopenable document', {

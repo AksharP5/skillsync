@@ -49,40 +49,40 @@ import {
 } from './preferences.js';
 
 const COLORS = {
-  bg: '#030403',
-  surface: '#080A08',
-  surfaceRaised: '#10130D',
-  border: '#3D4435',
-  borderActive: '#D9FF43',
-  text: '#E2E5DC',
-  muted: '#7E8479',
-  faint: '#42473F',
-  accent: '#D9FF43',
-  accentSoft: '#11150D',
-  selectedText: '#D9FF43',
-  selectedMuted: '#A7AF9D',
-  success: '#A5E66F',
-  warning: '#FFB547',
-  danger: '#F07178',
+  bg: '#080A0D',
+  surface: '#0D1116',
+  surfaceRaised: '#141A21',
+  border: '#2A323C',
+  borderActive: '#6F8EAF',
+  text: '#D8DEE6',
+  muted: '#7E8996',
+  faint: '#46515D',
+  accent: '#88A8C8',
+  accentSoft: '#16212C',
+  selectedText: '#B9CCE0',
+  selectedMuted: '#92A2B3',
+  success: '#82AD98',
+  warning: '#C6A36F',
+  danger: '#C87F86',
 };
 
 function syntaxStyle() {
   return SyntaxStyle.fromStyles({
     default: { fg: COLORS.text },
     'markup.heading': { fg: COLORS.accent, bold: true },
-    'markup.heading.1': { fg: '#E8FF8F', bold: true },
-    'markup.heading.2': { fg: '#D9FF43', bold: true },
+    'markup.heading.1': { fg: '#B9CCE0', bold: true },
+    'markup.heading.2': { fg: '#88A8C8', bold: true },
     'markup.bold': { fg: COLORS.text, bold: true },
-    'markup.italic': { fg: '#B8BDAF', italic: true },
-    'markup.raw': { fg: '#DDE6C5', bg: COLORS.surfaceRaised },
+    'markup.italic': { fg: '#A9B2BD', italic: true },
+    'markup.raw': { fg: '#C9D3DE', bg: COLORS.surfaceRaised },
     'markup.link': { fg: COLORS.accent, underline: true },
     'markup.list': { fg: COLORS.muted },
     comment: { fg: COLORS.muted, italic: true },
-    string: { fg: '#A5E66F' },
-    keyword: { fg: '#D9FF43' },
-    function: { fg: '#E8FF8F' },
-    number: { fg: '#FFB547' },
-    punctuation: { fg: '#9BA291' },
+    string: { fg: '#82AD98' },
+    keyword: { fg: '#88A8C8' },
+    function: { fg: '#B9CCE0' },
+    number: { fg: '#C6A36F' },
+    punctuation: { fg: '#98A4B1' },
   });
 }
 
@@ -149,6 +149,8 @@ export class SkillSyncTui {
     this.activeDocument = null;
     this.documentRequest = 0;
     this.paletteCommands = [];
+    this.targetDeviceId = null;
+    this.targetSkillName = null;
     this.targetSelection = new Set();
     this.updatingList = false;
     this.cancelRequested = false;
@@ -316,7 +318,7 @@ export class SkillSyncTui {
       void this.updateDetail(option.value);
     });
     this.list.on(SelectRenderableEvents.ITEM_SELECTED, (_index, option) => {
-      if (this.page === 'skills' && option) void this.openTargetPicker(option.value);
+      if (this.page === 'skills' && option) this.openSkillDevicePicker(option.value);
     });
     this.listPane.add(this.list);
     this.workspace.add(this.listPane);
@@ -385,7 +387,7 @@ export class SkillSyncTui {
           width: '100%',
           height: 'auto',
           flexShrink: 0,
-          fg: '#DDE6C5',
+          fg: '#C9D3DE',
           bg: COLORS.surfaceRaised,
           selectable: true,
           wrapMode: 'char',
@@ -822,11 +824,12 @@ export class SkillSyncTui {
       search: `type to filter   ${key('activate')} keep   ${key('close')} clear`,
       confirm: `${key('move.up')}/${key('move.down')} choose   ${key('activate')} apply   ${key('close')} cancel`,
       palette: `${key('palette.move.up')}/${key('palette.move.down')} choose   ${key('activate')} run   ${key('close')} close`,
+      'skill-device': `${key('move.up')}/${key('move.down')} choose device   ${key('activate')} manage   ${key('close')} close`,
       targets: `${key('move.up')}/${key('move.down')} choose   ${key('toggle')} toggle   ${key('activate')} apply   ${key('close')} cancel`,
       help: `${key('close')} close`,
     };
     const pageHints = {
-      skills: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} install   ${key('edit')} edit   ${key('search')} filter`,
+      skills: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} manage devices   ${key('edit')} edit   ${key('search')} filter`,
       targets: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('toggle')} auto-adopt   ${key('sync')} sync`,
       settings: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} run   ${key('commands')} commands`,
       devices: `${key('move.down')}/${key('move.up')} move/scroll   ${key('focus.list')}/${key('focus.detail')} pane   ${key('sync')} sync   ${key('commands')} commands`,
@@ -1170,15 +1173,89 @@ export class SkillSyncTui {
     }
   }
 
-  async openTargetPicker(skillName) {
-    if (this.mode !== 'browse' || this.busy) return;
-    const targetNames = Object.keys(this.snapshot.localDevice.targets || {}).sort();
-    this.targetSelection = new Set(skillAssignmentTargets(this.snapshot.localDevice, skillName));
+  openSkillDevicePicker(skillName) {
+    if (this.mode !== 'browse' || this.busy || !skillName) return;
+    const placements = skillDevicePlacements(this.snapshot.devices, skillName);
+    this.targetSkillName = skillName;
+    this.mode = 'skill-device';
+    this.deviceModal = this.createModal({
+      title: ` Manage ${skillName} `,
+      width: Math.min(68, Math.max(48, this.renderer.width - 8)),
+      height: Math.min(26, Math.max(12, placements.length * 2 + 7)),
+    });
+    this.deviceModal.add(text(this.renderer, {
+      content: 'Choose a device, then add or remove its destinations.',
+      height: 1,
+      flexShrink: 0,
+      fg: COLORS.muted,
+    }));
+    this.deviceList = new SelectRenderable(this.renderer, {
+      id: 'skill-device-picker',
+      width: '100%',
+      flexGrow: 1,
+      options: placements.map((placement) => ({
+        value: placement.deviceId,
+        name: `${placementMarker(placement.status)} ${placement.displayName}`,
+        description: [
+          placement.deviceId === this.config.deviceId ? 'this device' : 'remote device',
+          placement.status === 'managed'
+            ? `managed on ${placement.assignedTargets.join(', ')}`
+            : placement.status === 'pending'
+              ? `assigned to ${placement.assignedTargets.join(', ')} · waiting for sync`
+              : placement.status === 'detected'
+                ? `detected on ${placement.detectedTargets.join(', ')} · unmanaged`
+                : 'not installed',
+        ].join(' · '),
+      })),
+      backgroundColor: COLORS.surface,
+      focusedBackgroundColor: COLORS.surface,
+      selectedBackgroundColor: COLORS.accentSoft,
+      selectedTextColor: COLORS.selectedText,
+      textColor: COLORS.text,
+      descriptionColor: COLORS.muted,
+      selectedDescriptionColor: COLORS.selectedMuted,
+      showDescription: true,
+      showSelectionIndicator: true,
+    });
+    this.deviceList.on(SelectRenderableEvents.ITEM_SELECTED, (_index, option) => {
+      if (option) this.openTargetPicker(skillName, option.value);
+    });
+    this.deviceModal.add(this.deviceList);
+    this.root.add(this.deviceModal);
+    this.deviceList.focus();
+    this.renderChrome();
+  }
+
+  closeSkillDevicePicker() {
+    if (this.mode !== 'skill-device') return;
+    this.deviceList.blur();
+    this.root.remove(this.deviceModal);
+    this.deviceModal.destroyRecursively();
+    this.deviceModal = null;
+    this.deviceList = null;
+    this.mode = 'browse';
+    this.setBrowseFocus(this.focusArea);
+  }
+
+  openTargetPicker(skillName, deviceId) {
+    if (!['browse', 'skill-device'].includes(this.mode) || this.busy) return;
+    const device = this.snapshot.devices.find((candidate) => candidate.device_id === deviceId);
+    if (!device) return;
+    if (this.mode === 'skill-device') this.closeSkillDevicePicker();
+    const targetNames = Object.keys(device.targets || {}).sort();
+    this.targetSelection = new Set(skillAssignmentTargets(device, skillName));
+    this.targetDeviceId = deviceId;
     this.targetSkillName = skillName;
     this.mode = 'targets';
-    this.targetModal = this.createModal({ title: ` Install ${skillName} `, width: 58, height: Math.min(18, targetNames.length + 8) });
+    this.targetModal = this.createModal({
+      title: ` ${skillName} → ${device.display_name} `,
+      width: Math.min(68, Math.max(52, this.renderer.width - 8)),
+      height: Math.min(24, Math.max(13, (targetNames.length + 1) * 2 + 9)),
+    });
     this.targetModal.add(text(this.renderer, {
-      content: 'Choose destinations. Empty selection uninstalls managed projections.',
+      content: deviceId === this.config.deviceId
+        ? 'Choose destinations. Empty selection removes the skill from this device.'
+        : 'Choose destinations. The device applies this change when it next syncs.',
       height: 2,
       flexShrink: 0,
       fg: COLORS.muted,
@@ -1192,7 +1269,9 @@ export class SkillSyncTui {
         name: `${this.targetSelection.has(name) ? '[x]' : '[ ]'} ${name}`,
         description: name === 'global'
           ? 'Device-level assignment without an agent projection'
-          : this.snapshot.localDevice.targets[name].path,
+          : deviceId === this.config.deviceId
+            ? device.targets[name].path
+            : `${device.targets[name].mode} target · path private to device`,
       })),
       backgroundColor: COLORS.surface,
       focusedBackgroundColor: COLORS.surface,
@@ -1223,39 +1302,52 @@ export class SkillSyncTui {
     this.targetList.setSelectedIndex(index);
   }
 
-  closeTargetPicker() {
+  closeTargetPicker({ reopenDevices = false } = {}) {
     if (this.mode !== 'targets') return;
+    const skillName = this.targetSkillName;
     this.targetList.blur();
     this.root.remove(this.targetModal);
     this.targetModal.destroyRecursively();
     this.targetModal = null;
     this.targetList = null;
+    this.targetDeviceId = null;
     this.mode = 'browse';
+    if (reopenDevices) {
+      this.openSkillDevicePicker(skillName);
+      return;
+    }
     this.setBrowseFocus(this.focusArea);
   }
 
   async applyTargetPicker() {
     const skillName = this.targetSkillName;
+    const deviceId = this.targetDeviceId;
+    const device = this.snapshot.devices.find((candidate) => candidate.device_id === deviceId);
     const targets = [...this.targetSelection].sort();
     this.closeTargetPicker();
-    await this.perform(`Applying ${skillName}…`, async () => {
+    if (!device) return;
+    await this.perform(`Updating ${device.display_name}…`, async () => {
       if (targets.length) {
         await setSkillTargets({
           vaultPath: this.config.repoPath,
-          deviceId: this.config.deviceId,
+          deviceId,
           skillName,
           targets,
         });
       } else {
         await uninstallSkillAndPrune({
           vaultPath: this.config.repoPath,
-          deviceId: this.config.deviceId,
+          deviceId,
           skillName,
         });
       }
-      await applyLinks({ vaultPath: this.config.repoPath, deviceId: this.config.deviceId });
+      if (deviceId === this.config.deviceId) {
+        await applyLinks({ vaultPath: this.config.repoPath, deviceId });
+      }
       await syncVault({ vaultPath: this.config.repoPath, deviceId: this.config.deviceId, pull: false });
-      return targets.length ? `Installed ${skillName}` : `Uninstalled ${skillName}`;
+      return targets.length
+        ? `${skillName} assigned to ${device.display_name}`
+        : `${skillName} removed from ${device.display_name}`;
     });
   }
 
@@ -1449,7 +1541,7 @@ export class SkillSyncTui {
       [TUI_PAGES.map((page) => key(`page.${page.id}`)).join(' / '), 'Switch sections'],
       [`${key('move.down')} / ${key('move.up')}`, 'Move in a list or scroll the focused preview'],
       [`${key('focus.list')} / ${key('focus.detail')}`, 'Focus the left list or right preview'],
-      [key('activate'), 'Choose install destinations or run an action'],
+      [key('activate'), 'Choose a device, manage its destinations, or run an action'],
       [key('edit'), 'Open the selected canonical SKILL.md in NORMAL mode'],
       [`${key('editor.insert.before')} / ${key('editor.insert.after')} / ${key('editor.insert.line-start')} / ${key('editor.insert.line-end')}`, 'Enter INSERT mode before/after the cursor or line'],
       [`${key('editor.insert.below')} / ${key('editor.insert.above')}`, 'Open a line below/above and enter INSERT mode'],
@@ -1691,10 +1783,26 @@ export class SkillSyncTui {
       }
       return;
     }
+    if (this.mode === 'skill-device') {
+      if (keyMatches(this.bindings, 'close', key)) {
+        key.preventDefault();
+        this.closeSkillDevicePicker();
+      } else if (keyMatches(this.bindings, 'activate', key)) {
+        key.preventDefault();
+        this.openTargetPicker(this.targetSkillName, this.deviceList.getSelectedOption()?.value);
+      } else if (keyMatches(this.bindings, 'move.up', key)) {
+        key.preventDefault();
+        this.deviceList.moveUp();
+      } else if (keyMatches(this.bindings, 'move.down', key)) {
+        key.preventDefault();
+        this.deviceList.moveDown();
+      }
+      return;
+    }
     if (this.mode === 'targets') {
       if (keyMatches(this.bindings, 'close', key)) {
         key.preventDefault();
-        this.closeTargetPicker();
+        this.closeTargetPicker({ reopenDevices: true });
       } else if (keyMatches(this.bindings, 'toggle', key)) {
         key.preventDefault();
         this.toggleTargetChoice();
@@ -1775,7 +1883,7 @@ export class SkillSyncTui {
     if (keyMatches(this.bindings, 'activate', key)) {
       key.preventDefault();
       if (this.page === 'skills') {
-        await this.openTargetPicker(this.list.getSelectedOption()?.value);
+        this.openSkillDevicePicker(this.list.getSelectedOption()?.value);
       } else if (this.page === 'settings') {
         await this.runSelectedSetting();
       } else {
