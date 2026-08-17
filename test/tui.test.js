@@ -165,25 +165,28 @@ test('skill matrix manages assignments on remote devices', {
   skip: nativeRuntime ? false : 'requires Node with --experimental-ffi',
 }, async (context) => {
   const { root, vaultPath } = await fixture({ remote: true });
-  const { app, exited, mockInput, flush, captureCharFrame, renderer } = await startApp(vaultPath);
+  const { app, exited, mockInput, mockMouse, flush, captureCharFrame, renderer } = await startApp(vaultPath);
   context.after(async () => {
     if (!app.exiting) renderer.destroy();
     await rm(root, { recursive: true, force: true });
   });
 
   assert.match(captureCharFrame(), /Devbox/);
-  mockInput.pressEnter();
+  await mockMouse.click(app.list.x + 4, app.list.y);
   await waitForMode(app, 'skill-device');
   await flush({ maxPasses: 20 });
   assert.match(captureCharFrame(), /Choose a device, then add or remove its destinations/);
 
-  mockInput.pressEnter();
+  await mockMouse.click(app.deviceList.x + 4, app.deviceList.y);
   await waitForMode(app, 'targets');
   await flush({ maxPasses: 20 });
   assert.match(captureCharFrame(), /proof-reader → Devbox/);
   assert.match(captureCharFrame(), /path private to device/);
-  mockInput.pressArrow('down');
-  mockInput.pressKey(' ');
+  await mockMouse.click(
+    app.targetList.x + 4,
+    app.targetList.y + app.targetList.linesPerItem,
+  );
+  assert.equal(app.targetSelection.has('claude'), true);
   mockInput.pressEnter();
   await waitForMode(app, 'browse');
 

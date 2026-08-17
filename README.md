@@ -75,7 +75,7 @@ The main workspace uses OpenTUI's alternate screen and the full terminal viewpor
 
 - `/` filters skills. `h` and `l` focus the list or detail pane; `j` and `k` move or scroll the focused pane.
 - `e` opens the selected canonical `SKILL.md` in Vim-style NORMAL mode. Use `i`, `a`, `I`, `A`, `o`, or `O` to enter INSERT mode; `Esc` returns to NORMAL mode and `Ctrl+S` saves and syncs.
-- `Enter` on a skill chooses a device, then opens that device's destinations. `Space` toggles a destination; an empty selection removes the skill from that device.
+- Click a skill or press `Enter` to choose a device, then open that device's destinations. Click a destination or press `Space` to toggle it; an empty selection removes the skill from that device.
 - `1` through `4` switch sections. `Ctrl+P` opens commands. `s` syncs. `?` shows every shortcut.
 - Quick edits use the private vault as the source of truth and refuse stale saves if the skill changed after the editor opened.
 

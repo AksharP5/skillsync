@@ -125,6 +125,18 @@ function placementCell(placement) {
   return `${placementMarker(placement.status)} ${placementTargets(placement)}`;
 }
 
+function selectOptionAtMouse(select, event) {
+  if (event.button !== 0) return null;
+  const visibleRow = Math.floor((event.y - select.y) / select.linesPerItem);
+  const index = select.scrollOffset + visibleRow;
+  if (visibleRow < 0 || index < 0 || index >= select.options.length) return null;
+  select.setSelectedIndex(index);
+  select.focus();
+  event.preventDefault();
+  event.stopPropagation();
+  return select.getSelectedOption();
+}
+
 function pendingHighlights(renderable) {
   const own = renderable instanceof CodeRenderable ? [renderable.highlightingDone] : [];
   return [
@@ -320,6 +332,10 @@ export class SkillSyncTui {
     this.list.on(SelectRenderableEvents.ITEM_SELECTED, (_index, option) => {
       if (this.page === 'skills' && option) this.openSkillDevicePicker(option.value);
     });
+    this.list.onMouseDown = (event) => {
+      const option = selectOptionAtMouse(this.list, event);
+      if (this.page === 'skills' && option) this.openSkillDevicePicker(option.value);
+    };
     this.listPane.add(this.list);
     this.workspace.add(this.listPane);
 
@@ -824,12 +840,12 @@ export class SkillSyncTui {
       search: `type to filter   ${key('activate')} keep   ${key('close')} clear`,
       confirm: `${key('move.up')}/${key('move.down')} choose   ${key('activate')} apply   ${key('close')} cancel`,
       palette: `${key('palette.move.up')}/${key('palette.move.down')} choose   ${key('activate')} run   ${key('close')} close`,
-      'skill-device': `${key('move.up')}/${key('move.down')} choose device   ${key('activate')} manage   ${key('close')} close`,
-      targets: `${key('move.up')}/${key('move.down')} choose   ${key('toggle')} toggle   ${key('activate')} apply   ${key('close')} cancel`,
+      'skill-device': `${key('move.up')}/${key('move.down')} choose device   click/${key('activate')} manage   ${key('close')} close`,
+      targets: `${key('move.up')}/${key('move.down')} choose   click/${key('toggle')} toggle   ${key('activate')} apply   ${key('close')} cancel`,
       help: `${key('close')} close`,
     };
     const pageHints = {
-      skills: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} manage devices   ${key('edit')} edit   ${key('search')} filter`,
+      skills: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   click/${key('activate')} manage devices   ${key('edit')} edit   ${key('search')} filter`,
       targets: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('toggle')} auto-adopt   ${key('sync')} sync`,
       settings: `${key('move.down')}/${key('move.up')} move   ${key('focus.list')}/${key('focus.detail')} pane   ${key('activate')} run   ${key('commands')} commands`,
       devices: `${key('move.down')}/${key('move.up')} move/scroll   ${key('focus.list')}/${key('focus.detail')} pane   ${key('sync')} sync   ${key('commands')} commands`,
@@ -1220,6 +1236,10 @@ export class SkillSyncTui {
     this.deviceList.on(SelectRenderableEvents.ITEM_SELECTED, (_index, option) => {
       if (option) this.openTargetPicker(skillName, option.value);
     });
+    this.deviceList.onMouseDown = (event) => {
+      const option = selectOptionAtMouse(this.deviceList, event);
+      if (option) this.openTargetPicker(skillName, option.value);
+    };
     this.deviceModal.add(this.deviceList);
     this.root.add(this.deviceModal);
     this.deviceList.focus();
@@ -1284,6 +1304,9 @@ export class SkillSyncTui {
       showSelectionIndicator: true,
     });
     this.targetModal.add(this.targetList);
+    this.targetList.onMouseDown = (event) => {
+      if (selectOptionAtMouse(this.targetList, event)) this.toggleTargetChoice();
+    };
     this.root.add(this.targetModal);
     this.targetList.focus();
     this.renderChrome();
@@ -1542,6 +1565,7 @@ export class SkillSyncTui {
       [`${key('move.down')} / ${key('move.up')}`, 'Move in a list or scroll the focused preview'],
       [`${key('focus.list')} / ${key('focus.detail')}`, 'Focus the left list or right preview'],
       [key('activate'), 'Choose a device, manage its destinations, or run an action'],
+      ['click', 'Open a skill or device, or toggle a destination'],
       [key('edit'), 'Open the selected canonical SKILL.md in NORMAL mode'],
       [`${key('editor.insert.before')} / ${key('editor.insert.after')} / ${key('editor.insert.line-start')} / ${key('editor.insert.line-end')}`, 'Enter INSERT mode before/after the cursor or line'],
       [`${key('editor.insert.below')} / ${key('editor.insert.above')}`, 'Open a line below/above and enter INSERT mode'],
