@@ -274,6 +274,32 @@ test('projection plans reject overlapping target roots', async () => {
   );
 });
 
+test('projection plans reject overlapping target roots through symlink aliases', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const physicalTarget = path.join(root, 'physical-skills');
+  const aliasTarget = path.join(root, 'alias-skills');
+  await mkdir(path.join(physicalTarget, 'nested'), { recursive: true });
+  await symlink(physicalTarget, aliasTarget, 'dir');
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'alias',
+    targetPath: aliasTarget,
+  });
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'nested',
+    targetPath: path.join(physicalTarget, 'nested'),
+  });
+
+  await assert.rejects(
+    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    /Configured skill targets cannot overlap/,
+  );
+});
+
 test('installSkill tracks device-global installs without an agent target', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -1360,6 +1386,38 @@ test('approved local skill replacement is backed up without weakening unmanaged 
   await assert.rejects(() => lstat(path.join(destination, '.skillsync-owned.json')), { code: 'ENOENT' });
 });
 
+test('approved local replacement works through equivalent target aliases', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const physicalTarget = path.join(root, 'physical-skills');
+  const firstAlias = path.join(root, 'first-skills');
+  const secondAlias = path.join(root, 'second-skills');
+  await makeSkill(physicalTarget, 'shared-skill', '# Local\n');
+  await symlink(physicalTarget, firstAlias, 'dir');
+  await symlink(physicalTarget, secondAlias, 'dir');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Vault\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'first', targetPath: firstAlias });
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'second', targetPath: secondAlias });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['second'],
+  });
+
+  await applyLinks({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    replaceUnmanagedPaths: [path.join(secondAlias, 'shared-skill')],
+  });
+
+  assert.equal(
+    await readFile(path.join(physicalTarget, 'shared-skill', 'SKILL.md'), 'utf8'),
+    '# Vault\n',
+  );
+});
+
 test('copy projections refuse local edits unless discarding them is explicit', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -1551,6 +1609,27 @@ test('rollback restores the previous copy projection', async () => {
   );
 });
 
+test('rollback restores projections from a removed target', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Shared\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['codex'],
+  });
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+  await removeTargetAndPrune({ vaultPath: vault, deviceId: 'macbook', name: 'codex' });
+
+  await rollbackLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  assert.equal((await lstat(path.join(target, 'shared-skill'))).isSymbolicLink(), true);
+});
+
 test('vault checks reject stale registry entries, secrets, and symlinks', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -1571,6 +1650,20 @@ test('vault checks reject stale registry entries, secrets, and symlinks', async 
   await mkdir(path.join(vault, 'state'), { recursive: true });
   await writeFile(path.join(vault, 'state', 'broken.json'), '{not json}\n');
   await assert.rejects(() => checkVault(vault), /Invalid JSON: state\/broken.json/);
+});
+
+test('vault checks reject local-state paths that Git can track', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  await rebuildRegistry(vault);
+  await mkdir(path.join(vault, '.git'), { recursive: true });
+  await mkdir(path.join(vault, '.skillsync-local'), { recursive: true });
+  await writeFile(path.join(vault, '.skillsync-local', 'device.json'), '{}\n');
+
+  await assert.rejects(
+    () => checkVault(vault),
+    /Reserved local state path in Git-backed vault: \.skillsync-local/,
+  );
 });
 
 test('adding a skill rejects credentials before copying it into the vault', async () => {

@@ -927,7 +927,9 @@ export async function planLinks({
 }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
   const registry = providedRegistry || await loadRegistry(vaultPath);
-  const approvedReplacements = new Set(replaceUnmanagedPaths.map((targetPath) => path.resolve(targetPath)));
+  const approvedReplacements = new Set(await Promise.all(
+    replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
+  ));
   const desiredByTarget = new Map();
   for (const [skillName, targets] of Object.entries(device.installed)) {
     assertSafePathSegment(skillName, 'Skill name');
@@ -942,7 +944,8 @@ export async function planLinks({
   const targetGroups = new Map();
   for (const [targetName, targetConfig] of Object.entries(device.targets)) {
     const targetPath = path.resolve(expandHome(targetConfig.path));
-    const existing = targetGroups.get(targetPath);
+    const canonicalPath = await canonicalTargetRoot(targetPath);
+    const existing = targetGroups.get(canonicalPath);
     if (existing && existing.mode !== targetConfig.mode) {
       throw new Error(`Targets sharing ${targetPath} must use the same projection mode`);
     }
@@ -954,12 +957,12 @@ export async function planLinks({
     };
     group.targetNames.push(targetName);
     for (const skillName of desiredByTarget.get(targetName) || []) group.desired.add(skillName);
-    targetGroups.set(targetPath, group);
+    targetGroups.set(canonicalPath, group);
   }
 
-  const targetRoots = [...targetGroups.keys()].sort();
-  for (const [index, root] of targetRoots.entries()) {
-    if (targetRoots.some((candidate, candidateIndex) => (
+  const canonicalRoots = [...targetGroups.keys()].sort();
+  for (const [index, root] of canonicalRoots.entries()) {
+    if (canonicalRoots.some((candidate, candidateIndex) => (
       candidateIndex !== index && root.startsWith(candidate + path.sep)
     ))) {
       throw new Error(`Configured skill targets cannot overlap: ${root}`);
@@ -1007,7 +1010,7 @@ export async function planLinks({
       if (info.exists
         && !info.ownedSymlink
         && !info.ownedCopy
-        && !approvedReplacements.has(path.resolve(destination))) {
+        && !approvedReplacements.has(await canonicalTargetRoot(destination))) {
         throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
       }
       const sourceHash = registry.skills[skillName].hash;
@@ -1069,9 +1072,26 @@ export async function planLinks({
   operations.sort((left, right) => left.destination.localeCompare(right.destination));
   return {
     deviceId,
-    roots: targetRoots,
+    roots: [...new Set(Object.values(device.targets)
+      .map((target) => path.resolve(expandHome(target.path))))].sort(),
     operations,
   };
+}
+
+async function canonicalTargetRoot(targetPath) {
+  const suffix = [];
+  let current = path.resolve(targetPath);
+  while (true) {
+    try {
+      return path.join(await realpath(current), ...suffix);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(targetPath);
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 export async function applyLinks(options) {

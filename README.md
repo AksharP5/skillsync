@@ -366,7 +366,7 @@ Restore the most recent successful local projection apply in an emergency:
 skillsync rollback
 ```
 
-The next sync applies the current vault assignments again.
+Rollback restores files only. It does not change assignments or target settings.
 
 Validate vault structure, registry hashes, JSON files, symlinks, and common credential formats without changing the vault:
 

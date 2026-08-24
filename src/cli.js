@@ -1813,7 +1813,7 @@ async function rollbackCommand(rest = []) {
     deviceId: config.deviceId,
   });
   console.log(`Restored ${result.restored} skill projection${result.restored === 1 ? '' : 's'} from ${result.backupId}.`);
-  console.log('The next sync will apply the current vault assignments again.');
+  console.log('Rollback restores files only; it does not change assignments or target settings.');
 }
 
 async function doctor() {

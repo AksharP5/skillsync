@@ -449,10 +449,15 @@ export async function rollbackLatestFilesystemBackup({ vaultPath, deviceId, root
         null,
       ).catch(() => null);
       if (manifest?.state !== 'applied') continue;
+      if (!Array.isArray(manifest.roots)
+        || manifest.roots.some((root) => typeof root !== 'string')) {
+        throw new Error(`Invalid projection backup manifest: ${entry.name}`);
+      }
+      // Local-only backups retain roots that were device-approved when captured.
       return rollbackBackup({
         vaultPath,
         deviceId,
-        allowedRoots,
+        allowedRoots: normalizeRoots([...allowedRoots, ...manifest.roots]),
         backupId: entry.name,
       });
     }
