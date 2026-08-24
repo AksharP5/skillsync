@@ -177,7 +177,7 @@ test('uninstall --device defers cleanup until the remote device reports the remo
   assert.ok((await loadRegistry(vault)).skills['temporary-skill']);
 });
 
-test('scan adopts a newly detected skill when target auto-adoption is enabled', async () => {
+test('scan reports new skills without changing local or vault state', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
   const target = path.join(home, '.codex', 'skills');
@@ -193,6 +193,7 @@ test('scan adopts a newly detected skill when target auto-adoption is enabled', 
     enabled: true,
   });
   await makeSkill(target, 'new-local', '# New\n');
+  const statusBefore = (await git(['status', '--porcelain'], vault)).stdout;
 
   const { stdout } = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
@@ -202,9 +203,84 @@ test('scan adopts a newly detected skill when target auto-adoption is enabled', 
     env: cliEnv(home),
   });
 
-  assert.match(stdout, /Auto-adopted new-local from codex/);
+  assert.match(stdout, /new-local \[codex, local only, new\]/);
+  assert.equal((await loadRegistry(vault)).skills['new-local'], undefined);
+  assert.equal((await lstat(path.join(target, 'new-local'))).isDirectory(), true);
+  assert.equal((await git(['status', '--porcelain'], vault)).stdout, statusBefore);
+
+  const json = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'scan',
+    '--json',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.deepEqual(JSON.parse(json.stdout).skills, [{
+    name: 'new-local',
+    target: 'codex',
+    path: 'new-local',
+    in_vault: false,
+    managed: false,
+    new: true,
+  }]);
+
+  const synced = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'sync',
+    '--no-pull',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.match(synced.stdout, /Auto-adopted new-local from codex/);
   assert.ok((await loadRegistry(vault)).skills['new-local']);
   assert.equal((await lstat(path.join(target, 'new-local'))).isSymbolicLink(), true);
+});
+
+test('sync dry-run reports projection changes without applying them', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const target = path.join(home, '.codex', 'skills');
+  const deviceId = 'test-device';
+
+  await writeConfig(home, vault, deviceId);
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'paper-mcp', targets: ['codex'] });
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'sync',
+    '--dry-run',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+
+  assert.match(stdout, /create symlink:/);
+  await assert.rejects(() => lstat(path.join(target, 'paper-mcp')));
+});
+
+test('check validates the vault without rewriting a stale registry', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+
+  await writeConfig(home, vault);
+  const skill = await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# First\n');
+  await rebuildRegistry(vault);
+  await writeFile(path.join(skill, 'SKILL.md'), '# Second\n');
+  const registryBefore = await readFile(path.join(vault, 'registry.json'), 'utf8');
+
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'check'], {
+      cwd: path.resolve('.'),
+      env: cliEnv(home),
+    }),
+    /Registry hash is stale: paper-mcp/,
+  );
+  assert.equal(await readFile(path.join(vault, 'registry.json'), 'utf8'), registryBefore);
 });
 
 test('matrix shows cross-device assignments and device auto-adoption can be disabled', async () => {

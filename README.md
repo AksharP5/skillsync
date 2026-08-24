@@ -276,6 +276,13 @@ skillsync target add codex ~/.codex/skills --no-auto-adopt
 
 If a different skill with the same name is already in the vault, SkillSync leaves both copies untouched and reports the conflict.
 
+Inspect local targets without adopting, applying, committing, or pushing anything:
+
+```bash
+skillsync scan
+skillsync scan --json
+```
+
 ## Manage another device
 
 List registered devices and their sync state:
@@ -339,6 +346,32 @@ Run a sync immediately:
 
 ```bash
 skillsync sync
+```
+
+Preview local skill projection changes without pulling or writing:
+
+```bash
+skillsync sync --dry-run
+```
+
+SkillSync checks every destination before applying the plan. It backs up changed skill projections in local Git metadata and restores them if the apply or a later local reconciliation step fails. Copy-mode projections also record their deployed content hash. If a managed copy was edited locally, sync stops instead of overwriting it. After reviewing those edits, discard them explicitly with:
+
+```bash
+skillsync sync --discard-local-changes
+```
+
+Restore the most recent successful local projection apply in an emergency:
+
+```bash
+skillsync rollback
+```
+
+The next sync applies the current vault assignments again.
+
+Validate vault structure, registry hashes, JSON files, symlinks, and common credential formats without changing the vault:
+
+```bash
+skillsync check
 ```
 
 Inspect the current configuration:
@@ -406,8 +439,10 @@ skillsync target auto-adopt <name> <on|off>
 skillsync auto-adopt [show|on|off]
 skillsync policy show
 skillsync policy set delete-unassigned-skills <on|off>
-skillsync scan
-skillsync sync
+skillsync scan [--json]
+skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]
+skillsync rollback
+skillsync check
 skillsync service install
 skillsync doctor
 skillsync daemon
@@ -416,6 +451,9 @@ skillsync daemon
 ## Safety
 
 - SkillSync will not silently overwrite an unmanaged local folder.
+- SkillSync refuses to overwrite or remove a locally edited managed copy unless you explicitly discard the edits.
+- Skill projection applies restore their previous state after a failure.
+- Vault checks reject symlinks, malformed JSON, stale registry entries, reserved ownership markers, and common credential formats.
 - Symlinked content outside a configured target is not auto-adopted.
 - Different same-name skills require explicit conflict resolution.
 - Plugin sync is additive and never copies connector credentials.

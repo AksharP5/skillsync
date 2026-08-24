@@ -103,9 +103,13 @@ test('pushWithPullRebaseRetry rebases and retries after a fetch-first rejection'
 
   await commitFile(stale, 'local.txt', 'local change\n', 'local change');
 
-  const result = await pushWithPullRebaseRetry(stale);
+  let validations = 0;
+  const result = await pushWithPullRebaseRetry(stale, {
+    beforePush: async () => { validations += 1; },
+  });
 
   assert.equal(result.rebased, true);
+  assert.equal(validations, 2);
   const { stdout } = await git(['log', '--oneline', '--format=%s'], stale);
   assert.match(stdout, /local change/);
   assert.match(stdout, /remote change/);
