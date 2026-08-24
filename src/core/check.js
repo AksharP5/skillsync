@@ -4,7 +4,8 @@ import path from 'node:path';
 
 import { assertSafePathSegment, hashDirectory } from './fs.js';
 
-const IGNORED_ROOT_ENTRIES = new Set(['.git', '.skillsync-local']);
+const GIT_ENTRY = '.git';
+const LOCAL_STATE_ENTRY = '.skillsync-local';
 const OWNERSHIP_MARKER = '.skillsync-owned.json';
 const SECRET_PATTERNS = [
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
@@ -144,11 +145,16 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
     throw validationError('Vault check', [`Vault is not a directory: ${root}`]);
   }
 
+  const gitBacked = Boolean(await pathInfo(path.join(root, GIT_ENTRY)));
+  const localState = await pathInfo(path.join(root, LOCAL_STATE_ENTRY));
   const inspected = await inspectTree(root, {
-    ignoreRootEntries: IGNORED_ROOT_ENTRIES,
+    ignoreRootEntries: new Set([GIT_ENTRY, LOCAL_STATE_ENTRY]),
     rejectOwnershipMarkers: true,
   });
   const errors = [...inspected.errors];
+  if (gitBacked && localState) {
+    errors.push(`Reserved local state path in Git-backed vault: ${LOCAL_STATE_ENTRY}`);
+  }
   const unsafeTree = inspected.errors.some((error) => (
     error.startsWith('Symlinks are not allowed:')
     || error.startsWith('Unsupported file type:')
