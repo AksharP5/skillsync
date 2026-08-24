@@ -1,6 +1,7 @@
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { checkSkillFolder } from './check.js';
 import {
   assertSafePathSegment,
   copyDir,
@@ -93,16 +94,7 @@ export async function setVaultPolicy({ vaultPath, name, enabled }) {
 }
 
 export async function validateSkillFolder(sourcePath) {
-  const skillFile = path.join(sourcePath, 'SKILL.md');
-  try {
-    const info = await stat(skillFile);
-    if (!info.isFile()) throw new Error(`SKILL.md is not a file: ${skillFile}`);
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      throw new Error(`Skill folder must contain SKILL.md: ${sourcePath}`);
-    }
-    throw error;
-  }
+  await checkSkillFolder(sourcePath);
 }
 
 export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
@@ -171,8 +163,7 @@ export async function registryEntryForSkill(vaultPath, skillName) {
   };
 }
 
-export async function rebuildRegistry(vaultPath) {
-  await ensureVault(vaultPath);
+export async function buildRegistry(vaultPath) {
   const skillsDir = path.join(vaultPath, 'skills');
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const registry = emptyRegistry();
@@ -182,6 +173,12 @@ export async function rebuildRegistry(vaultPath) {
     if (!await exists(path.join(skillsDir, skillName, 'SKILL.md'))) continue;
     registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
   }
+  return registry;
+}
+
+export async function rebuildRegistry(vaultPath) {
+  await ensureVault(vaultPath);
+  const registry = await buildRegistry(vaultPath);
   await saveRegistry(vaultPath, registry);
   return registry;
 }

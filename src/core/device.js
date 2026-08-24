@@ -1,15 +1,14 @@
-import { cp, lstat, mkdir, readlink, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readlink, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
 
 import {
   assertSafePathSegment,
-  ensureDir,
   exists,
   expandHome,
+  hashDirectory,
   readJson,
   readSkillName,
-  removePath,
   slugifySkillName,
   writeJson,
   writePrivateJson,
@@ -23,9 +22,15 @@ import {
   loadRegistry,
   loadVaultConfig,
 } from './registry.js';
+import {
+  applyFilesystemPlan,
+  rollbackFilesystemBackup,
+  rollbackLatestFilesystemBackup,
+} from './transaction.js';
 
 const GLOBAL_INSTALL_TARGET = 'global';
 const LOCAL_PATH_STATE_VERSION = 1;
+const OWNERSHIP_MARKER = '.skillsync-owned.json';
 
 function isGlobalInstallTarget(target) {
   return target === GLOBAL_INSTALL_TARGET || target === '@global';
@@ -645,14 +650,19 @@ export async function addTarget({
       ? autoImport
       : previousTarget?.auto_import ?? true,
   };
+  let cleanup = null;
   if (JSON.stringify(previousTarget) !== JSON.stringify(nextTarget)) {
     if (previousTarget
       && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
-      await removeOwnedTargetProjections({ vaultPath, device, name });
+      cleanup = await removeOwnedTargetProjections({ vaultPath, device, name });
     }
     device.targets[name] = nextTarget;
   }
-  await saveLocalReportedDevice(vaultPath, device);
+  try {
+    await saveLocalReportedDevice(vaultPath, device);
+  } catch (error) {
+    await rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error });
+  }
   return device;
 }
 
@@ -660,7 +670,7 @@ export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), na
   assertSafePathSegment(name, 'Target name');
   const device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.targets[name]) return device;
-  await removeOwnedTargetProjections({ vaultPath, device, name });
+  const cleanup = await removeOwnedTargetProjections({ vaultPath, device, name });
   delete device.targets[name];
   delete device.detected[name];
   let assignmentsChanged = false;
@@ -673,22 +683,66 @@ export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), na
     if (!targets.length) delete device.installed[skillName];
   }
   if (assignmentsChanged) bumpDesiredGeneration(device);
-  await saveDevice(vaultPath, device);
+  try {
+    await saveDevice(vaultPath, device);
+  } catch (error) {
+    await rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error });
+  }
   return device;
 }
 
 async function removeOwnedTargetProjections({ vaultPath, device, name }) {
   const targetConfig = device.targets[name];
-  if (!targetConfig?.path) return;
-  const targetPath = expandHome(targetConfig.path);
-  for (const [skillName, targets] of Object.entries(device.installed || {})) {
-    if (!Array.isArray(targets) || !targets.includes(name)) continue;
-    const destination = path.join(targetPath, skillName);
-    const info = await projectionInfo(destination, vaultPath);
-    if (info.ownedSymlink || info.ownedCopy) {
-      await removePath(destination);
-    }
+  if (!targetConfig?.path) return null;
+  const targetPath = path.resolve(expandHome(targetConfig.path));
+  const transaction = await applyFilesystemPlan({
+    vaultPath,
+    deviceId: device.device_id,
+    roots: [targetPath],
+    plan: async () => {
+      const registry = await loadRegistry(vaultPath);
+      const operations = [];
+      for (const [skillName, targets] of Object.entries(device.installed || {})) {
+        if (!Array.isArray(targets) || !targets.includes(name)) continue;
+        const destination = path.join(targetPath, skillName);
+        const info = await projectionInfo(destination, vaultPath);
+        if (info.ownedCopy) {
+          await requireUnchangedCopy({
+            destination,
+            marker: info.copyMarker,
+            sourceHash: registry.skills[skillName]?.hash,
+          });
+        }
+        if (info.ownedSymlink || info.ownedCopy) {
+          operations.push({
+            type: 'remove',
+            destination,
+            skillName,
+            targetNames: [name],
+          });
+        }
+      }
+      return operations;
+    },
+  });
+  return { ...transaction, roots: [targetPath] };
+}
+
+async function rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error }) {
+  if (!cleanup?.backupId) throw error;
+  try {
+    await rollbackFilesystemBackup({
+      vaultPath,
+      deviceId,
+      roots: cleanup.roots,
+      backupId: cleanup.backupId,
+    });
+  } catch (rollbackError) {
+    throw new Error(`${error.message}\nProjection rollback also failed: ${rollbackError.message}`, {
+      cause: error,
+    });
   }
+  throw error;
 }
 
 export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceId(), name, enabled }) {
@@ -864,9 +918,16 @@ export async function removeTargetAndPrune(options) {
   return { device, pruned: [] };
 }
 
-export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
+export async function planLinks({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  discardLocalChanges = false,
+  replaceUnmanagedPaths = [],
+  registry: providedRegistry,
+}) {
   const device = await loadLocalDevice(vaultPath, deviceId);
-  const registry = await loadRegistry(vaultPath);
+  const registry = providedRegistry || await loadRegistry(vaultPath);
+  const approvedReplacements = new Set(replaceUnmanagedPaths.map((targetPath) => path.resolve(targetPath)));
   const desiredByTarget = new Map();
   for (const [skillName, targets] of Object.entries(device.installed)) {
     assertSafePathSegment(skillName, 'Skill name');
@@ -878,21 +939,184 @@ export async function applyLinks({ vaultPath, deviceId = defaultDeviceId() }) {
     }
   }
 
+  const targetGroups = new Map();
   for (const [targetName, targetConfig] of Object.entries(device.targets)) {
-    const targetPath = expandHome(targetConfig.path);
-    await ensureDir(targetPath);
-    const desired = desiredByTarget.get(targetName) || new Set();
-    await removeStaleOwnedProjections({ vaultPath, targetPath, desired });
-    for (const skillName of desired) {
-      const source = path.join(vaultPath, 'skills', skillName);
-      const destination = path.join(targetPath, skillName);
-      if (targetConfig.mode === 'copy') {
-        await createCopyProjection(source, destination, skillName, vaultPath);
-      } else {
-        await createSymlinkProjection(source, destination);
-      }
+    const targetPath = path.resolve(expandHome(targetConfig.path));
+    const existing = targetGroups.get(targetPath);
+    if (existing && existing.mode !== targetConfig.mode) {
+      throw new Error(`Targets sharing ${targetPath} must use the same projection mode`);
+    }
+    const group = existing || {
+      targetPath,
+      mode: targetConfig.mode || 'symlink',
+      targetNames: [],
+      desired: new Set(),
+    };
+    group.targetNames.push(targetName);
+    for (const skillName of desiredByTarget.get(targetName) || []) group.desired.add(skillName);
+    targetGroups.set(targetPath, group);
+  }
+
+  const targetRoots = [...targetGroups.keys()].sort();
+  for (const [index, root] of targetRoots.entries()) {
+    if (targetRoots.some((candidate, candidateIndex) => (
+      candidateIndex !== index && root.startsWith(candidate + path.sep)
+    ))) {
+      throw new Error(`Configured skill targets cannot overlap: ${root}`);
     }
   }
+
+  const operations = [];
+  for (const group of targetGroups.values()) {
+    const targetInfo = await stat(group.targetPath).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (targetInfo && !targetInfo.isDirectory()) {
+      throw new Error(`Skill target is not a directory: ${group.targetPath}`);
+    }
+    const entries = targetInfo
+      ? await readdir(group.targetPath, { withFileTypes: true })
+      : [];
+    for (const entry of entries) {
+      if (group.desired.has(entry.name)) continue;
+      const destination = path.join(group.targetPath, entry.name);
+      const info = await projectionInfo(destination, vaultPath);
+      if (!info.ownedSymlink && !info.ownedCopy) continue;
+      if (info.ownedCopy) {
+        const state = await copyState({
+          destination,
+          marker: info.copyMarker,
+          sourceHash: registry.skills[entry.name]?.hash,
+        });
+        if (state.drifted && !discardLocalChanges) throw copyDriftError(destination);
+      }
+      operations.push({
+        type: 'remove',
+        change: 'remove',
+        destination,
+        skillName: entry.name,
+        targetNames: group.targetNames,
+      });
+    }
+
+    for (const skillName of group.desired) {
+      const source = path.join(vaultPath, 'skills', skillName);
+      const destination = path.join(group.targetPath, skillName);
+      const info = await projectionInfo(destination, vaultPath);
+      if (info.exists
+        && !info.ownedSymlink
+        && !info.ownedCopy
+        && !approvedReplacements.has(path.resolve(destination))) {
+        throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
+      }
+      const sourceHash = registry.skills[skillName].hash;
+      if (group.mode === 'copy') {
+        if (info.ownedCopy) {
+          const state = await copyState({
+            destination,
+            marker: info.copyMarker,
+            sourceHash,
+          });
+          if (state.drifted && !discardLocalChanges) throw copyDriftError(destination);
+          if (!state.drifted
+            && state.localHash === sourceHash
+            && info.copyMarker?.source_hash === sourceHash) {
+            continue;
+          }
+        }
+        operations.push({
+          type: 'copy',
+          change: info.exists ? 'replace' : 'create',
+          source,
+          destination,
+          skillName,
+          targetNames: group.targetNames,
+          marker: {
+            version: 1,
+            skill: skillName,
+            vault: path.resolve(vaultPath),
+            source_hash: sourceHash,
+          },
+        });
+        continue;
+      }
+
+      if (info.ownedCopy) {
+        const state = await copyState({
+          destination,
+          marker: info.copyMarker,
+          sourceHash,
+        });
+        if (state.drifted && !discardLocalChanges) throw copyDriftError(destination);
+      }
+      if (info.ownedSymlink
+        && info.reachable
+        && info.resolved === await realpathOrResolve(source)) {
+        continue;
+      }
+      operations.push({
+        type: 'symlink',
+        change: info.exists ? 'replace' : 'create',
+        source,
+        destination,
+        skillName,
+        targetNames: group.targetNames,
+      });
+    }
+  }
+
+  operations.sort((left, right) => left.destination.localeCompare(right.destination));
+  return {
+    deviceId,
+    roots: targetRoots,
+    operations,
+  };
+}
+
+export async function applyLinks(options) {
+  const roots = await approvedProjectionRoots(options.vaultPath, options.deviceId || defaultDeviceId());
+  let preparedPlan = null;
+  const transaction = await applyFilesystemPlan({
+    vaultPath: options.vaultPath,
+    deviceId: options.deviceId || defaultDeviceId(),
+    roots,
+    plan: async () => {
+      preparedPlan = await planLinks(options);
+      return preparedPlan.operations;
+    },
+    fault: options.fault,
+  });
+  return { ...preparedPlan, ...transaction };
+}
+
+async function approvedProjectionRoots(vaultPath, deviceId) {
+  const device = await loadLocalDevice(vaultPath, deviceId);
+  return Object.values(device.targets).map((target) => path.resolve(expandHome(target.path)));
+}
+
+export async function rollbackLinkBackup({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  backupId,
+}) {
+  return rollbackFilesystemBackup({
+    vaultPath,
+    deviceId,
+    roots: await approvedProjectionRoots(vaultPath, deviceId),
+    backupId,
+  });
+}
+
+export async function rollbackLinks({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+}) {
+  return rollbackLatestFilesystemBackup({
+    vaultPath,
+    deviceId,
+    roots: await approvedProjectionRoots(vaultPath, deviceId),
+  });
 }
 
 export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId() }) {
@@ -929,7 +1153,20 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
         if (!info.exists) {
           status = 'missing';
         } else if (mode === 'copy') {
-          status = info.ownedCopy ? 'ok' : 'unmanaged';
+          if (!info.ownedCopy) {
+            status = 'unmanaged';
+          } else {
+            const state = await copyState({
+              destination,
+              marker: info.copyMarker,
+              sourceHash: registryEntry.hash,
+            });
+            status = state.drifted
+              ? 'drifted'
+              : state.localHash === registryEntry.hash
+                ? 'ok'
+                : 'outdated';
+          }
         } else if (info.ownedSymlink && info.reachable) {
           status = info.resolved === await realpathOrResolve(source) ? 'ok' : 'wrong-source';
         } else if (info.ownedSymlink || info.ownedCopy) {
@@ -983,6 +1220,7 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
   const currentDetected = await detectTargets({ vaultPath, device });
   const adopted = [];
   const conflicts = [];
+  const replaceUnmanagedPaths = [];
 
   for (const [targetName, targetConfig] of Object.entries(device.targets)) {
     if (!targetConfig.auto_import) continue;
@@ -1030,7 +1268,7 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
         skillName: result.name,
         targets: [targetName],
       });
-      await removePath(sourcePath);
+      replaceUnmanagedPaths.push(sourcePath);
       adopted.push({
         name: result.name,
         target: targetName,
@@ -1039,7 +1277,7 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     }
   }
 
-  return { adopted, conflicts };
+  return { adopted, conflicts, replaceUnmanagedPaths };
 }
 
 async function hasSymlinkBelowRoot(childPath, rootPath) {
@@ -1062,6 +1300,35 @@ export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
   device.detected = detected;
   await saveLocalReportedDevice(vaultPath, device);
   return device;
+}
+
+export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }) {
+  const device = await loadLocalDevice(vaultPath, deviceId);
+  const detected = await detectTargets({ vaultPath, device });
+  const skills = [];
+  for (const [targetName, entries] of Object.entries(detected)) {
+    const previous = new Set((device.detected[targetName] || []).map(detectedSkillKey));
+    for (const skill of entries) {
+      skills.push({
+        name: skill.name,
+        target: targetName,
+        path: skill.path,
+        in_vault: skill.in_vault,
+        managed: Boolean(device.installed[skill.name]?.includes(targetName)),
+        new: !previous.has(detectedSkillKey(skill)),
+      });
+    }
+  }
+  skills.sort((left, right) => (
+    left.name.localeCompare(right.name)
+    || left.target.localeCompare(right.target)
+    || left.path.localeCompare(right.path)
+  ));
+  return {
+    version: 1,
+    device_id: device.device_id,
+    skills,
+  };
 }
 
 async function findLocalSkills(scanPath) {
@@ -1112,68 +1379,24 @@ async function symlinkedDirectory(child, entry) {
   }
 }
 
-async function removeStaleOwnedProjections({ vaultPath, targetPath, desired }) {
-  const entries = await readdir(targetPath, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    if (desired.has(entry.name)) continue;
-    const fullPath = path.join(targetPath, entry.name);
-    if (await isOwnedSymlink(fullPath, vaultPath) || await isOwnedCopy(fullPath, vaultPath)) {
-      await removePath(fullPath);
-    }
-  }
+function copyDriftError(destination) {
+  return new Error(`Managed copy has local changes: ${destination}. Review it or run skillsync sync --discard-local-changes.`);
 }
 
-async function createSymlinkProjection(source, destination) {
-  const vaultPath = path.dirname(path.dirname(source));
-  const [existing, canonicalSource] = await Promise.all([
-    projectionInfo(destination, vaultPath),
-    realpath(source),
-  ]);
-  if (existing.exists) {
-    if (existing.ownedSymlink) {
-      if (existing.reachable && existing.resolved === canonicalSource) return;
-      await removePath(destination);
-    } else if (existing.ownedCopy) {
-      await removePath(destination);
-    } else {
-      throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
-    }
-  }
-  await writeSymlinkProjection(source, destination, vaultPath);
+async function copyState({ destination, marker, sourceHash }) {
+  const localHash = await hashDirectory(destination, { exclude: [OWNERSHIP_MARKER] });
+  const expectedHash = marker?.source_hash || sourceHash || null;
+  return {
+    localHash,
+    expectedHash,
+    drifted: !expectedHash || localHash !== expectedHash,
+  };
 }
 
-async function writeSymlinkProjection(source, destination, vaultPath) {
-  const [parent, target] = await Promise.all([
-    realpath(path.dirname(destination)),
-    realpath(source),
-  ]);
-  const relativeSource = path.relative(parent, target);
-  try {
-    await symlink(relativeSource, destination, 'dir');
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    const existing = await projectionInfo(destination, vaultPath);
-    if (existing.ownedSymlink && existing.reachable && existing.resolved === target) return;
-    if (existing.ownedSymlink || existing.ownedCopy) {
-      await removePath(destination);
-      await symlink(relativeSource, destination, 'dir');
-      return;
-    }
-    throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
-  }
-}
-
-async function createCopyProjection(source, destination, skillName, vaultPath) {
-  const existing = await projectionInfo(destination, vaultPath);
-  if (existing.exists) {
-    if (existing.ownedCopy || existing.ownedSymlink) {
-      await removePath(destination);
-    } else {
-      throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
-    }
-  }
-  await cp(source, destination, { recursive: true, force: true, dereference: false });
-  await writeFile(path.join(destination, '.skillsync-owned.json'), JSON.stringify({ skill: skillName, vault: vaultPath }, null, 2));
+async function requireUnchangedCopy({ destination, marker, sourceHash }) {
+  const state = await copyState({ destination, marker, sourceHash });
+  if (state.drifted) throw copyDriftError(destination);
+  return state;
 }
 
 async function realpathOrResolve(targetPath) {
@@ -1218,6 +1441,7 @@ async function projectionInfo(targetPath, vaultPath) {
         exists: false,
         ownedSymlink: false,
         ownedCopy: false,
+        copyMarker: null,
         reachable: false,
         resolved: null,
       };
@@ -1225,10 +1449,12 @@ async function projectionInfo(targetPath, vaultPath) {
     throw error;
   }
   const link = await symlinkInfo(targetPath, vaultPath);
+  const copyMarker = link ? null : await ownedCopyMarker(targetPath, vaultPath);
   return {
     exists: true,
     ownedSymlink: Boolean(link?.owned),
-    ownedCopy: link ? false : await isOwnedCopy(targetPath, vaultPath),
+    ownedCopy: Boolean(copyMarker),
+    copyMarker,
     reachable: Boolean(link?.reachable),
     resolved: link?.resolved || null,
   };
@@ -1239,17 +1465,19 @@ async function isOwnedSymlink(targetPath, vaultPath) {
   return Boolean(link?.owned);
 }
 
-async function isOwnedCopy(targetPath, vaultPath) {
-  const markerPath = path.join(targetPath, '.skillsync-owned.json');
+async function ownedCopyMarker(targetPath, vaultPath) {
+  const markerPath = path.join(targetPath, OWNERSHIP_MARKER);
   try {
     const info = await lstat(markerPath);
-    if (!info.isFile()) return false;
+    if (!info.isFile() || info.isSymbolicLink()) return null;
     const marker = await readJson(markerPath);
     return marker?.skill === path.basename(targetPath)
       && typeof marker?.vault === 'string'
-      && path.resolve(marker.vault) === path.resolve(vaultPath);
+      && path.resolve(marker.vault) === path.resolve(vaultPath)
+      ? marker
+      : null;
   } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error instanceof SyntaxError) return false;
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error instanceof SyntaxError) return null;
     throw error;
   }
 }

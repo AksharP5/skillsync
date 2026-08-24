@@ -22,9 +22,11 @@ import {
   rebuildRegistry,
   setVaultPolicy,
 } from '../src/core/registry.js';
+import { checkVault } from '../src/core/check.js';
 import {
   addTarget,
   applyLinks,
+  configureGlobalInstructions,
   globalInstructionsAssignmentPath,
   initializeLocalPathState,
   installSkill,
@@ -36,6 +38,7 @@ import {
   markDeviceApplied,
   migrateLegacyLocalPathState,
   removeTargetAndPrune,
+  rollbackLinks,
   scanTargets,
   setDeviceAutoImport,
   setGlobalInstructionsProfile,
@@ -251,6 +254,24 @@ test('applyLinks repairs skill links through a symlinked target directory', asyn
   assert.equal(await realpath(link), await realpath(source));
   const [projection] = await managedProjections({ vaultPath: vault, deviceId });
   assert.equal(projection.status, 'ok');
+});
+
+test('projection plans reject overlapping target roots', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'skills');
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'parent', targetPath: target });
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'nested',
+    targetPath: path.join(target, 'nested'),
+  });
+
+  await assert.rejects(
+    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    /Configured skill targets cannot overlap/,
+  );
 });
 
 test('installSkill tracks device-global installs without an agent target', async () => {
@@ -1306,6 +1327,265 @@ test('copy projection ownership requires a matching vault marker', async () => {
   assert.equal(await readFile(path.join(unmanaged, 'SKILL.md'), 'utf8'), '# Keep\n');
 });
 
+test('approved local skill replacement is backed up without weakening unmanaged path protection', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  const destination = await makeSkill(target, 'shared-skill', '# Local\n');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Vault\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['codex'],
+  });
+
+  await assert.rejects(
+    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    /Refusing to overwrite unmanaged target path/,
+  );
+
+  await applyLinks({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    replaceUnmanagedPaths: [destination],
+  });
+  assert.equal(await readFile(path.join(destination, 'SKILL.md'), 'utf8'), '# Vault\n');
+
+  await rollbackLinks({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal((await lstat(destination)).isDirectory(), true);
+  assert.equal(await readFile(path.join(destination, 'SKILL.md'), 'utf8'), '# Local\n');
+  await assert.rejects(() => lstat(path.join(destination, '.skillsync-owned.json')), { code: 'ENOENT' });
+});
+
+test('copy projections refuse local edits unless discarding them is explicit', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# Vault\n');
+  await rebuildRegistry(vault);
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    targetPath: target,
+    mode: 'copy',
+  });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['codex'],
+  });
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  const localSkill = path.join(target, 'shared-skill', 'SKILL.md');
+  await writeFile(localSkill, '# Local edit\n');
+
+  await assert.rejects(
+    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    /Managed copy has local changes/,
+  );
+  assert.equal(await readFile(localSkill, 'utf8'), '# Local edit\n');
+
+  await applyLinks({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    discardLocalChanges: true,
+  });
+  assert.equal(await readFile(localSkill, 'utf8'), '# Vault\n');
+});
+
+test('copy projections update when the vault changes without local drift', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  const vaultSkill = await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# First\n');
+  await rebuildRegistry(vault);
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    targetPath: target,
+    mode: 'copy',
+  });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['codex'],
+  });
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  await writeFile(path.join(vaultSkill, 'SKILL.md'), '# Second\n');
+  await rebuildRegistry(vault);
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  assert.equal(
+    await readFile(path.join(target, 'shared-skill', 'SKILL.md'), 'utf8'),
+    '# Second\n',
+  );
+});
+
+test('projection apply restores every destination after a write failure', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'alpha', '# Alpha\n');
+  await makeSkill(path.join(vault, 'skills'), 'beta', '# Beta\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'alpha', targets: ['codex'] });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'beta', targets: ['codex'] });
+
+  await assert.rejects(
+    () => applyLinks({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      fault: async (index) => {
+        if (index === 0) throw new Error('simulated failure');
+      },
+    }),
+    /Projection apply failed and was rolled back/,
+  );
+  await assert.rejects(() => lstat(path.join(target, 'alpha')));
+  await assert.rejects(() => lstat(path.join(target, 'beta')));
+});
+
+test('projection apply refuses concurrent writers', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'alpha', '# Alpha\n');
+  await makeSkill(path.join(vault, 'skills'), 'beta', '# Beta\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'alpha', targets: ['codex'] });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'beta', targets: ['codex'] });
+
+  let releaseFirst;
+  let firstOperationApplied;
+  const started = new Promise((resolve) => { firstOperationApplied = resolve; });
+  const release = new Promise((resolve) => { releaseFirst = resolve; });
+  const first = applyLinks({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    fault: async (index) => {
+      if (index !== 0) return;
+      firstOperationApplied();
+      await release;
+    },
+  });
+  await started;
+  try {
+    await assert.rejects(
+      () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+      /Another SkillSync apply is already running/,
+    );
+  } finally {
+    releaseFirst();
+  }
+  await first;
+});
+
+test('projection planning runs after interrupted apply recovery', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  await makeSkill(path.join(vault, 'skills'), 'alpha', '# Alpha\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId: 'macbook', skillName: 'alpha', targets: ['codex'] });
+  const first = await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  const transactionRoot = path.join(vault, '.skillsync-local', 'transactions');
+  const manifestPath = path.join(transactionRoot, 'backups', 'macbook', first.backupId, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  await writeFile(manifestPath, `${JSON.stringify({ ...manifest, state: 'in-progress' }, null, 2)}\n`);
+  await writeFile(path.join(transactionRoot, 'in-progress.json'), `${JSON.stringify({
+    version: 1,
+    device_id: 'macbook',
+    backup_id: first.backupId,
+  }, null, 2)}\n`);
+
+  const second = await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  assert.equal(second.applied, true);
+  assert.notEqual(second.backupId, first.backupId);
+  assert.equal((await lstat(path.join(target, 'alpha'))).isSymbolicLink(), true);
+  assert.equal(JSON.parse(await readFile(manifestPath, 'utf8')).state, 'recovered');
+});
+
+test('rollback restores the previous copy projection', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  const vaultSkill = await makeSkill(path.join(vault, 'skills'), 'shared-skill', '# First\n');
+  await rebuildRegistry(vault);
+  await addTarget({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    name: 'codex',
+    targetPath: target,
+    mode: 'copy',
+  });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'shared-skill',
+    targets: ['codex'],
+  });
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+  await writeFile(path.join(vaultSkill, 'SKILL.md'), '# Second\n');
+  await rebuildRegistry(vault);
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  const result = await rollbackLinks({ vaultPath: vault, deviceId: 'macbook' });
+
+  assert.equal(result.restored, 1);
+  assert.equal(
+    await readFile(path.join(target, 'shared-skill', 'SKILL.md'), 'utf8'),
+    '# First\n',
+  );
+});
+
+test('vault checks reject stale registry entries, secrets, and symlinks', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const skill = await makeSkill(path.join(vault, 'skills'), 'safe-skill', '# Safe\n');
+  await rebuildRegistry(vault);
+  await checkVault(vault);
+
+  await writeFile(path.join(skill, 'SKILL.md'), '# Changed\n');
+  await assert.rejects(() => checkVault(vault), /Registry hash is stale: safe-skill/);
+  await rebuildRegistry(vault);
+
+  await writeFile(path.join(skill, 'token.txt'), 'sk-proj-1234567890abcdefghijklmnop\n');
+  await assert.rejects(() => checkVault(vault), /Possible API key: skills\/safe-skill\/token.txt/);
+  await unlink(path.join(skill, 'token.txt'));
+  await symlink(path.join(root, 'outside'), path.join(skill, 'outside'));
+  await assert.rejects(() => checkVault(vault), /Symlinks are not allowed: skills\/safe-skill\/outside/);
+  await unlink(path.join(skill, 'outside'));
+  await mkdir(path.join(vault, 'state'), { recursive: true });
+  await writeFile(path.join(vault, 'state', 'broken.json'), '{not json}\n');
+  await assert.rejects(() => checkVault(vault), /Invalid JSON: state\/broken.json/);
+});
+
+test('adding a skill rejects credentials before copying it into the vault', async () => {
+  const root = await tempDir();
+  const source = await makeSkill(root, 'unsafe-skill', '# Unsafe\n');
+  const vault = path.join(root, 'vault');
+  await writeFile(path.join(source, 'credentials.txt'), 'ghp_1234567890abcdefghijklmnop\n');
+
+  await assert.rejects(
+    () => addSkillToVault({ vaultPath: vault, sourcePath: source }),
+    /Possible GitHub token/,
+  );
+  await assert.rejects(() => lstat(path.join(vault, 'skills', 'unsafe-skill')));
+});
+
 test('unused-skill sweep is disabled by default', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -1497,4 +1777,44 @@ test('sync applies the latest desired generation on the target device', async ()
   const applied = await loadDevice(vault, 'remote');
   assert.equal(applied.applied_generation, applied.desired_generation);
   assert.equal((await lstat(path.join(target, 'paper-mcp'))).isSymbolicLink(), true);
+});
+
+test('sync restores projection changes when a later step fails', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'codex-skills');
+  const instructions = path.join(root, 'AGENTS.md');
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'codex', targetPath: target });
+  await installSkill({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    skillName: 'paper-mcp',
+    targets: ['codex'],
+  });
+  await setGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'missing-profile',
+  });
+  await configureGlobalInstructions({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    targetPaths: [instructions],
+    appliedProfile: null,
+  });
+
+  await assert.rejects(
+    () => syncVault({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      pull: false,
+      pushChanges: false,
+    }),
+    /Unknown global instructions profile: missing-profile/,
+  );
+  await assert.rejects(() => lstat(path.join(target, 'paper-mcp')));
+  const device = await loadDevice(vault, 'macbook');
+  assert.ok(device.desired_generation > device.applied_generation);
 });

@@ -23,3 +23,5 @@ SkillSync uses a user-owned private GitHub repository as its control plane. Ever
 Device-local skill targets and global instruction paths are approved on that device and stored outside the synced vault. Pulled vault state cannot authorize new local filesystem locations.
 
 Skill folders can contain executable instructions or supporting scripts. Users should review third-party skills before adding them to a vault.
+
+SkillSync checks vault files for symlinks, malformed JSON, stale registry entries, reserved ownership markers, and common credential formats before syncing or pushing. This check reduces accidental exposure but cannot recognize every secret. Keep credentials, OAuth state, and session data out of skill folders and instruction profiles.
