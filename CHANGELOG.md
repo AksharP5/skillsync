@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/AksharP5/skillsync/compare/v0.11.0...v0.12.0) (2026-08-24)
+
+
+### Features
+
+* add recoverable sync and read-only checks ([caa5852](https://github.com/AksharP5/skillsync/commit/caa58522e74ad948e3ed7e0bf895c7415570e06f))
+
+
+### Bug Fixes
+
+* close remaining validation gaps ([#63](https://github.com/AksharP5/skillsync/issues/63)) ([d387781](https://github.com/AksharP5/skillsync/commit/d387781969ca383064e167d51be782fb1044aaa1))
+* close sync safety edge cases ([b6358c9](https://github.com/AksharP5/skillsync/commit/b6358c93578826c8af0402371347bb356298b531))
+
 ## [0.11.0](https://github.com/AksharP5/skillsync/compare/v0.10.6...v0.11.0) (2026-08-10)
 
 
