@@ -7,7 +7,7 @@ import {
   scanTargets,
   sweepUnusedSkills,
 } from './device.js';
-import { checkVault } from './check.js';
+import { checkVault, checkVaultForPush } from './check.js';
 import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
 import {
   applyGlobalInstructions,
@@ -88,7 +88,7 @@ export async function syncVault({
     committed = await commitAllIfChanged(vaultPath, `sync: update skills from ${deviceId || 'device'}`);
     if (committed || await hasLocalCommitsToPush(vaultPath)) {
       const pushResult = await pushWithPullRebaseRetry(vaultPath, {
-        beforePush: () => checkVault(vaultPath),
+        beforePush: () => checkVaultForPush(vaultPath),
       });
       pushed = pushResult.pushed;
       rebasedBeforePush = pushResult.rebased;

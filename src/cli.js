@@ -24,7 +24,7 @@ import {
   setTargetAutoImport,
   uninstallSkillAndPrune,
 } from './core/device.js';
-import { checkVault } from './core/check.js';
+import { checkVault, checkVaultForPush } from './core/check.js';
 import {
   matrixAssignmentChanges,
   renderSkillSelectionChanges,
@@ -215,7 +215,7 @@ function promptPageSize(itemCount, { min = 8, max = 28, reservedRows = 6 } = {})
   return Math.max(1, Math.min(itemCount, max, availableRows));
 }
 
-async function configured() {
+async function configured({ initialize = true } = {}) {
   const config = await loadConfig();
   if (!config.repoPath || !await exists(config.repoPath)) {
     throw new Error('SkillSync is not set up. Run: skillsync setup');
@@ -223,11 +223,13 @@ async function configured() {
   if (!await isGitRepo(config.repoPath)) {
     throw new Error(`SkillSync vault checkout is missing Git metadata: ${config.repoPath}`);
   }
-  await ensureVault(config.repoPath);
-  await migrateLegacyLocalPathState({
-    vaultPath: config.repoPath,
-    deviceId: config.deviceId,
-  });
+  if (initialize) {
+    await ensureVault(config.repoPath);
+    await migrateLegacyLocalPathState({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+    });
+  }
   return config;
 }
 
@@ -406,9 +408,11 @@ async function commitInitialVault(repoPath) {
   await git(['add', 'README.md', 'registry.json', 'vault.json', 'skills', 'devices'], repoPath).catch(() => {});
   const committed = await commitAllIfChanged(repoPath, 'chore: initialize skills vault');
   if (committed) {
+    await checkVaultForPush(repoPath);
     try {
       await push(repoPath);
     } catch {
+      await checkVaultForPush(repoPath);
       await git(['push', '-u', 'origin', 'HEAD:main'], repoPath);
     }
   }
@@ -534,6 +538,7 @@ async function groupsCommand(rest) {
   const result = await generateGroups({ vaultPath: config.repoPath, write: true });
   await checkVault(config.repoPath);
   await commitAllIfChanged(config.repoPath, 'docs: update skill groups');
+  await checkVaultForPush(config.repoPath);
   await push(config.repoPath);
   console.log(`Generated skill groups for ${result.skillCount} skills across ${result.packCount} packs.`);
   console.log(`Files: ${result.files.join(', ')}`);
@@ -1734,17 +1739,19 @@ async function policyCommand(rest) {
 }
 
 async function syncCommand(rest) {
-  const config = await configured();
   const allowed = new Set(['--discard-local-changes', '--dry-run', '--no-pull']);
   const unsupported = rest.find((argument) => !allowed.has(argument));
   if (unsupported) throw new Error(`Unknown sync option: ${unsupported}`);
+  const dryRun = hasFlag(rest, '--dry-run');
+  const config = await configured({ initialize: !dryRun });
   const discardLocalChanges = hasFlag(rest, '--discard-local-changes');
-  if (hasFlag(rest, '--dry-run')) {
+  if (dryRun) {
     await checkVault(config.repoPath, { verifyRegistry: false });
     const plan = await planLinks({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       discardLocalChanges,
+      readOnly: true,
       registry: await buildRegistry(config.repoPath),
     });
     console.log('Dry run uses the current local vault and does not pull remote changes.');
@@ -1780,7 +1787,7 @@ async function scanCommand(rest = []) {
   const allowed = new Set(['--json']);
   const unsupported = rest.find((argument) => !allowed.has(argument));
   if (unsupported) throw new Error(`Unknown scan option: ${unsupported}`);
-  const config = await configured();
+  const config = await configured({ initialize: false });
   await checkVault(config.repoPath, { verifyRegistry: false });
   const report = await inspectTargets({
     vaultPath: config.repoPath,
@@ -1800,7 +1807,7 @@ async function scanCommand(rest = []) {
 
 async function checkCommand(rest = []) {
   if (rest.length) throw new Error('Usage: skillsync check');
-  const config = await configured();
+  const config = await configured({ initialize: false });
   const result = await checkVault(config.repoPath);
   console.log(`Vault check passed: ${result.skills} skills, ${result.files} files.`);
 }

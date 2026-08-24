@@ -3,6 +3,7 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assertSafePathSegment, hashDirectory } from './fs.js';
+import { git, isGitRepo } from './git.js';
 
 const GIT_ENTRY = '.git';
 const LOCAL_STATE_ENTRY = '.skillsync-local';
@@ -15,6 +16,10 @@ const SECRET_PATTERNS = [
   ['Slack token', /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/],
 ];
 
+function secretType(text) {
+  return SECRET_PATTERNS.find(([, pattern]) => pattern.test(text))?.[0] || null;
+}
+
 async function pathInfo(filePath) {
   return lstat(filePath).catch((error) => {
     if (error.code === 'ENOENT') return null;
@@ -26,11 +31,41 @@ async function detectedSecret(filePath) {
   let tail = '';
   for await (const chunk of createReadStream(filePath)) {
     const text = tail + chunk.toString('utf8');
-    const detected = SECRET_PATTERNS.find(([, pattern]) => pattern.test(text));
-    if (detected) return detected[0];
+    const detected = secretType(text);
+    if (detected) return detected;
     tail = text.slice(-512);
   }
   return null;
+}
+
+function inspectAddedPatchLines(patch) {
+  const errors = [];
+  let currentPath = null;
+  let inHunk = false;
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith('diff --git ')) {
+      currentPath = null;
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      const candidate = line.slice(4);
+      currentPath = candidate === '/dev/null'
+        ? null
+        : candidate.replace(/^b\//, '');
+      continue;
+    }
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || !line.startsWith('+')) continue;
+    const detected = secretType(line.slice(1));
+    if (detected) {
+      errors.push(`Possible ${detected} in an unpushed commit${currentPath ? `: ${currentPath}` : ''}`);
+    }
+  }
+  return [...new Set(errors)];
 }
 
 async function inspectTree(rootPath, {
@@ -233,4 +268,37 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
     files: inspected.files.length,
     skills: skillNames.length,
   };
+}
+
+export async function checkPendingGitHistory(vaultPath) {
+  const root = path.resolve(vaultPath);
+  if (!await isGitRepo(root)) return { commits: 0 };
+  const hasUpstream = await git(['rev-parse', '--verify', '--quiet', '@{u}'], root)
+    .then(() => true)
+    .catch(() => false);
+  const revision = hasUpstream ? '@{u}..HEAD' : 'HEAD';
+  const { stdout: countOutput } = await git(['rev-list', '--count', revision], root);
+  const commits = Number(countOutput.trim());
+  if (!commits) return { commits: 0 };
+  const { stdout: patch } = await git([
+    'log',
+    '--format=',
+    '--patch',
+    '--cc',
+    '--unified=0',
+    '--no-color',
+    '--text',
+    ...(hasUpstream ? [revision] : ['--root', revision]),
+    '--',
+    '.',
+  ], root);
+  const errors = inspectAddedPatchLines(patch);
+  if (errors.length) throw validationError('Pending Git history check', errors);
+  return { commits };
+}
+
+export async function checkVaultForPush(vaultPath) {
+  const vault = await checkVault(vaultPath);
+  const history = await checkPendingGitHistory(vaultPath);
+  return { ...vault, pendingCommits: history.commits };
 }
