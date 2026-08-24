@@ -23,7 +23,8 @@ import {
   scanTargets,
   setTargetAutoImport,
 } from '../src/core/device.js';
-import { git } from '../src/core/git.js';
+import { exists } from '../src/core/fs.js';
+import { git, gitPrivatePath } from '../src/core/git.js';
 import { loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
@@ -281,6 +282,45 @@ test('check validates the vault without rewriting a stale registry', async () =>
     /Registry hash is stale: paper-mcp/,
   );
   assert.equal(await readFile(path.join(vault, 'registry.json'), 'utf8'), registryBefore);
+});
+
+test('check does not initialize private device state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const deviceId = 'test-device';
+
+  await writeConfig(home, vault, deviceId);
+  await rebuildRegistry(vault);
+  const privateState = await gitPrivatePath(vault, 'local', 'devices', `${deviceId}.json`);
+  assert.equal(await exists(privateState), false);
+
+  await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'check'], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+
+  assert.equal(await exists(privateState), false);
+});
+
+test('scan and dry-run do not migrate missing local state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const deviceId = 'test-device';
+
+  await writeConfig(home, vault, deviceId);
+  await rebuildRegistry(vault);
+  const privateState = await gitPrivatePath(vault, 'local', 'devices', `${deviceId}.json`);
+
+  for (const args of [['scan'], ['sync', '--dry-run']]) {
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [path.resolve('src/cli.js'), ...args], {
+        cwd: path.resolve('.'),
+        env: cliEnv(home),
+      }),
+      /Local paths for test-device are not initialized/,
+    );
+    assert.equal(await exists(privateState), false);
+  }
 });
 
 test('matrix shows cross-device assignments and device auto-adoption can be disabled', async () => {

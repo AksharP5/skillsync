@@ -80,8 +80,8 @@ export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
   );
 }
 
-export async function loadDevice(vaultPath, deviceId = defaultDeviceId()) {
-  await ensureVault(vaultPath);
+export async function loadDevice(vaultPath, deviceId = defaultDeviceId(), { ensure = true } = {}) {
+  if (ensure) await ensureVault(vaultPath);
   const desired = await readJson(devicePath(vaultPath, deviceId), null);
   const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
   const instructionSelection = await readJson(
@@ -260,8 +260,8 @@ export async function migrateLegacyLocalPathState({
   });
 }
 
-export async function loadLocalDevice(vaultPath, deviceId = defaultDeviceId()) {
-  const device = await loadDevice(vaultPath, deviceId);
+export async function loadLocalDevice(vaultPath, deviceId = defaultDeviceId(), { ensure = true } = {}) {
+  const device = await loadDevice(vaultPath, deviceId, { ensure });
   const local = await readLocalPathState(vaultPath, deviceId);
   if (!local) {
     throw new Error(`Local paths for ${deviceId} are not initialized; run SkillSync setup or reconnect this device`);
@@ -922,10 +922,11 @@ export async function planLinks({
   vaultPath,
   deviceId = defaultDeviceId(),
   discardLocalChanges = false,
+  readOnly = false,
   replaceUnmanagedPaths = [],
   registry: providedRegistry,
 }) {
-  const device = await loadLocalDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
   const registry = providedRegistry || await loadRegistry(vaultPath);
   const approvedReplacements = new Set(await Promise.all(
     replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
@@ -1323,7 +1324,7 @@ export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
 }
 
 export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }) {
-  const device = await loadLocalDevice(vaultPath, deviceId);
+  const device = await loadLocalDevice(vaultPath, deviceId, { ensure: false });
   const detected = await detectTargets({ vaultPath, device });
   const skills = [];
   for (const [targetName, entries] of Object.entries(detected)) {

@@ -155,6 +155,41 @@ test('syncVault pushes existing ahead commits after pulling remote changes', asy
   assert.match(stdout, /remote change/);
 });
 
+test('sync refuses pending commits that contain a removed credential', async () => {
+  const root = await tempDir();
+  const remote = path.join(root, 'remote.git');
+  const seed = path.join(root, 'seed');
+  const pending = path.join(root, 'pending');
+
+  await git(['init', '--bare', remote]);
+  await git(['clone', remote, seed]);
+  await configureUser(seed);
+  await ensureVault(seed);
+  await git(['add', '-A'], seed);
+  await git(['commit', '-m', 'initial vault'], seed);
+  await git(['push', '-u', 'origin', 'HEAD:main'], seed);
+  await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
+
+  await git(['clone', remote, pending]);
+  await configureUser(pending);
+  await commitFile(
+    pending,
+    'notes.txt',
+    'sk-proj-1234567890abcdefghijklmnop\n',
+    'add notes',
+  );
+  await commitFile(pending, 'notes.txt', 'safe notes\n', 'sanitize notes');
+
+  await assert.rejects(
+    () => syncVault({ vaultPath: pending, pull: false }),
+    /Pending Git history check failed:[\s\S]*Possible API key/,
+  );
+
+  const remoteHead = await git(['rev-parse', 'refs/heads/main'], remote);
+  const seedHead = await git(['rev-parse', 'HEAD'], seed);
+  assert.equal(remoteHead.stdout, seedHead.stdout);
+});
+
 test('fresh devices keep synced filesystem destinations unapproved', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
