@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/AksharP5/skillsync/compare/v0.12.0...v0.12.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* stop Codex updates from churning vault history ([#64](https://github.com/AksharP5/skillsync/issues/64)) ([bd45168](https://github.com/AksharP5/skillsync/commit/bd45168ab291f39d3f0b57528c11ffa4402b312c))
+
 ## [0.12.0](https://github.com/AksharP5/skillsync/compare/v0.11.0...v0.12.0) (2026-08-24)
 
 
