@@ -192,11 +192,113 @@ test('plugin sync installs only missing selections and preserves extra plugins',
   assert.deepEqual(state.missing, []);
   assert.deepEqual(state.disabled, []);
   assert.equal(state.installed.some(({ selector }) => selector === 'vercel@openai-curated'), true);
-  assert.equal(
-    state.installed.find(({ selector }) => selector === 'gmail@openai-curated').auth_policy,
-    'ON_USE',
-  );
-  assert.deepEqual(await loadPluginState(vaultPath, deviceId), state);
+  assert.equal(state.available, true);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(await loadPluginState(vaultPath, deviceId), {
+    version: 1,
+    device_id: deviceId,
+    provider: 'codex',
+    profile: 'shared',
+    profile_hash: state.profile_hash,
+    applied_profile: 'shared',
+    applied_profile_hash: state.profile_hash,
+    installed: [
+      {
+        selector: 'github@openai-curated',
+        name: 'github',
+        marketplace: 'openai-curated',
+        enabled: true,
+      },
+      {
+        selector: 'gmail@openai-curated',
+        name: 'gmail',
+        marketplace: 'openai-curated',
+        enabled: true,
+      },
+      {
+        selector: 'vercel@openai-curated',
+        name: 'vercel',
+        marketplace: 'openai-curated',
+        enabled: true,
+      },
+    ],
+    missing: [],
+    disabled: [],
+  });
+});
+
+test('plugin reports ignore package updates and product-managed inventory', async () => {
+  const vaultPath = await tempDir();
+  const deviceId = 'mac';
+  await savePluginProfile({
+    vaultPath,
+    name: 'shared',
+    plugins: ['github@openai-curated'],
+  });
+  await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
+
+  let installed = [
+    {
+      pluginId: 'github@openai-curated',
+      version: '1.0.0',
+      enabled: true,
+      authPolicy: 'ON_INSTALL',
+    },
+    {
+      pluginId: 'sites@openai-bundled',
+      version: '1.0.0',
+      enabled: true,
+      authPolicy: 'ON_INSTALL',
+    },
+  ];
+  const runCommand = async () => ({
+    stdout: JSON.stringify({ installed }),
+    stderr: '',
+    code: 0,
+  });
+
+  await syncCodexPlugins({
+    vaultPath,
+    deviceId,
+    commandAvailable: async () => true,
+    runCommand,
+  });
+  const first = await loadPluginState(vaultPath, deviceId);
+
+  installed = [
+    {
+      pluginId: 'github@openai-curated',
+      version: '2.0.0',
+      enabled: true,
+      authPolicy: 'ON_USE',
+    },
+    {
+      pluginId: 'sites@openai-bundled',
+      version: '2.0.0',
+      enabled: true,
+      authPolicy: 'ON_USE',
+    },
+    {
+      pluginId: 'codex-app-tools@openai-bundled',
+      version: '0.1.0',
+      enabled: true,
+      authPolicy: 'ON_INSTALL',
+    },
+  ];
+  await syncCodexPlugins({
+    vaultPath,
+    deviceId,
+    commandAvailable: async () => true,
+    runCommand,
+  });
+
+  assert.deepEqual(await loadPluginState(vaultPath, deviceId), first);
+  assert.deepEqual(first.installed, [{
+    selector: 'github@openai-curated',
+    name: 'github',
+    marketplace: 'openai-curated',
+    enabled: true,
+  }]);
 });
 
 test('auto-adopted plugins propagate from any assigned device without rewriting the profile', async () => {
@@ -311,10 +413,12 @@ test('plugin sync never writes raw authentication failures to the vault', async 
   assert.deepEqual(state.errors, [
     'Could not install gmail@openai-curated; install or authenticate it from Codex /plugins',
   ]);
-  assert.equal(JSON.stringify(await loadPluginState(vaultPath, deviceId)).includes('SECRET-123'), false);
+  const reported = await loadPluginState(vaultPath, deviceId);
+  assert.equal(JSON.stringify(reported).includes('SECRET-123'), false);
+  assert.equal(Object.hasOwn(reported, 'errors'), false);
 });
 
-test('failed inspection retains the last safe inventory for automatic adoption', async () => {
+test('failed inspection leaves the last durable report unchanged', async () => {
   const vaultPath = await tempDir();
   const deviceId = 'vps';
   await savePluginProfile({
@@ -339,6 +443,7 @@ test('failed inspection retains the last safe inventory for automatic adoption',
       code: 0,
     }),
   });
+  const reported = await loadPluginState(vaultPath, deviceId);
 
   const state = await syncCodexPlugins({
     vaultPath,
@@ -347,10 +452,35 @@ test('failed inspection retains the last safe inventory for automatic adoption',
   });
 
   assert.equal(state.available, false);
+  assert.deepEqual(state.errors, ['Codex CLI is not installed']);
   assert.deepEqual(state.installed.map(({ selector }) => selector), [
     'github@openai-curated',
     'notion@openai-curated',
   ]);
+  assert.deepEqual(await loadPluginState(vaultPath, deviceId), reported);
+  assert.equal(Object.hasOwn(reported, 'available'), false);
+  assert.equal(Object.hasOwn(reported, 'errors'), false);
+});
+
+test('failed first inspection does not create a device report', async () => {
+  const vaultPath = await tempDir();
+  const deviceId = 'new-device';
+  await savePluginProfile({
+    vaultPath,
+    name: 'shared',
+    plugins: ['github@openai-curated'],
+  });
+  await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
+
+  const state = await syncCodexPlugins({
+    vaultPath,
+    deviceId,
+    commandAvailable: async () => false,
+  });
+
+  assert.equal(state.available, false);
+  assert.deepEqual(state.errors, ['Codex CLI is not installed']);
+  assert.equal(await loadPluginState(vaultPath, deviceId), null);
 });
 
 test('devices without a plugin assignment remain unmanaged', async () => {

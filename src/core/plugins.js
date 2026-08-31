@@ -186,6 +186,17 @@ export function importablePluginSelectors(plugins) {
     .sort();
 }
 
+function reportedPluginInventory(plugins) {
+  return plugins
+    .filter((plugin) => !PRODUCT_MANAGED_MARKETPLACES.has(plugin.marketplace))
+    .map(({ selector, name, marketplace, enabled }) => ({
+      selector,
+      name,
+      marketplace,
+      enabled,
+    }));
+}
+
 export function effectivePluginProfile(profile, {
   assignments = [],
   states = [],
@@ -244,7 +255,7 @@ async function installPlugin(selector, runCommand) {
   );
 }
 
-function pluginState({ deviceId, assignment, profile, inspection, errors = [] }) {
+function pluginReport({ deviceId, assignment, profile, inspection }) {
   const desired = profile?.plugins || [];
   const installedBySelector = new Map(
     inspection.installed.map((plugin) => [plugin.selector, plugin]),
@@ -252,19 +263,37 @@ function pluginState({ deviceId, assignment, profile, inspection, errors = [] })
   const missing = desired.filter((selector) => !installedBySelector.has(selector));
   const disabled = desired.filter((selector) => installedBySelector.get(selector)?.enabled === false);
   const profileHash = profile ? pluginProfileHash(profile) : null;
-  const applied = Boolean(profile && inspection.available && !missing.length && !disabled.length && !errors.length);
+  const applied = Boolean(profile && !missing.length && !disabled.length);
   return {
     version: 1,
     device_id: assertSafePathSegment(deviceId, 'Device ID'),
     provider: 'codex',
-    available: inspection.available,
     profile: assignment?.profile || null,
     profile_hash: profileHash,
     applied_profile: applied ? assignment.profile : null,
     applied_profile_hash: applied ? profileHash : null,
-    installed: inspection.installed,
+    installed: reportedPluginInventory(inspection.installed),
     missing,
     disabled,
+  };
+}
+
+function unavailablePluginStatus({ deviceId, assignment, profile, previousState, inspection, errors }) {
+  const profileHash = profile ? pluginProfileHash(profile) : null;
+  return {
+    ...(previousState || {
+      version: 1,
+      device_id: assertSafePathSegment(deviceId, 'Device ID'),
+      provider: 'codex',
+      profile: assignment?.profile || null,
+      profile_hash: profileHash,
+      applied_profile: null,
+      applied_profile_hash: null,
+      installed: [],
+      missing: profile?.plugins || [],
+      disabled: [],
+    }),
+    available: false,
     errors: [...new Set([
       ...(inspection.error ? [inspection.error] : []),
       ...errors,
@@ -291,18 +320,27 @@ export async function syncCodexPlugins({
   }
 
   let inspection = await inspectCodexPlugins({ commandAvailable, runCommand });
-  let previousState = null;
+  const previousState = await loadPluginState(vaultPath, deviceId);
   if (profile) {
     const [assignments, states] = await Promise.all([
       listPluginAssignments(vaultPath),
       listPluginStates(vaultPath),
     ]);
-    previousState = states.find((state) => state.device_id === deviceId) || null;
     profile = effectivePluginProfile(profile, {
       assignments,
       states,
       deviceId,
       installed: inspection.available ? inspection.installed : null,
+    });
+  }
+  if (!inspection.available) {
+    return unavailablePluginStatus({
+      deviceId,
+      assignment,
+      profile,
+      previousState,
+      inspection,
+      errors,
     });
   }
   if (profile && inspection.available) {
@@ -321,19 +359,29 @@ export async function syncCodexPlugins({
       inspection = await inspectCodexPlugins({ commandAvailable, runCommand });
     }
   }
+  if (!inspection.available) {
+    return unavailablePluginStatus({
+      deviceId,
+      assignment,
+      profile,
+      previousState,
+      inspection,
+      errors,
+    });
+  }
 
-  const reportedInspection = !inspection.available && previousState?.installed
-    ? { ...inspection, installed: previousState.installed }
-    : inspection;
-  const state = pluginState({
+  const report = pluginReport({
     deviceId,
     assignment,
     profile,
-    inspection: reportedInspection,
-    errors,
+    inspection,
   });
-  await writeJson(pluginStatePath(vaultPath, deviceId), state);
-  return state;
+  await writeJson(pluginStatePath(vaultPath, deviceId), report);
+  return {
+    ...report,
+    available: true,
+    errors,
+  };
 }
 
 export async function loadPluginState(vaultPath, deviceId) {
