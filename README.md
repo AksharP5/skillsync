@@ -187,6 +187,8 @@ The other device installs missing plugins on its next sync. With auto-adoption e
 
 SkillSync derives this union from separate per-device reports instead of having devices rewrite one profile file. Concurrent device syncs therefore update different files. Product-managed, disabled, cached, and hosted-session-only plugins never join the union.
 
+Device reports contain only durable user-managed plugin selectors and whether each plugin is enabled. Codex-owned packages, package versions, authentication metadata, and temporary inspection failures stay local, so routine Codex updates do not create vault commits. A failed inspection also leaves the device's last successful report unchanged.
+
 Automatic adoption is off unless `--auto-adopt` is supplied. Change it later with:
 
 ```bash
