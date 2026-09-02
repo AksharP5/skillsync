@@ -23,7 +23,8 @@ import {
   scanTargets,
   setTargetAutoImport,
 } from '../src/core/device.js';
-import { git } from '../src/core/git.js';
+import { exists } from '../src/core/fs.js';
+import { git, gitPrivatePath } from '../src/core/git.js';
 import { loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
@@ -209,7 +210,7 @@ test('uninstall --device defers cleanup until the remote device reports the remo
   assert.ok((await loadRegistry(vault)).skills['temporary-skill']);
 });
 
-test('scan adopts a newly detected skill when target auto-adoption is enabled', async () => {
+test('scan reports new skills without changing local or vault state', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
   const target = path.join(home, '.codex', 'skills');
@@ -225,6 +226,7 @@ test('scan adopts a newly detected skill when target auto-adoption is enabled', 
     enabled: true,
   });
   await makeSkill(target, 'new-local', '# New\n');
+  const statusBefore = (await git(['status', '--porcelain'], vault)).stdout;
 
   const { stdout } = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
@@ -234,9 +236,123 @@ test('scan adopts a newly detected skill when target auto-adoption is enabled', 
     env: cliEnv(home),
   });
 
-  assert.match(stdout, /Auto-adopted new-local from codex/);
+  assert.match(stdout, /new-local \[codex, local only, new\]/);
+  assert.equal((await loadRegistry(vault)).skills['new-local'], undefined);
+  assert.equal((await lstat(path.join(target, 'new-local'))).isDirectory(), true);
+  assert.equal((await git(['status', '--porcelain'], vault)).stdout, statusBefore);
+
+  const json = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'scan',
+    '--json',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.deepEqual(JSON.parse(json.stdout).skills, [{
+    name: 'new-local',
+    target: 'codex',
+    path: 'new-local',
+    in_vault: false,
+    managed: false,
+    new: true,
+  }]);
+
+  const synced = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'sync',
+    '--no-pull',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.match(synced.stdout, /Auto-adopted new-local from codex/);
   assert.ok((await loadRegistry(vault)).skills['new-local']);
   assert.equal((await lstat(path.join(target, 'new-local'))).isSymbolicLink(), true);
+});
+
+test('sync dry-run reports projection changes without applying them', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const target = path.join(home, '.codex', 'skills');
+  const deviceId = 'test-device';
+
+  await writeConfig(home, vault, deviceId);
+  await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# Paper\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'paper-mcp', targets: ['codex'] });
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'sync',
+    '--dry-run',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+
+  assert.match(stdout, /create symlink:/);
+  await assert.rejects(() => lstat(path.join(target, 'paper-mcp')));
+});
+
+test('check validates the vault without rewriting a stale registry', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+
+  await writeConfig(home, vault);
+  const skill = await makeSkill(path.join(vault, 'skills'), 'paper-mcp', '# First\n');
+  await rebuildRegistry(vault);
+  await writeFile(path.join(skill, 'SKILL.md'), '# Second\n');
+  const registryBefore = await readFile(path.join(vault, 'registry.json'), 'utf8');
+
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'check'], {
+      cwd: path.resolve('.'),
+      env: cliEnv(home),
+    }),
+    /Registry hash is stale: paper-mcp/,
+  );
+  assert.equal(await readFile(path.join(vault, 'registry.json'), 'utf8'), registryBefore);
+});
+
+test('check does not initialize private device state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const deviceId = 'test-device';
+
+  await writeConfig(home, vault, deviceId);
+  await rebuildRegistry(vault);
+  const privateState = await gitPrivatePath(vault, 'local', 'devices', `${deviceId}.json`);
+  assert.equal(await exists(privateState), false);
+
+  await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'check'], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+
+  assert.equal(await exists(privateState), false);
+});
+
+test('scan and dry-run do not migrate missing local state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const deviceId = 'test-device';
+
+  await writeConfig(home, vault, deviceId);
+  await rebuildRegistry(vault);
+  const privateState = await gitPrivatePath(vault, 'local', 'devices', `${deviceId}.json`);
+
+  for (const args of [['scan'], ['sync', '--dry-run']]) {
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [path.resolve('src/cli.js'), ...args], {
+        cwd: path.resolve('.'),
+        env: cliEnv(home),
+      }),
+      /Local paths for test-device are not initialized/,
+    );
+    assert.equal(await exists(privateState), false);
+  }
 });
 
 test('matrix shows cross-device assignments and device auto-adoption can be disabled', async () => {
@@ -283,6 +399,80 @@ test('matrix --edit requires an interactive terminal', async () => {
       return true;
     },
   );
+});
+
+test('plugins import creates a reusable profile and reports local state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const bin = path.join(home, 'bin');
+  await writeConfig(home, vault, 'macbook');
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, 'codex'), `#!/bin/sh
+if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+  printf '%s\\n' '{"installed":[{"pluginId":"gmail@openai-curated","name":"gmail","marketplaceName":"openai-curated","version":"0.1.7","enabled":true,"authPolicy":"ON_INSTALL"},{"pluginId":"sites@openai-bundled","name":"sites","marketplaceName":"openai-bundled","version":"0.1.34","enabled":true,"authPolicy":"ON_INSTALL"}]}'
+  exit 0
+fi
+exit 1
+`, { mode: 0o755 });
+  const env = {
+    ...cliEnv(home),
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+  };
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      path.resolve('src/cli.js'),
+      'plugins',
+      'import',
+      '--name',
+      'shared',
+    ], {
+      cwd: path.resolve('.'),
+      env,
+    }),
+    /Non-interactive plugin import requires --plugin/,
+  );
+
+  const imported = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'plugins',
+    'import',
+    '--name',
+    'shared',
+    '--auto-adopt',
+  ], {
+    cwd: path.resolve('.'),
+    env,
+  });
+
+  assert.match(imported.stdout, /Imported 1 Codex plugins into shared, assigned it to macbook, and set auto-adopt on/);
+  const profilePath = path.join(vault, 'plugins', 'profiles', 'shared.json');
+  const profile = JSON.parse(await readFile(profilePath, 'utf8'));
+  assert.deepEqual(profile.plugins, ['gmail@openai-curated']);
+  assert.equal(profile.auto_adopt, true);
+  const status = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'plugins',
+    'status',
+  ], {
+    cwd: path.resolve('.'),
+    env,
+  });
+  assert.match(status.stdout, /macbook: shared \(applied; 2 installed\)/);
+  assert.match(status.stdout, /authentication may be required: gmail@openai-curated \(ON_INSTALL\)/);
+
+  const disabled = await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'plugins',
+    'auto-adopt',
+    'shared',
+    'off',
+  ], {
+    cwd: path.resolve('.'),
+    env,
+  });
+  assert.match(disabled.stdout, /Plugin auto-adoption for shared: off/);
+  assert.equal(JSON.parse(await readFile(profilePath, 'utf8')).auto_adopt, false);
 });
 
 test('instructions enable adopts the global AGENTS.md and disable leaves a local copy', async () => {

@@ -71,6 +71,22 @@ export function matrixAssignmentChanges(initialDevices, draftDevices) {
     || a.deviceId.localeCompare(b.deviceId));
 }
 
+export function skillSelectionChanges({ skills, selected, installed }) {
+  const selectedNames = new Set(selected);
+  const installedNames = new Set(installed);
+  return {
+    toInstall: skills.filter((name) => selectedNames.has(name) && !installedNames.has(name)),
+    toUninstall: skills.filter((name) => !selectedNames.has(name) && installedNames.has(name)),
+  };
+}
+
+export function renderSkillSelectionChanges({ toInstall, toUninstall }) {
+  const changes = [];
+  if (toInstall.length) changes.push(`Install: ${toInstall.join(', ')}`);
+  if (toUninstall.length) changes.push(`Remove: ${toUninstall.join(', ')}`);
+  return changes.join('; ') || 'No changes';
+}
+
 function truncate(value, width) {
   const text = String(value);
   if (text.length <= width) return text;

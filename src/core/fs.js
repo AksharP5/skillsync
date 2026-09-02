@@ -37,7 +37,16 @@ export async function readJson(filePath, fallback = undefined) {
 
 export async function writeJson(filePath, value) {
   await ensureDir(path.dirname(filePath));
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  const temporary = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' })
+    .then(() => rename(temporary, filePath))
+    .catch(async (error) => {
+      await rm(temporary, { force: true });
+      throw error;
+    });
 }
 
 export async function writePrivateJson(filePath, value) {
@@ -58,7 +67,16 @@ export async function writePrivateJson(filePath, value) {
 export async function copyDir(source, destination) {
   await rm(destination, { recursive: true, force: true });
   await ensureDir(path.dirname(destination));
-  await cp(source, destination, { recursive: true, force: true, dereference: false });
+  const sourceRoot = path.resolve(source);
+  await cp(source, destination, {
+    recursive: true,
+    force: true,
+    dereference: false,
+    filter: (candidate) => (
+      path.resolve(candidate) === sourceRoot
+      || !['.DS_Store', '.git'].includes(path.basename(candidate))
+    ),
+  });
 }
 
 export async function removePath(targetPath) {
@@ -116,9 +134,11 @@ async function walk(dirPath, root = dirPath) {
   return files.sort();
 }
 
-export async function hashDirectory(dirPath) {
+export async function hashDirectory(dirPath, { exclude = [] } = {}) {
   const hash = createHash('sha256');
-  const files = await walk(dirPath);
+  const excluded = new Set(exclude.map((relativePath) => relativePath.split(path.sep).join(path.posix.sep)));
+  const files = (await walk(dirPath))
+    .filter((relativePath) => !excluded.has(relativePath.split(path.sep).join(path.posix.sep)));
   for (const relativePath of files) {
     hash.update(relativePath);
     hash.update('\0');

@@ -9,16 +9,48 @@ export function run(command, args, options = {}) {
       env: { ...process.env, ...(options.env || {}) },
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });
+    let timedOut = false;
+    let settled = false;
+    let forceKill = null;
+    const timeout = options.timeoutMs
+      ? setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
+      }, options.timeoutMs)
+      : null;
+    const clearTimers = () => {
+      if (timeout) clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      reject(error);
+    };
     let stdout = '';
     let stderr = '';
     if (!options.inherit) {
       child.stdout?.on('data', (chunk) => { stdout += chunk; });
       child.stderr?.on('data', (chunk) => { stderr += chunk; });
     }
-    child.on('error', reject);
+    child.on('error', (error) => {
+      fail(error);
+    });
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr, code });
-      else reject(new Error(`${command} ${args.join(' ')} failed (${code})\n${stderr || stdout}`));
+      if (timedOut) {
+        fail(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
+      if (code !== 0) {
+        fail(new Error(`${command} ${args.join(' ')} failed (${code})\n${stderr || stdout}`));
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      resolve({ stdout, stderr, code });
     });
   });
 }
@@ -78,14 +110,16 @@ export function isPushRejectedBecauseRemoteHasWork(error) {
   );
 }
 
-export async function pushWithPullRebaseRetry(repoPath) {
+export async function pushWithPullRebaseRetry(repoPath, { beforePush } = {}) {
   if (!await isGitRepo(repoPath)) return { pushed: false, rebased: false };
   try {
+    if (beforePush) await beforePush();
     await push(repoPath);
     return { pushed: true, rebased: false };
   } catch (error) {
     if (!isPushRejectedBecauseRemoteHasWork(error)) throw error;
     await pullRebase(repoPath);
+    if (beforePush) await beforePush();
     await push(repoPath);
     return { pushed: true, rebased: true };
   }

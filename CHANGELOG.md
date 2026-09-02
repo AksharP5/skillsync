@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.12.1](https://github.com/AksharP5/skillsync/compare/v0.12.0...v0.12.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* stop Codex updates from churning vault history ([#64](https://github.com/AksharP5/skillsync/issues/64)) ([bd45168](https://github.com/AksharP5/skillsync/commit/bd45168ab291f39d3f0b57528c11ffa4402b312c))
+
+## [0.12.0](https://github.com/AksharP5/skillsync/compare/v0.11.0...v0.12.0) (2026-08-24)
+
+
+### Features
+
+* add recoverable sync and read-only checks ([caa5852](https://github.com/AksharP5/skillsync/commit/caa58522e74ad948e3ed7e0bf895c7415570e06f))
+
+
+### Bug Fixes
+
+* close remaining validation gaps ([#63](https://github.com/AksharP5/skillsync/issues/63)) ([d387781](https://github.com/AksharP5/skillsync/commit/d387781969ca383064e167d51be782fb1044aaa1))
+* close sync safety edge cases ([b6358c9](https://github.com/AksharP5/skillsync/commit/b6358c93578826c8af0402371347bb356298b531))
+
+## [0.11.0](https://github.com/AksharP5/skillsync/compare/v0.10.6...v0.11.0) (2026-08-10)
+
+
+### Features
+
+* propagate new plugins across shared profiles ([#59](https://github.com/AksharP5/skillsync/issues/59)) ([ffd8801](https://github.com/AksharP5/skillsync/commit/ffd8801cf81511b993d2725f763431bae5194e2e))
+* sync Codex plugin profiles ([#57](https://github.com/AksharP5/skillsync/issues/57)) ([a3725d6](https://github.com/AksharP5/skillsync/commit/a3725d6568dd995f5782b77af5f8eace0c10da55))
+
+## [0.10.6](https://github.com/AksharP5/skillsync/compare/v0.10.5...v0.10.6) (2026-08-06)
+
+
+### Bug Fixes
+
+* **cli:** show only skill selection changes ([#54](https://github.com/AksharP5/skillsync/issues/54)) ([9d3f0d7](https://github.com/AksharP5/skillsync/commit/9d3f0d7d2015c3686c1800797159b79c5a311769))
+* support symlinked skill directories ([#56](https://github.com/AksharP5/skillsync/issues/56)) ([9277321](https://github.com/AksharP5/skillsync/commit/92773214fff95406ac8f91d53972ab4d7ed7f0c6))
+
 ## [0.10.5](https://github.com/AksharP5/skillsync/compare/v0.10.4...v0.10.5) (2026-07-31)
 
 
