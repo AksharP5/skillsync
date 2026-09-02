@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
 
@@ -10,6 +10,37 @@ const RECOMMENDED_DESCRIPTION_LENGTH = 400;
 
 function finding(level, code, message) {
   return { level, code, message };
+}
+
+async function discoverTargetSkills(root) {
+  const results = [];
+  const seen = new Set();
+
+  async function walk(current) {
+    const canonical = await realpath(current).catch(() => path.resolve(current));
+    if (seen.has(canonical)) return;
+    seen.add(canonical);
+
+    try {
+      await stat(path.join(current, 'SKILL.md'));
+      results.push({ path: current });
+      return;
+    } catch {
+      // Keep looking below folders that are not themselves skills.
+    }
+
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const child = path.join(current, entry.name);
+      const directory = entry.isDirectory()
+        || (entry.isSymbolicLink() && await stat(child).then((info) => info.isDirectory()).catch(() => false));
+      if (directory) await walk(child);
+    }
+  }
+
+  await walk(path.resolve(root));
+  return results.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 async function isManagedProjection(skillPath, vaultPath, name) {
@@ -48,7 +79,7 @@ export async function auditSkillFolder(skillPath, { expectedName = path.basename
   }
 
   const match = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
-  let metadata = {};
+  let metadata = new Map();
   if (!match) {
     findings.push(finding('error', 'missing-frontmatter', 'SKILL.md must start with YAML frontmatter'));
   } else {
@@ -58,16 +89,19 @@ export async function auditSkillFolder(skillPath, { expectedName = path.basename
     }
     if (!document.errors.length) {
       try {
-        const parsed = document.toJS({ maxAliasCount: 20 });
-        metadata = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        const parsed = document.toJS({ mapAsMap: true, maxAliasCount: 20 });
+        if (parsed instanceof Map) metadata = parsed;
+        else findings.push(finding('error', 'invalid-frontmatter-type', 'Frontmatter must be a YAML mapping'));
       } catch (error) {
         findings.push(finding('error', 'invalid-frontmatter', error.message.split('\n')[0]));
       }
     }
   }
 
-  const name = typeof metadata.name === 'string' ? metadata.name : '';
-  const description = typeof metadata.description === 'string' ? metadata.description.trim() : '';
+  const rawName = metadata.get('name');
+  const rawDescription = metadata.get('description');
+  const name = typeof rawName === 'string' ? rawName : '';
+  const description = typeof rawDescription === 'string' ? rawDescription : '';
   if (!name) {
     findings.push(finding('error', 'missing-name', 'Frontmatter name must be a non-empty string'));
   } else {
@@ -80,13 +114,42 @@ export async function auditSkillFolder(skillPath, { expectedName = path.basename
     }
   }
 
-  if (!description) {
+  if (!description.trim()) {
     findings.push(finding('error', 'missing-description', 'Frontmatter description must be a non-empty string'));
   } else {
     if (description.length > 1024) {
       findings.push(finding('error', 'description-too-long', `Description is ${description.length} characters; maximum is 1024`));
     } else if (description.length > RECOMMENDED_DESCRIPTION_LENGTH) {
       findings.push(finding('warning', 'description-verbose', `Description is ${description.length} characters; consider keeping discovery metadata under ${RECOMMENDED_DESCRIPTION_LENGTH}`));
+    }
+  }
+
+  if (metadata.has('license') && typeof metadata.get('license') !== 'string') {
+    findings.push(finding('error', 'invalid-license', 'License must be a string'));
+  }
+
+  if (metadata.has('compatibility')) {
+    const compatibility = metadata.get('compatibility');
+    if (typeof compatibility !== 'string' || !compatibility.trim()) {
+      findings.push(finding('error', 'invalid-compatibility', 'Compatibility must be a non-empty string when provided'));
+    } else if (compatibility.length > 500) {
+      findings.push(finding('error', 'compatibility-too-long', `Compatibility is ${compatibility.length} characters; maximum is 500`));
+    }
+  }
+
+  if (metadata.has('metadata')) {
+    const customMetadata = metadata.get('metadata');
+    if (!(customMetadata instanceof Map)) {
+      findings.push(finding('error', 'invalid-metadata', 'Metadata must be a mapping from string keys to string values'));
+    } else if ([...customMetadata].some(([key, value]) => typeof key !== 'string' || typeof value !== 'string')) {
+      findings.push(finding('error', 'invalid-metadata-entry', 'Metadata keys and values must be strings'));
+    }
+  }
+
+  if (metadata.has('allowed-tools')) {
+    const allowedTools = metadata.get('allowed-tools');
+    if (typeof allowedTools !== 'string' || !allowedTools.trim()) {
+      findings.push(finding('error', 'invalid-allowed-tools', 'Allowed tools must be a non-empty space-separated string'));
     }
   }
 
@@ -118,27 +181,28 @@ export async function auditCatalog({ vaultPath, device }) {
 
   const copiesByName = new Map();
   const descriptionsByTarget = new Map();
+  const discoveredByTarget = new Map();
   const externalByContent = new Map();
   for (const [targetName, target] of Object.entries(device?.targets || {})) {
     const root = expandHome(target.scan_path || target.path);
-    const detected = device.detected?.[targetName];
-    const discovered = Array.isArray(detected)
-      ? detected.map((skill) => ({ name: skill.name, path: path.resolve(root, skill.path) }))
-      : await discoverSkillFolders(root).catch(() => []);
+    const discovered = await discoverTargetSkills(root);
+    discoveredByTarget.set(targetName, []);
     for (const skill of discovered) {
       const hash = await hashDirectory(skill.path).catch(() => null);
       const audited = await auditSkillFolder(skill.path);
+      const skillName = audited.name;
+      discoveredByTarget.get(targetName).push(skillName);
       if (!descriptionsByTarget.has(targetName)) descriptionsByTarget.set(targetName, new Map());
-      descriptionsByTarget.get(targetName).set(skill.name, audited.descriptionLength);
-      if (!hash || hash !== vaultHashes.get(skill.name)) {
-        const key = `${skill.name}\0${hash || skill.path}`;
+      descriptionsByTarget.get(targetName).set(skillName, audited.descriptionLength);
+      if (!hash || hash !== vaultHashes.get(skillName)) {
+        const key = `${skillName}\0${hash || skill.path}`;
         const existing = externalByContent.get(key);
         if (existing) existing.targets.push(targetName);
         else externalByContent.set(key, { ...audited, targets: [targetName] });
       }
-      if (!await isManagedProjection(skill.path, vaultPath, skill.name)) {
-        if (!copiesByName.has(skill.name)) copiesByName.set(skill.name, []);
-        copiesByName.get(skill.name).push({ target: targetName, path: skill.path, hash });
+      if (!await isManagedProjection(skill.path, vaultPath, skillName)) {
+        if (!copiesByName.has(skillName)) copiesByName.set(skillName, []);
+        copiesByName.get(skillName).push({ target: targetName, path: skill.path, hash });
       }
     }
   }
@@ -168,7 +232,7 @@ export async function auditCatalog({ vaultPath, device }) {
       .filter(([, targetNames]) => Array.isArray(targetNames) && targetNames.includes(targetName))
       .map(([name]) => name)
       .sort();
-    const detected = (device.detected?.[targetName] || []).map((skill) => skill.name);
+    const detected = discoveredByTarget.get(targetName) || [];
     const active = [...new Set([...assigned, ...detected])].sort();
     const descriptionCharacters = active.reduce((total, name) => total
       + (skillByName.get(name)?.descriptionLength || descriptionsByTarget.get(targetName)?.get(name) || 0), 0);

@@ -114,7 +114,7 @@ test('installed command marks missing managed projections', async () => {
   assert.match(stdout, /codex: .*paper-mcp \(missing; run skillsync sync\)/);
 });
 
-test('audit --json reports standards findings and active catalog cost', async () => {
+test('audit --json refreshes target inventory without changing persisted state', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
   const target = path.join(home, '.codex', 'skills');
@@ -124,6 +124,13 @@ test('audit --json reports standards findings and active catalog cost', async ()
   await rebuildRegistry(vault);
   await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
   await installSkill({ vaultPath: vault, deviceId, skillName: 'review', targets: ['codex'] });
+  await makeSkill(target, 'new-skill', '---\nname: new-skill\ndescription: Use the new local workflow.\n---\n# New\n');
+  const registryPath = path.join(vault, 'registry.json');
+  const localDevicePath = path.join(vault, '.git', 'skillsync', 'local', 'devices', `${deviceId}.json`);
+  const before = {
+    registry: await readFile(registryPath, 'utf8'),
+    device: await readFile(localDevicePath, 'utf8'),
+  };
 
   const { stdout } = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'audit', '--json'], {
     cwd: path.resolve('.'),
@@ -133,79 +140,10 @@ test('audit --json reports standards findings and active catalog cost', async ()
 
   assert.equal(result.summary.errors, 0);
   assert.equal(result.targets.codex.assignedSkills, 1);
+  assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['new-skill']);
   assert.ok(result.targets.codex.estimatedDescriptionTokens > 0);
-});
-
-test('cleanup previews then consolidates identical target copies', async () => {
-  const home = await tempDir();
-  const vault = path.join(home, '.skillsync', 'repo');
-  const hermesRoot = path.join(home, '.hermes', 'skills');
-  const hermes = path.join(hermesRoot, 'personal');
-  const agents = path.join(home, '.agents', 'skills');
-  const codex = path.join(home, '.codex', 'skills');
-  const deviceId = 'test-device';
-  await writeConfig(home, vault, deviceId);
-  await makeSkill(agents, 'review', '# Identical\n');
-  await makeSkill(codex, 'review', '# Identical\n');
-  await makeSkill(agents, 'draft', '# Agents version\n');
-  await makeSkill(codex, 'draft', '# Codex version\n');
-  const unique = await makeSkill(path.join(hermesRoot, 'creative'), 'unique', '# Unique\n');
-  await mkdir(path.join(unique, 'assets'));
-  await writeFile(path.join(unique, 'assets', 'example.txt'), 'example\n');
-  await symlink('assets', path.join(unique, 'assets-link'), 'dir');
-  await addTarget({ vaultPath: vault, deviceId, name: 'hermes', targetPath: hermes, scanPath: hermesRoot });
-  await addTarget({ vaultPath: vault, deviceId, name: 'agents', targetPath: agents });
-  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: codex });
-
-  const preview = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'cleanup'], {
-    cwd: path.resolve('.'),
-    env: cliEnv(home),
-  });
-  assert.match(preview.stdout, /Preview only/);
-  assert.match(preview.stdout, /draft: conflicting copies left unchanged/);
-  assert.equal((await lstat(path.join(agents, 'review'))).isSymbolicLink(), false);
-
-  const applied = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'cleanup', '--all', '--apply'], {
-    cwd: path.resolve('.'),
-    env: cliEnv(home),
-  });
-  assert.match(applied.stdout, /Canonicalized 2 skills/);
-  assert.equal((await lstat(path.join(agents, 'review'))).isSymbolicLink(), true);
-  assert.equal((await lstat(path.join(codex, 'review'))).isSymbolicLink(), true);
-  assert.equal((await lstat(path.join(agents, 'draft'))).isSymbolicLink(), false);
-  assert.equal((await lstat(path.join(codex, 'draft'))).isSymbolicLink(), false);
-  assert.ok((await loadRegistry(vault)).skills.review);
-  assert.ok((await loadRegistry(vault)).skills.unique);
-  await assert.rejects(() => lstat(path.join(hermesRoot, 'creative', 'unique')));
-  assert.equal((await lstat(path.join(hermes, 'unique'))).isSymbolicLink(), true);
-});
-
-test('pack apply previews by default and exactly reconciles only with --apply', async () => {
-  const home = await tempDir();
-  const vault = path.join(home, '.skillsync', 'repo');
-  const target = path.join(home, '.codex', 'skills');
-  const deviceId = 'test-device';
-  await writeConfig(home, vault, deviceId);
-  await makeSkill(path.join(vault, 'skills'), 'review');
-  await makeSkill(path.join(vault, 'skills'), 'legacy');
-  await rebuildRegistry(vault);
-  await mkdir(path.join(vault, 'packs'), { recursive: true });
-  await writeFile(path.join(vault, 'packs', 'core.json'), JSON.stringify({ name: 'core', skills: ['review'] }));
-  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
-  await installSkill({ vaultPath: vault, deviceId, skillName: 'legacy', targets: ['codex'] });
-
-  const preview = await execFileAsync(process.execPath, [
-    path.resolve('src/cli.js'), 'pack', 'apply', 'core', '--target', 'codex', '--exact',
-  ], { cwd: path.resolve('.'), env: cliEnv(home) });
-  assert.match(preview.stdout, /Dry run only/);
-  assert.deepEqual((await loadDevice(vault, deviceId)).installed.legacy, ['codex']);
-
-  await execFileAsync(process.execPath, [
-    path.resolve('src/cli.js'), 'pack', 'apply', 'core', '--target', 'codex', '--exact', '--apply',
-  ], { cwd: path.resolve('.'), env: cliEnv(home) });
-  const device = await loadDevice(vault, deviceId);
-  assert.deepEqual(device.installed.review, ['codex']);
-  assert.equal(device.installed.legacy, undefined);
+  assert.equal(await readFile(registryPath, 'utf8'), before.registry);
+  assert.equal(await readFile(localDevicePath, 'utf8'), before.device);
 });
 
 test('install --device records a pending assignment without touching remote paths', async () => {

@@ -46,7 +46,6 @@ import {
   uninstallSkillAndPrune,
 } from '../src/core/device.js';
 import { generateGroups } from '../src/core/groups.js';
-import { assertSafePathSegment } from '../src/core/fs.js';
 import {
   applyGlobalInstructions,
   assignGlobalInstructionsProfile,
@@ -1384,10 +1383,6 @@ test('path-like skill names and device IDs are rejected before filesystem access
     /Target name must be one non-empty path segment/,
   );
   assert.equal(await readFile(path.join(outside, 'keep.txt'), 'utf8'), 'keep');
-});
-
-test('prototype is a valid filesystem-safe skill name', () => {
-  assert.equal(assertSafePathSegment('prototype', 'Skill name'), 'prototype');
 });
 
 test('generated pack names cannot escape the vault output folders', async () => {

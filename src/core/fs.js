@@ -1,9 +1,9 @@
-import { chmod, cp, lstat, mkdir, readFile, readlink, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor']);
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export function expandHome(value) {
   if (!value) return value;
@@ -58,7 +58,7 @@ export async function writePrivateJson(filePath, value) {
 export async function copyDir(source, destination) {
   await rm(destination, { recursive: true, force: true });
   await ensureDir(path.dirname(destination));
-  await cp(source, destination, { recursive: true, force: true, dereference: false, verbatimSymlinks: true });
+  await cp(source, destination, { recursive: true, force: true, dereference: false });
 }
 
 export async function removePath(targetPath) {
@@ -122,9 +122,7 @@ export async function hashDirectory(dirPath) {
   for (const relativePath of files) {
     hash.update(relativePath);
     hash.update('\0');
-    const filePath = path.join(dirPath, relativePath);
-    const info = await lstat(filePath);
-    hash.update(info.isSymbolicLink() ? await readlink(filePath) : await readFile(filePath));
+    hash.update(await readFile(path.join(dirPath, relativePath)));
     hash.update('\0');
   }
   return `sha256:${hash.digest('hex')}`;

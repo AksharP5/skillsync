@@ -75,8 +75,8 @@ export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
   );
 }
 
-export async function loadDevice(vaultPath, deviceId = defaultDeviceId()) {
-  await ensureVault(vaultPath);
+export async function loadDevice(vaultPath, deviceId = defaultDeviceId(), { ensure = true } = {}) {
+  if (ensure) await ensureVault(vaultPath);
   const desired = await readJson(devicePath(vaultPath, deviceId), null);
   const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
   const instructionSelection = await readJson(
@@ -255,8 +255,8 @@ export async function migrateLegacyLocalPathState({
   });
 }
 
-export async function loadLocalDevice(vaultPath, deviceId = defaultDeviceId()) {
-  const device = await loadDevice(vaultPath, deviceId);
+export async function loadLocalDevice(vaultPath, deviceId = defaultDeviceId(), options) {
+  const device = await loadDevice(vaultPath, deviceId, options);
   const local = await readLocalPathState(vaultPath, deviceId);
   if (!local) {
     throw new Error(`Local paths for ${deviceId} are not initialized; run SkillSync setup or reconnect this device`);
@@ -741,10 +741,8 @@ export async function setSkillTargets({ vaultPath, deviceId = defaultDeviceId(),
   const registry = await loadRegistry(vaultPath);
   if (!registry.skills[skillName]) throw new Error(`Skill not found in vault: ${skillName}`);
   const device = await loadDevice(vaultPath, deviceId);
-  const requestedTargets = targets === undefined ? Object.keys(device.targets) : targets;
-  const { selectedTargets, wantsGlobalInstall } = requestedTargets.length
-    ? await validateRequestedTargets(device, requestedTargets)
-    : { selectedTargets: [], wantsGlobalInstall: false };
+  const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
+  const { selectedTargets, wantsGlobalInstall } = await validateRequestedTargets(device, requestedTargets);
   const previousTargets = device.installed[skillName] || [];
   const previousGlobal = (device.global_installed || []).includes(skillName);
   const changed = JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)
@@ -1167,7 +1165,7 @@ async function createCopyProjection(source, destination, skillName, vaultPath) {
       throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
     }
   }
-  await cp(source, destination, { recursive: true, force: true, dereference: false, verbatimSymlinks: true });
+  await cp(source, destination, { recursive: true, force: true, dereference: false });
   await writeFile(path.join(destination, '.skillsync-owned.json'), JSON.stringify({ skill: skillName, vault: vaultPath }, null, 2));
 }
 

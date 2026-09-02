@@ -188,14 +188,6 @@ skillsync import hermes
 
 When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly.
 
-Git imports retain their repository, ref, commit, and skill subpath. Check tracked skills without changing the vault, then apply one reviewed update explicitly:
-
-```bash
-skillsync update --check
-skillsync update example-skill
-skillsync update example-skill --apply
-```
-
 ## Audit the active catalog
 
 Validate Agent Skills metadata, find duplicate or conflicting copies across configured targets, and estimate the description tokens loaded by each active catalog:
@@ -205,34 +197,7 @@ skillsync audit
 skillsync audit --json
 ```
 
-`skillsync doctor` includes the catalog summary. Audit errors cover malformed frontmatter, non-portable names, directory/name mismatches, missing descriptions, and specification limits. Longer-but-valid descriptions and oversized skill bodies are warnings.
-
-Consolidate byte-identical copies across configured targets into one vault skill and managed projections. Cleanup previews by default and leaves same-name conflicts untouched:
-
-```bash
-skillsync cleanup
-skillsync cleanup --apply
-skillsync cleanup --all
-skillsync cleanup --all --apply
-```
-
-`--all` also adopts unique unmanaged skills found under configured scan paths, preserving their current target assignments.
-
-Search a pack's skill metadata without installing or loading its full skill bodies:
-
-```bash
-skillsync find "humanize AI writing" --pack cold
-skillsync find "debug flaky tests" --pack cold --json
-```
-
-## Reconcile an exact skill pack
-
-Pack application previews changes by default. `--exact` removes SkillSync assignments for skills outside the pack on only the selected targets; unmanaged local folders and assignments on other targets remain untouched.
-
-```bash
-skillsync pack apply core --target codex,claude --exact
-skillsync pack apply core --target codex,claude --exact --apply
-```
+`skillsync audit` is read-only and scans configured target paths directly instead of relying on cached inventory. `skillsync doctor` includes the catalog summary. Audit errors cover every hard Agent Skills frontmatter constraint; longer descriptions and oversized skill bodies are warnings.
 
 ## Automatic skill adoption
 
@@ -365,9 +330,7 @@ skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]
 skillsync connect <owner/repo|url> [--path path]
 skillsync status
 skillsync audit [--json]
-skillsync cleanup [--all] [--apply]
 skillsync list
-skillsync find <query> [--pack cold] [--limit 5] [--json]
 skillsync installed [--device id]
 skillsync matrix [--edit]
 skillsync instructions status
@@ -386,13 +349,11 @@ skillsync groups [--summary]
 skillsync pack list
 skillsync pack show <pack>
 skillsync pack install <pack> [--target targets] [--global]
-skillsync pack apply <pack> --target targets [--exact] [--apply]
 skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]
 skillsync install <skill> [--device id] [--target targets] [--global]
 skillsync uninstall <skill> [--device id] [--target targets] [--global]
 skillsync delete <skill> [--yes]
-skillsync update [skill] [--check] [--apply]
 skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]
 skillsync target remove <name>
 skillsync target auto-adopt <name> <on|off>

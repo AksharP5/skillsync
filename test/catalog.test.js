@@ -1,17 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { auditCatalog, auditSkillFolder } from '../src/core/audit.js';
-import { addTarget, installSkill, loadDevice, setSkillTargets } from '../src/core/device.js';
-import { findSkills } from '../src/core/find.js';
-import { git } from '../src/core/git.js';
-import { planPackApplication } from '../src/core/packs.js';
-import { addSkillToVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
-import { inspectSkillUpdate } from '../src/core/update.js';
+import { rebuildRegistry } from '../src/core/registry.js';
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-catalog-test-'));
@@ -24,7 +18,7 @@ async function makeSkill(root, name, description = 'Use this skill for focused t
   return dir;
 }
 
-test('auditSkillFolder validates portable metadata and catalog size', async () => {
+test('auditSkillFolder validates required Agent Skills metadata', async () => {
   const root = await tempDir();
   const invalid = path.join(root, 'wrong-directory');
   await mkdir(invalid);
@@ -37,6 +31,118 @@ test('auditSkillFolder validates portable metadata and catalog size', async () =
   );
 });
 
+test('auditSkillFolder enforces required metadata length limits', async () => {
+  const root = await tempDir();
+  const name = 'a'.repeat(65);
+  const skill = path.join(root, name);
+  await mkdir(skill);
+  await writeFile(path.join(skill, 'SKILL.md'), `---\nname: ${name}\ndescription: ${'x'.repeat(1025)}\n---\n# Instructions\n`);
+
+  assert.deepEqual(
+    (await auditSkillFolder(skill)).findings.map((item) => item.code),
+    ['name-too-long', 'description-too-long'],
+  );
+});
+
+test('auditSkillFolder accepts every optional Agent Skills metadata field', async () => {
+  const root = await tempDir();
+  const skill = path.join(root, 'pdf-processing');
+  await mkdir(skill);
+  await writeFile(path.join(skill, 'SKILL.md'), `---
+name: pdf-processing
+description: Extract PDF text and fill forms. Use when handling PDFs.
+license: Apache-2.0
+compatibility: Requires pdftotext
+metadata:
+  author: example-org
+  version: "1.0"
+allowed-tools: Bash(pdftotext:*) Read
+---
+# Instructions
+`);
+
+  assert.deepEqual((await auditSkillFolder(skill)).findings, []);
+});
+
+test('auditSkillFolder rejects every invalid optional metadata shape', async () => {
+  const root = await tempDir();
+  const skill = path.join(root, 'invalid-options');
+  await mkdir(skill);
+  await writeFile(path.join(skill, 'SKILL.md'), `---
+name: invalid-options
+description: Validate optional fields.
+license:
+  family: MIT
+compatibility: ${'x'.repeat(501)}
+metadata:
+  version: 1
+allowed-tools:
+  - Read
+---
+# Instructions
+`);
+
+  assert.deepEqual(
+    (await auditSkillFolder(skill)).findings.map((item) => item.code),
+    ['invalid-license', 'compatibility-too-long', 'invalid-metadata-entry', 'invalid-allowed-tools'],
+  );
+});
+
+test('auditSkillFolder rejects non-mapping metadata and empty optional strings', async () => {
+  const root = await tempDir();
+  const skill = path.join(root, 'invalid-containers');
+  await mkdir(skill);
+  await writeFile(path.join(skill, 'SKILL.md'), `---
+name: invalid-containers
+description: Validate optional containers.
+compatibility: ""
+metadata:
+  - author
+allowed-tools: ""
+---
+# Instructions
+`);
+
+  assert.deepEqual(
+    (await auditSkillFolder(skill)).findings.map((item) => item.code),
+    ['invalid-compatibility', 'invalid-metadata', 'invalid-allowed-tools'],
+  );
+});
+
+test('auditSkillFolder requires frontmatter to be a mapping', async () => {
+  const root = await tempDir();
+  const skill = path.join(root, 'not-a-map');
+  await mkdir(skill);
+  await writeFile(path.join(skill, 'SKILL.md'), '---\n- name: not-a-map\n- description: Invalid root\n---\n# Instructions\n');
+
+  assert.deepEqual(
+    (await auditSkillFolder(skill)).findings.map((item) => item.code),
+    ['invalid-frontmatter-type', 'missing-name', 'missing-description'],
+  );
+});
+
+test('auditCatalog scans current target contents instead of cached inventory', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, 'codex');
+  await makeSkill(path.join(vault, 'skills'), 'review', 'Review code changes carefully.');
+  await makeSkill(codex, 'new-skill', 'Use the new workflow.');
+  await rebuildRegistry(vault);
+
+  const result = await auditCatalog({
+    vaultPath: vault,
+    device: {
+      targets: { codex: { path: codex } },
+      installed: {},
+      detected: { codex: [{ name: 'deleted-skill', path: 'deleted-skill' }] },
+    },
+  });
+
+  assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['new-skill']);
+  assert.equal(result.targets.codex.activeSkills, 1);
+  assert.equal(result.targets.codex.unmanagedOrDetectedSkills, 1);
+});
+
 test('auditCatalog reports conflicting target copies and active description cost', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -47,18 +153,13 @@ test('auditCatalog reports conflicting target copies and active description cost
   await makeSkill(claude, 'review', 'Use a different review workflow.');
   await rebuildRegistry(vault);
 
-  const device = {
-    targets: {
-      codex: { path: codex },
-      claude: { path: claude },
+  const result = await auditCatalog({
+    vaultPath: vault,
+    device: {
+      targets: { codex: { path: codex }, claude: { path: claude } },
+      installed: { review: ['codex', 'claude'] },
     },
-    installed: { review: ['codex', 'claude'] },
-    detected: {
-      codex: [{ name: 'review', path: 'review' }],
-      claude: [{ name: 'review', path: 'review' }],
-    },
-  };
-  const result = await auditCatalog({ vaultPath: vault, device });
+  });
 
   assert.equal(result.summary.conflictingDuplicates, 1);
   assert.equal(result.duplicates[0].status, 'conflicting');
@@ -80,102 +181,11 @@ test('auditCatalog does not report managed projections as duplicates', async () 
     device: {
       targets: { codex: { path: codex } },
       installed: { review: ['codex'] },
-      detected: { codex: [{ name: 'review', path: 'review' }] },
+      detected: {},
     },
   });
 
   assert.equal(result.summary.identicalDuplicates, 0);
   assert.equal(result.summary.conflictingDuplicates, 0);
-});
-
-test('planPackApplication can exactly reconcile selected targets while preserving others', () => {
-  const device = {
-    installed: {
-      review: ['claude'],
-      legacy: ['claude', 'codex'],
-    },
-    global_installed: ['global-helper'],
-  };
-
-  const changes = planPackApplication({
-    device,
-    skills: ['review'],
-    targets: ['claude'],
-    exact: true,
-  });
-
-  assert.deepEqual(changes, [
-    { skillName: 'legacy', before: ['claude', 'codex'], after: ['codex'] },
-  ]);
-});
-
-test('setSkillTargets accepts an empty exact assignment', async () => {
-  const root = await tempDir();
-  const vault = path.join(root, 'vault');
-  const target = path.join(root, 'codex');
-  await makeSkill(path.join(vault, 'skills'), 'review');
-  await rebuildRegistry(vault);
-  await addTarget({ vaultPath: vault, deviceId: 'test', name: 'codex', targetPath: target });
-  await installSkill({ vaultPath: vault, deviceId: 'test', skillName: 'review', targets: ['codex'] });
-
-  await setSkillTargets({ vaultPath: vault, deviceId: 'test', skillName: 'review', targets: [] });
-
-  const device = await loadDevice(vault, 'test');
-  assert.equal(device.installed.review, undefined);
-});
-
-test('findSkills ranks matching metadata from the selected pack', async () => {
-  const root = await tempDir();
-  const vault = path.join(root, 'vault');
-  await makeSkill(path.join(vault, 'skills'), 'humanizer', 'Humanize AI writing and add a natural voice.');
-  await makeSkill(path.join(vault, 'skills'), 'make-pdf', 'Turn markdown into a publication-quality PDF.');
-  await rebuildRegistry(vault);
-  await mkdir(path.join(vault, 'packs'));
-  await writeFile(path.join(vault, 'packs', 'cold.json'), JSON.stringify({
-    name: 'cold',
-    skills: ['humanizer', 'make-pdf'],
-  }));
-
-  const results = await findSkills({ vaultPath: vault, query: 'make AI writing sound human', pack: 'cold' });
-
-  assert.equal(results[0].name, 'humanizer');
-  assert.match(results[0].path, /humanizer\/SKILL\.md$/);
-  assert.ok(results[0].score > 0);
-});
-
-test('source provenance survives registry rebuild and supports explicit updates', async () => {
-  const root = await tempDir();
-  const sourceRepo = path.join(root, 'source');
-  const sourceSkill = await makeSkill(path.join(sourceRepo, 'skills'), 'tracked', 'Track upstream changes.', '# Version one\n');
-  await git(['init', '--initial-branch=main'], sourceRepo);
-  await git(['config', 'user.email', 'test@example.com'], sourceRepo);
-  await git(['config', 'user.name', 'SkillSync Test'], sourceRepo);
-  await git(['add', '.'], sourceRepo);
-  await git(['commit', '-m', 'initial'], sourceRepo);
-  const firstCommit = (await git(['rev-parse', 'HEAD'], sourceRepo)).stdout.trim();
-  const sourceUrl = pathToFileURL(sourceRepo).href;
-  const vault = path.join(root, 'vault');
-
-  await addSkillToVault({
-    vaultPath: vault,
-    sourcePath: sourceSkill,
-    source: { url: sourceUrl, ref: 'main', commit: firstCommit, subpath: 'skills/tracked' },
-  });
-  await rebuildRegistry(vault);
-  assert.equal((await loadRegistry(vault)).skills.tracked.source.commit, firstCommit);
-  assert.equal((await inspectSkillUpdate({ vaultPath: vault, skillName: 'tracked' })).status, 'current');
-
-  await writeFile(path.join(sourceSkill, 'SKILL.md'), '---\nname: tracked\ndescription: Track upstream changes.\n---\n# Version two\n');
-  await git(['add', '.'], sourceRepo);
-  await git(['commit', '-m', 'update'], sourceRepo);
-  const secondCommit = (await git(['rev-parse', 'HEAD'], sourceRepo)).stdout.trim();
-
-  const available = await inspectSkillUpdate({ vaultPath: vault, skillName: 'tracked' });
-  assert.equal(available.status, 'available');
-  assert.equal(available.availableCommit, secondCommit);
-
-  const updated = await inspectSkillUpdate({ vaultPath: vault, skillName: 'tracked', apply: true });
-  assert.equal(updated.status, 'updated');
-  assert.equal((await loadRegistry(vault)).skills.tracked.source.commit, secondCommit);
-  assert.match(await readFile(path.join(vault, 'skills', 'tracked', 'SKILL.md'), 'utf8'), /Version two/);
+  assert.equal(result.targets.codex.activeSkills, 1);
 });
