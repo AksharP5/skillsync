@@ -239,6 +239,17 @@ skillsync import hermes
 
 When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly.
 
+## Audit the active catalog
+
+Validate Agent Skills metadata, find duplicate or conflicting copies across configured targets, and estimate the description tokens loaded by each active catalog:
+
+```bash
+skillsync audit
+skillsync audit --json
+```
+
+`skillsync audit` is read-only and scans configured target paths directly instead of relying on cached inventory. `skillsync doctor` includes the catalog summary. Audit errors cover every hard Agent Skills frontmatter constraint; longer descriptions and oversized skill bodies are warnings.
+
 ## Automatic skill adoption
 
 New targets automatically adopt new skills created inside their managed folder. For example, if Codex creates `~/.codex/skills/my-new-skill`, the next SkillSync run adds it to the vault, assigns it to Codex on that device, and replaces the standalone folder with a managed projection.
@@ -405,6 +416,7 @@ skillsync                 Open TUI
 skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]
 skillsync connect <owner/repo|url> [--path path]
 skillsync status
+skillsync audit [--json]
 skillsync list
 skillsync installed [--device id]
 skillsync matrix [--edit]

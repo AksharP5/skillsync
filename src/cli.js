@@ -5,6 +5,7 @@ import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
 import { loadConfig, saveConfig, defaultRepoPath } from './core/config.js';
+import { auditCatalog } from './core/audit.js';
 import {
   addTarget,
   defaultDeviceId,
@@ -113,6 +114,8 @@ async function main() {
       return connect(rest);
     case 'status':
       return status();
+    case 'audit':
+      return auditCommand(rest);
     case 'list':
       return listSkills();
     case 'installed':
@@ -1568,6 +1571,35 @@ async function deleteSkill(rest) {
   console.log(`Deleted ${skillName} from the vault.`);
 }
 
+function printAudit(result) {
+  console.log(`Vault: ${result.summary.skills} skills, ${result.summary.errors} errors, ${result.summary.warnings} warnings`);
+  for (const skill of result.skills) {
+    for (const item of skill.findings) {
+      console.log(`${item.level === 'error' ? '✗' : '!'} ${skill.name} [${item.code}]: ${item.message}`);
+    }
+  }
+  for (const skill of result.externalSkills) {
+    for (const item of skill.findings) {
+      console.log(`${item.level === 'error' ? '✗' : '!'} ${skill.name} in ${skill.targets.join(', ')} [${item.code}]: ${item.message}`);
+    }
+  }
+  for (const duplicate of result.duplicates) {
+    console.log(`${duplicate.status === 'conflicting' ? '✗' : '!'} ${duplicate.name}: ${duplicate.status} copies in ${duplicate.copies.map((copy) => copy.target).join(', ')}`);
+  }
+  for (const [target, catalog] of Object.entries(result.targets)) {
+    console.log(`Catalog ${target}: ${catalog.activeSkills} active skills (${catalog.assignedSkills} assigned), ~${catalog.estimatedDescriptionTokens} description tokens`);
+  }
+}
+
+async function auditCommand(rest) {
+  const config = await configured();
+  const device = await loadLocalDevice(config.repoPath, config.deviceId, { ensure: false });
+  const result = await auditCatalog({ vaultPath: config.repoPath, device });
+  if (hasFlag(rest, '--json')) console.log(JSON.stringify(result, null, 2));
+  else printAudit(result);
+  if (result.summary.errors || result.summary.conflictingDuplicates) process.exitCode = 1;
+}
+
 function parseTargets(rest) {
   const targets = [];
   if (hasFlag(rest, '--global') || hasFlag(rest, '-g')) targets.push('global');
@@ -1838,6 +1870,12 @@ async function doctor() {
     console.log(`${await isGitRepo(config.repoPath) ? '✓' : '✗'} vault git repo`);
     const result = await checkVault(config.repoPath);
     console.log(`✓ vault checked: ${result.skills} skills, ${result.files} files`);
+    const device = await loadLocalDevice(config.repoPath, config.deviceId, { ensure: false });
+    const audit = await auditCatalog({ vaultPath: config.repoPath, device });
+    console.log(`${audit.summary.errors ? '✗' : '✓'} catalog: ${audit.summary.skills} skills, ${audit.summary.errors} errors, ${audit.summary.warnings} warnings`);
+    for (const [target, catalog] of Object.entries(audit.targets)) {
+      console.log(`  ${target}: ${catalog.activeSkills} active (${catalog.assignedSkills} assigned), ~${catalog.estimatedDescriptionTokens} description tokens`);
+    }
   } catch (error) {
     console.log(`✗ config/vault: ${error.message}`);
   }
@@ -2899,5 +2937,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status\n  skillsync plugins profiles\n  skillsync plugins show <profile>\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]\n  skillsync plugins use <profile> [--device id]\n  skillsync plugins auto-adopt <profile> <on|off>\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan [--json]\n  skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]\n  skillsync rollback\n  skillsync check\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync audit [--json]\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status\n  skillsync plugins profiles\n  skillsync plugins show <profile>\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]\n  skillsync plugins use <profile> [--device id]\n  skillsync plugins auto-adopt <profile> <on|off>\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan [--json]\n  skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]\n  skillsync rollback\n  skillsync check\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }

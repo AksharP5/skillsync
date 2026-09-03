@@ -115,6 +115,38 @@ test('installed command marks missing managed projections', async () => {
   assert.match(stdout, /codex: .*paper-mcp \(missing; run skillsync sync\)/);
 });
 
+test('audit --json refreshes target inventory without changing persisted state', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const target = path.join(home, '.codex', 'skills');
+  const deviceId = 'test-device';
+  await writeConfig(home, vault, deviceId);
+  await makeSkill(path.join(vault, 'skills'), 'review', '---\nname: review\ndescription: Review code changes.\n---\n# Review\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'review', targets: ['codex'] });
+  await makeSkill(target, 'new-skill', '---\nname: new-skill\ndescription: Use the new local workflow.\n---\n# New\n');
+  const registryPath = path.join(vault, 'registry.json');
+  const localDevicePath = path.join(vault, '.git', 'skillsync', 'local', 'devices', `${deviceId}.json`);
+  const before = {
+    registry: await readFile(registryPath, 'utf8'),
+    device: await readFile(localDevicePath, 'utf8'),
+  };
+
+  const { stdout } = await execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'audit', '--json'], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.summary.errors, 0);
+  assert.equal(result.targets.codex.assignedSkills, 1);
+  assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['new-skill']);
+  assert.ok(result.targets.codex.estimatedDescriptionTokens > 0);
+  assert.equal(await readFile(registryPath, 'utf8'), before.registry);
+  assert.equal(await readFile(localDevicePath, 'utf8'), before.device);
+});
+
 test('install --device records a pending assignment without touching remote paths', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
