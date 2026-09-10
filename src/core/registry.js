@@ -2,6 +2,7 @@ import { mkdir, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { checkSkillFolder } from './check.js';
+import { hashSyncedDirectory, ignoredGitPaths } from './git.js';
 import {
   assertSafePathSegment,
   copyDir,
@@ -127,8 +128,9 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
   }
   if (comparison.status === 'identical') {
     const registry = await loadRegistry(vaultPath);
-    if (!registry.skills[comparison.name] || registry.skills[comparison.name].hash !== comparison.vaultHash) {
-      registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+    const entry = await registryEntryForSkill(vaultPath, comparison.name);
+    if (registry.skills[comparison.name]?.hash !== entry.hash) {
+      registry.skills[comparison.name] = entry;
       await saveRegistry(vaultPath, registry);
     }
     return { name: comparison.name, path: comparison.path, status: 'identical' };
@@ -152,13 +154,13 @@ export async function ensureSkillInRegistry(vaultPath, skillName) {
   return registry.skills[skillName];
 }
 
-export async function registryEntryForSkill(vaultPath, skillName) {
+export async function registryEntryForSkill(vaultPath, skillName, ignoredPaths) {
   assertSafePathSegment(skillName, 'Skill name');
   const skillPath = path.join(vaultPath, 'skills', skillName);
   await validateSkillFolder(skillPath);
   return {
     path: path.posix.join('skills', skillName),
-    hash: await hashDirectory(skillPath),
+    hash: await hashSyncedDirectory(vaultPath, path.posix.join('skills', skillName), ignoredPaths),
     updated_at: new Date().toISOString(),
   };
 }
@@ -167,11 +169,12 @@ export async function buildRegistry(vaultPath) {
   const skillsDir = path.join(vaultPath, 'skills');
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const registry = emptyRegistry();
+  const ignoredPaths = await ignoredGitPaths(vaultPath);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const skillName = assertSafePathSegment(entry.name, 'Skill name');
     if (!await exists(path.join(skillsDir, skillName, 'SKILL.md'))) continue;
-    registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
+    registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName, ignoredPaths);
   }
   return registry;
 }

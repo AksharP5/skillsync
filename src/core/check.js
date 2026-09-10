@@ -2,8 +2,8 @@ import { createReadStream } from 'node:fs';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { assertSafePathSegment, hashDirectory } from './fs.js';
-import { git, isGitRepo } from './git.js';
+import { assertSafePathSegment } from './fs.js';
+import { git, hashSyncedDirectory, ignoredGitPaths, isGitRepo } from './git.js';
 
 const GIT_ENTRY = '.git';
 const LOCAL_STATE_ENTRY = '.skillsync-local';
@@ -238,6 +238,7 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
     } else {
       const actualNames = skillNames.sort();
       const registeredNames = Object.keys(registry.skills).sort();
+      const ignoredPaths = actualNames.length && !unsafeTree ? await ignoredGitPaths(root) : [];
       for (const name of actualNames) {
         const entry = registry.skills[name];
         if (!entry || entry.path !== path.posix.join('skills', name)) {
@@ -245,7 +246,7 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
           continue;
         }
         if (!unsafeTree) {
-          const hash = await hashDirectory(path.join(skillRoot, name));
+          const hash = await hashSyncedDirectory(root, path.posix.join('skills', name), ignoredPaths);
           if (entry.hash !== hash) errors.push(`Registry hash is stale: ${name}`);
         }
       }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -10,6 +10,7 @@ import {
   autoImportNewLocalSkills,
   initializeLocalPathState,
   loadLocalDevice,
+  managedProjections,
   migrateLegacyLocalPathState,
   scanTargets,
   setGlobalInstructionsProfile,
@@ -21,8 +22,9 @@ import {
 } from '../src/core/instructions.js';
 import { exists } from '../src/core/fs.js';
 import { git, gitPrivatePath, pushWithPullRebaseRetry, run } from '../src/core/git.js';
-import { ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
+import { addSkillToVault, ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
+import { checkVault } from '../src/core/check.js';
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-git-test-'));
@@ -71,6 +73,66 @@ async function writeDesiredDevice(vaultPath, deviceId, installed = {}) {
     global_installed: [],
   }, null, 2)}\n`);
 }
+
+test('sync keeps registry hashes stable across clones with different ignored files', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const clone = path.join(root, 'clone');
+  const skill = path.join(vault, 'skills', 'captions');
+  await initializeVaultRepo(vault);
+  await mkdir(path.join(skill, 'fixtures'), { recursive: true });
+  await writeFile(path.join(skill, 'SKILL.md'), '# Captions\n');
+  await writeFile(path.join(skill, '.gitignore'), 'transcript.json\n');
+  await writeFile(path.join(skill, 'fixtures', 'transcript.json'), '{"local":true}\n');
+  await syncVault({ vaultPath: vault, pull: false, pushChanges: false });
+  await git(['add', '-A'], vault);
+  await git(['commit', '-m', 'initial skill'], vault);
+  await git(['clone', vault, clone]);
+
+  const before = await readFile(path.join(vault, 'registry.json'), 'utf8');
+  await syncVault({ vaultPath: clone, pull: false, pushChanges: false });
+  assert.equal(await readFile(path.join(clone, 'registry.json'), 'utf8'), before);
+  await writeFile(path.join(skill, 'fixtures', 'transcript.json'), '{"local":"changed"}\n');
+  await syncVault({ vaultPath: vault, pull: false, pushChanges: false });
+  assert.equal(await readFile(path.join(vault, 'registry.json'), 'utf8'), before);
+  await checkVault(vault);
+  await addSkillToVault({ vaultPath: vault, sourcePath: skill });
+  assert.equal(await readFile(path.join(vault, 'registry.json'), 'utf8'), before);
+  assert.equal((await git(['status', '--porcelain'], vault)).stdout, '');
+
+  // Git still syncs explicitly tracked files even when an ignore rule matches.
+  await git(['add', '-f', 'skills/captions/fixtures/transcript.json'], vault);
+  await syncVault({ vaultPath: vault, pull: false, pushChanges: false });
+  const trackedHash = (await loadRegistry(vault)).skills.captions.hash;
+  assert.notEqual(trackedHash, JSON.parse(before).skills.captions.hash);
+  await writeFile(path.join(skill, 'fixtures', 'transcript.json'), '{"tracked":"changed"}\n');
+  await syncVault({ vaultPath: vault, pull: false, pushChanges: false });
+  assert.notEqual((await loadRegistry(vault)).skills.captions.hash, trackedHash);
+  await unlink(path.join(skill, 'fixtures', 'transcript.json'));
+  await syncVault({ vaultPath: vault, pull: false, pushChanges: false });
+  assert.equal((await loadRegistry(vault)).skills.captions.hash, JSON.parse(before).skills.captions.hash);
+});
+
+test('copy projections retain drift protection when the vault contains ignored files', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'target');
+  const skill = path.join(vault, 'skills', 'captions');
+  const deviceId = 'test';
+  await initializeVaultRepo(vault);
+  await mkdir(skill, { recursive: true });
+  await writeFile(path.join(skill, 'SKILL.md'), '# Captions\n');
+  await writeFile(path.join(skill, '.gitignore'), 'transcript.json\n');
+  await writeFile(path.join(skill, 'transcript.json'), '{}\n');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: target, mode: 'copy' });
+  await writeDesiredDevice(vault, deviceId, { captions: ['codex'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+  assert.deepEqual((await applyLinks({ vaultPath: vault, deviceId })).operations, []);
+  assert.equal((await managedProjections({ vaultPath: vault, deviceId }))[0].status, 'ok');
+  await writeFile(path.join(target, 'captions', 'transcript.json'), '{"edited":true}\n');
+  await assert.rejects(applyLinks({ vaultPath: vault, deviceId }), /Managed copy has local changes/);
+});
 
 test('run terminates commands that exceed their timeout', async () => {
   await assert.rejects(
