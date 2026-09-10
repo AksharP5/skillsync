@@ -1014,7 +1014,10 @@ export async function planLinks({
         && !approvedReplacements.has(await canonicalTargetRoot(destination))) {
         throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
       }
-      const sourceHash = registry.skills[skillName].hash;
+      // Copy protection covers every deployed file, including Git-ignored local files.
+      const sourceHash = group.mode === 'copy' || info.ownedCopy
+        ? await hashDirectory(source)
+        : registry.skills[skillName].hash;
       if (group.mode === 'copy') {
         if (info.ownedCopy) {
           const state = await copyState({
@@ -1177,14 +1180,15 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
           if (!info.ownedCopy) {
             status = 'unmanaged';
           } else {
+            const sourceHash = await hashDirectory(source);
             const state = await copyState({
               destination,
               marker: info.copyMarker,
-              sourceHash: registryEntry.hash,
+              sourceHash,
             });
             status = state.drifted
               ? 'drifted'
-              : state.localHash === registryEntry.hash
+              : state.localHash === sourceHash
                 ? 'ok'
                 : 'outdated';
           }

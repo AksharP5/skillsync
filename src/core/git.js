@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { assertSafePathSegment, exists } from './fs.js';
+import { assertSafePathSegment, exists, hashDirectory } from './fs.js';
 import path from 'node:path';
 
 export function run(command, args, options = {}) {
@@ -74,6 +74,20 @@ export async function gh(args, cwd, options = {}) {
 
 export async function isGitRepo(repoPath) {
   return exists(path.join(repoPath, '.git'));
+}
+
+export async function ignoredGitPaths(repoPath) {
+  if (!await isGitRepo(repoPath)) return [];
+  const { stdout } = await git(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], repoPath);
+  return stdout.split('\0').filter(Boolean);
+}
+
+export async function hashSyncedDirectory(repoPath, relativePath, ignoredPaths) {
+  const directory = path.resolve(repoPath, relativePath);
+  const ignored = ignoredPaths ?? await ignoredGitPaths(repoPath);
+  return hashDirectory(directory, {
+    exclude: ignored.map((file) => path.relative(directory, path.resolve(repoPath, file))),
+  });
 }
 
 export async function gitPrivatePath(repoPath, ...segments) {

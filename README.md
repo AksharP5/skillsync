@@ -386,6 +386,8 @@ skillsync installed --device workstation
 
 The background service syncs when it starts and then checks every 120 seconds. It uses a macOS LaunchAgent or a Linux systemd user service.
 
+Registry hashes exclude untracked files ignored by Git, so local generated files do not cause repeated sync commits across devices. Tracked files still count even when an ignore rule matches them. Copy-mode overwrite protection continues to check every deployed file, including ignored files. The first sync after upgrading may correct an existing hash once; upgrade every device to prevent older versions from restoring it.
+
 Verify it on macOS:
 
 ```bash
