@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/AksharP5/skillsync/compare/v0.12.1...v0.12.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* stop ignored local files from churning vault history ([#68](https://github.com/AksharP5/skillsync/issues/68)) ([e6619d3](https://github.com/AksharP5/skillsync/commit/e6619d39dc43845c4196d4f14d4b91cbeeb71c7a))
+
 ## [0.12.1](https://github.com/AksharP5/skillsync/compare/v0.12.0...v0.12.1) (2026-08-31)
 
 
