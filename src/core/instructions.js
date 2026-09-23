@@ -111,6 +111,12 @@ function resolvedDestination(targetPath) {
   return path.resolve(expandHome(targetPath || DEFAULT_GLOBAL_INSTRUCTIONS_PATH));
 }
 
+async function canonicalDestination(targetPath) {
+  const destination = resolvedDestination(targetPath);
+  const parent = await optionalRealpath(path.dirname(destination));
+  return parent ? path.join(parent, path.basename(destination)) : destination;
+}
+
 function profileFromVaultPath(vaultPath, source) {
   const resolved = path.resolve(source);
   if (resolved === path.resolve(globalInstructionsVaultPath(vaultPath))) {
@@ -428,7 +434,19 @@ export async function selectGlobalInstructionsProfile({
       throw new Error('Global instructions destination cannot be its vault profile file');
     }
   }
+  const destinations = new Set(await Promise.all(paths.map(canonicalDestination)));
+  const removed = [];
+  for (const targetPath of device.instructions.agents?.paths || []) {
+    if (destinations.has(await canonicalDestination(targetPath))) continue;
+    const destination = resolvedDestination(targetPath);
+    if (!await ownedProfileAt(destination, vaultPath)) continue;
+    removed.push({ destination, content: await readFile(destination) });
+  }
   const backups = await preserveUnmanagedDestinations(vaultPath, paths);
+  for (const { destination, content } of removed) {
+    await removePath(destination);
+    await writeFile(destination, content);
+  }
   await setGlobalInstructionsProfile({
     vaultPath,
     deviceId,
@@ -628,20 +646,24 @@ export async function applyGlobalInstructions({
   }
 
   const source = (await requireProfile(vaultPath, selected)).source;
+  const updates = new Map();
   for (const targetPath of paths) {
     const destination = resolvedDestination(targetPath);
     const destinationInfo = await pathInfo(destination);
-    if (!destinationInfo) {
-      await createOwnedInstructionsSymlink(source, destination);
-      continue;
+    if (destinationInfo) {
+      if (await isSelectedProfileLink(destination, vaultPath, selected)) continue;
+      if (!await ownedProfileAt(destination, vaultPath)) {
+        throw new Error(`Refusing to overwrite unmanaged global instructions: ${destination}`);
+      }
     }
-    if (await isSelectedProfileLink(destination, vaultPath, selected)) continue;
-    if (await ownedProfileAt(destination, vaultPath)) {
-      await removePath(destination);
-      await createOwnedInstructionsSymlink(source, destination);
-      continue;
-    }
-    throw new Error(`Refusing to overwrite unmanaged global instructions: ${destination}`);
+    updates.set(await canonicalDestination(targetPath), {
+      destination,
+      replace: Boolean(destinationInfo),
+    });
+  }
+  for (const { destination, replace } of updates.values()) {
+    if (replace) await removePath(destination);
+    await createOwnedInstructionsSymlink(source, destination);
   }
   await configureGlobalInstructions({
     vaultPath,

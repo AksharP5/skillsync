@@ -744,6 +744,102 @@ test('forking a shared instruction profile gives one device an independent edita
   assert.equal((await loadDevice(vault, 'archlinux')).instructions.agents.profile, 'shared-team');
 });
 
+test('replacing instruction paths preserves removed managed and unmanaged files', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const codex = path.join(root, 'codex.md');
+  const opencode = path.join(root, 'opencode.md');
+  const grok = path.join(root, 'grok.md');
+  await writeFile(codex, '# Original\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'original',
+    sourcePath: codex,
+    targetPaths: [codex, opencode],
+  });
+  await unlink(opencode);
+  await writeFile(opencode, '# Unmanaged replacement\n');
+  await writeFile(globalInstructionsVaultPath(vault, 'next'), '# Next\n');
+
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'next',
+    targetPaths: [grok],
+  });
+
+  assert.equal((await lstat(codex)).isFile(), true);
+  assert.equal(await readFile(codex, 'utf8'), '# Original\n');
+  assert.equal(await readFile(opencode, 'utf8'), '# Unmanaged replacement\n');
+  assert.equal(await readFile(grok, 'utf8'), '# Next\n');
+  assert.deepEqual((await loadLocalDevice(vault, 'workstation')).instructions.agents.paths, [grok]);
+  await assert.rejects(() => readFile(globalInstructionsVaultPath(vault, 'original')), { code: 'ENOENT' });
+});
+
+test('changing an instruction path to a symlinked directory alias keeps it linked', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const directory = path.join(root, 'config');
+  const alias = path.join(root, 'config-alias');
+  const original = path.join(directory, 'AGENTS.md');
+  const targetPath = path.join(alias, 'AGENTS.md');
+  await mkdir(directory);
+  await symlink(directory, alias, 'dir');
+  await writeFile(original, '# Instructions\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'shared',
+    sourcePath: original,
+  });
+
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'shared',
+    targetPaths: [targetPath],
+  });
+
+  assert.equal((await lstat(original)).isSymbolicLink(), true);
+  assert.equal(await readFile(targetPath, 'utf8'), '# Instructions\n');
+});
+
+test('an unmanaged instruction conflict leaves every profile link unchanged', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const first = path.join(root, 'first.md');
+  const second = path.join(root, 'second.md');
+  await writeFile(first, '# Original\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'original',
+    sourcePath: first,
+    targetPaths: [first, second],
+  });
+  const originalLink = await readlink(first);
+  await unlink(second);
+  await writeFile(second, '# Unmanaged replacement\n');
+  await writeFile(globalInstructionsVaultPath(vault, 'next'), '# Next\n');
+  await assignGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'next',
+  });
+
+  await assert.rejects(
+    () => applyGlobalInstructions({ vaultPath: vault, deviceId: 'workstation' }),
+    /Refusing to overwrite unmanaged global instructions/,
+  );
+  assert.equal(await readlink(first), originalLink);
+  assert.equal((await loadLocalDevice(vault, 'workstation')).instructions.agents.applied_profile, 'original');
+  await disableGlobalInstructions({ vaultPath: vault, deviceId: 'workstation' });
+  assert.equal((await lstat(first)).isFile(), true);
+  assert.equal(await readFile(first, 'utf8'), '# Original\n');
+  assert.equal(await readFile(second, 'utf8'), '# Unmanaged replacement\n');
+});
+
 test('remote profile selection stays pending until that device applies it', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');

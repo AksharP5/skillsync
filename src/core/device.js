@@ -656,6 +656,9 @@ export async function addTarget({
       && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
       cleanup = await removeOwnedTargetProjections({ vaultPath, device, name });
     }
+    if (previousTarget?.path !== nextTarget.path || previousTarget?.scan_path !== nextTarget.scan_path) {
+      delete device.detected[name];
+    }
     device.targets[name] = nextTarget;
   }
   try {

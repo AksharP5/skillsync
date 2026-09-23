@@ -367,6 +367,7 @@ async function connect(rest) {
 }
 
 async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
+  const device = await loadLocalDevice(repoPath, deviceId);
   const candidates = [
     { name: 'hermes', path: '~/.hermes/skills/personal', scanPath: '~/.hermes/skills' },
     { name: 'claude', path: '~/.claude/skills' },
@@ -376,6 +377,7 @@ async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
   ];
   const detected = [];
   for (const candidate of candidates) {
+    if (Object.hasOwn(device.targets, candidate.name)) continue;
     const expanded = expandHome(candidate.path);
     const scanExpanded = expandHome(candidate.scanPath || candidate.path);
     const parentExists = await exists(path.dirname(expanded));
