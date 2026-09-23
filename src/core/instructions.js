@@ -42,6 +42,7 @@ export function globalInstructionProviderPaths(
   const providers = [
     { provider: 'codex', path: DEFAULT_GLOBAL_INSTRUCTIONS_PATH },
     { provider: 'opencode', path: opencode },
+    { provider: 'grok', path: '~/agent-data/AGENTS.md' },
   ];
   if (includeClaude) {
     providers.push({ provider: 'claude', path: DEFAULT_CLAUDE_INSTRUCTIONS_PATH });

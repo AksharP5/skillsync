@@ -487,6 +487,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
   const destination = path.join(home, '.codex', 'AGENTS.md');
+  const grok = path.join(home, 'agent-data', 'AGENTS.md');
   await mkdir(vault, { recursive: true });
   await mkdir(path.dirname(destination), { recursive: true });
   await writeFile(destination, '# Shared instructions\n');
@@ -509,6 +510,18 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     '# Shared instructions\n',
   );
 
+  await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'),
+    'instructions',
+    'link',
+    '~/agent-data/AGENTS.md',
+  ], {
+    cwd: path.resolve('.'),
+    env: cliEnv(home),
+  });
+  assert.equal((await lstat(grok)).isSymbolicLink(), true);
+  assert.equal(await readFile(grok, 'utf8'), '# Shared instructions\n');
+
   const status = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
     'instructions',
@@ -518,6 +531,7 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
     env: cliEnv(home),
   });
   assert.match(status.stdout, /macbook: macbook \(synced\)/);
+  assert.match(status.stdout, /grok: ~\/agent-data\/AGENTS\.md \(profile macbook\)/);
 
   const disabled = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
@@ -530,6 +544,8 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
   assert.match(disabled.stdout, /Standalone local copies remain/);
   assert.equal((await lstat(destination)).isFile(), true);
   assert.equal(await readFile(destination, 'utf8'), '# Shared instructions\n');
+  assert.equal((await lstat(grok)).isFile(), true);
+  assert.equal(await readFile(grok, 'utf8'), '# Shared instructions\n');
 });
 
 test('explicit OpenCode import manages that file before linking an existing Codex path', async () => {
