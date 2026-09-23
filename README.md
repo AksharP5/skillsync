@@ -49,7 +49,7 @@ Connect to an existing SkillSync vault instead:
 skillsync setup --repo OWNER/REPO
 ```
 
-Setup detects Codex, Claude Code, OpenCode, Hermes, and Grok Bot folders. Add a custom skill folder only when needed:
+Setup detects Codex, Claude Code, OpenCode, Hermes, and Grok Bot folders. Rerunning setup adds new targets and preserves existing target settings. Add a custom skill folder only when needed:
 
 ```bash
 skillsync target add my-agent ~/.config/my-agent/skills
@@ -159,7 +159,7 @@ skillsync instructions fork workstation-personal
 
 Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and unmanaged global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups and never overwrites unmanaged replacements during background sync.
 
-After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
+After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies. Replacing managed paths with an explicit `--path` or `--from` also leaves the old linked files as standalone copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
 
 ## Sync Codex plugins
 
@@ -252,7 +252,7 @@ When a same-named skill already exists in the vault, SkillSync keeps identical c
 
 New targets automatically adopt new skills created inside their managed folder. For example, if Codex creates `~/.codex/skills/my-new-skill`, the next SkillSync run adds it to the vault, assigns it to Codex on that device, and replaces the standalone folder with a managed projection.
 
-SkillSync first records the skills that already exist when a target is added. It only auto-adopts skills that appear after that baseline, so connecting an existing folder does not unexpectedly upload everything in it.
+SkillSync first records the skills that already exist when a target is added. It only auto-adopts skills that appear after that baseline, so connecting an existing folder does not unexpectedly upload everything in it. Changing a target or scan path establishes a fresh baseline for the new location.
 
 Disable auto-adoption for every target on the current device:
 

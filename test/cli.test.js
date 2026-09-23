@@ -19,6 +19,7 @@ import path from 'node:path';
 import {
   addTarget,
   applyLinks,
+  defaultDeviceId,
   installSkill,
   loadDevice,
   loadLocalDevice,
@@ -72,42 +73,105 @@ async function writeConfig(home, vault, deviceId = 'test-device') {
   }, null, 2));
 }
 
-test('setup detects the Grok Bot target when its agent-data directory exists', async () => {
-  const home = await tempDir();
-  const vault = path.join(home, '.skillsync', 'repo');
-  const remote = path.join(home, 'vault.git');
+async function setupEnv(home, repoUrl) {
   const bin = path.join(home, 'bin');
-  await git(['init', '--bare', remote]);
-  await mkdir(path.join(home, 'agent-data'));
   await mkdir(bin);
   const gh = path.join(bin, 'gh');
   await writeFile(gh, `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
 if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
-  printf '%s\\n' '${JSON.stringify({ isPrivate: true, url: `file://${remote}` })}'
+  printf '%s\\n' "$SKILLSYNC_TEST_REPO_VIEW"
   exit 0
 fi
 exit 1
 `);
   await chmod(gh, 0o755);
+  return {
+    ...cliEnv(home),
+    PATH: `${bin}:${process.env.PATH}`,
+    SKILLSYNC_TEST_REPO_VIEW: JSON.stringify({ isPrivate: true, url: repoUrl }),
+    GIT_AUTHOR_NAME: 'SkillSync Test',
+    GIT_AUTHOR_EMAIL: 'test@example.invalid',
+    GIT_COMMITTER_NAME: 'SkillSync Test',
+    GIT_COMMITTER_EMAIL: 'test@example.invalid',
+  };
+}
+
+test('setup detects the Grok Bot target when its agent-data directory exists', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const remote = path.join(home, 'vault.git');
+  await git(['init', '--bare', remote]);
+  await mkdir(path.join(home, 'agent-data'));
 
   await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'), 'setup', '--repo', 'test/skills', '--path', vault, '--yes',
   ], {
     cwd: path.resolve('.'),
-    env: {
-      ...cliEnv(home),
-      PATH: `${bin}:${process.env.PATH}`,
-      GIT_AUTHOR_NAME: 'SkillSync Test',
-      GIT_AUTHOR_EMAIL: 'test@example.invalid',
-      GIT_COMMITTER_NAME: 'SkillSync Test',
-      GIT_COMMITTER_EMAIL: 'test@example.invalid',
-    },
+    env: await setupEnv(home, `file://${remote}`),
   });
 
   const config = JSON.parse(await readFile(path.join(home, '.config', 'skillsync', 'config.json')));
   const device = await loadLocalDevice(vault, config.deviceId);
   assert.equal(device.targets.grok.path, '~/agent-data/workflows');
+});
+
+test('rerunning setup preserves configured targets and their installed skills', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const targetPath = path.join(home, 'custom-codex', 'skills');
+  const scanPath = path.dirname(targetPath);
+  const deviceId = defaultDeviceId();
+  await writeConfig(home, vault, deviceId);
+  await git(['remote', 'set-url', 'origin', 'https://github.com/test/skills'], vault);
+  await git(['remote', 'set-url', '--push', 'origin', path.join(home, '.skillsync', 'test-remote.git')], vault);
+  await mkdir(path.join(home, '.codex'));
+  await makeSkill(path.join(vault, 'skills'), 'installed-skill');
+  await rebuildRegistry(vault);
+  await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath, scanPath, mode: 'copy', autoImport: false });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'installed-skill', targets: ['codex'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'), 'setup', '--repo', 'test/skills', '--path', vault, '--yes',
+  ], {
+    cwd: path.resolve('.'),
+    env: await setupEnv(home, 'https://github.com/test/skills'),
+  });
+
+  const device = await loadLocalDevice(vault, deviceId);
+  assert.deepEqual(device.targets.codex, { path: targetPath, scan_path: scanPath, mode: 'copy', auto_import: false });
+  assert.equal((await lstat(path.join(targetPath, 'installed-skill'))).isDirectory(), true);
+  assert.equal(await exists(path.join(home, '.codex', 'skills', 'installed-skill')), false);
+});
+
+test('changing a target or scan path baselines existing skills before auto-adopting new ones', async () => {
+  for (const change of ['target', 'scan']) {
+    const home = await tempDir();
+    const vault = path.join(home, '.skillsync', 'repo');
+    const original = path.join(home, 'original');
+    const destination = path.join(home, 'destination');
+    const deviceId = 'test-device';
+    await writeConfig(home, vault, deviceId);
+    const targetPath = change === 'target' ? original : destination;
+    const scanPath = change === 'scan' ? original : undefined;
+    await addTarget({ vaultPath: vault, deviceId, name: 'grok', targetPath, scanPath });
+    await scanTargets({ vaultPath: vault, deviceId });
+    await makeSkill(destination, 'existing-local');
+
+    const cli = (args) => execFileAsync(process.execPath, [path.resolve('src/cli.js'), ...args], {
+      cwd: path.resolve('.'),
+      env: cliEnv(home),
+    });
+    await cli(['target', 'add', 'grok', destination]);
+    assert.equal((await loadRegistry(vault)).skills['existing-local'], undefined, change);
+    assert.equal((await lstat(path.join(destination, 'existing-local'))).isDirectory(), true, change);
+
+    await makeSkill(destination, 'new-local');
+    await cli(['sync', '--no-pull']);
+    assert.ok((await loadRegistry(vault)).skills['new-local'], change);
+    assert.equal((await lstat(path.join(destination, 'new-local'))).isSymbolicLink(), true, change);
+  }
 });
 
 test('installed command shows concrete paths for managed symlink projections', async () => {
@@ -602,7 +666,8 @@ test('explicit OpenCode import manages that file before linking an existing Code
   const profile = path.join(vault, 'globals', 'agents', 'macbook.md');
   assert.equal(await readFile(profile, 'utf8'), '# Mac OpenCode\n');
   assert.equal(path.resolve(path.dirname(opencode), await readlink(opencode)), profile);
-  assert.equal(path.resolve(path.dirname(codex), await readlink(codex)), shared);
+  assert.equal((await lstat(codex)).isFile(), true);
+  assert.equal(await readFile(codex, 'utf8'), '# Existing Codex\n');
 
   const linked = await execFileAsync(process.execPath, [
     path.resolve('src/cli.js'),
