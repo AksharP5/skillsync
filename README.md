@@ -2,7 +2,7 @@
 
 Keep the same AI agent skills and Codex plugins available across all of your devices.
 
-SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, or any custom skill folder, and keeps every device in sync in the background. It can also apply named Codex plugin profiles across devices.
+SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, Grok Bot, or any custom skill folder, and keeps every device in sync in the background. It can also apply named Codex plugin profiles across devices.
 
 ## Start with an agent
 
@@ -13,7 +13,7 @@ Set up SkillSync completely on this device.
 
 1. Check for Node.js 20 or newer, Git, GitHub CLI, and an authenticated `gh auth status`. Stop and tell me what is missing before continuing.
 2. Ask whether I already have a SkillSync vault. If I do, run `npx -y @akshar5/skillsync@latest setup --repo OWNER/REPO`. Otherwise, run `npx -y @akshar5/skillsync@latest setup`.
-3. Let setup detect my Codex, OpenCode, Claude Code, and Hermes skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
+3. Let setup detect my Codex, OpenCode, Claude Code, Hermes, and Grok Bot skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
 4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
 5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex and OpenCode AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file.
 6. Ask whether I want to sync installed Codex plugins. If I want one universal profile, run `skillsync plugins import --name shared --auto-adopt`; every current and future enabled user-managed plugin on an assigned device will join it. If I want a selected profile instead, inspect `codex plugin list --json`, ask which plugins are portable, and pass those exact selectors with `--plugin PLUGIN@MARKETPLACE`. Assign the profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied.
@@ -49,7 +49,7 @@ Connect to an existing SkillSync vault instead:
 skillsync setup --repo OWNER/REPO
 ```
 
-Setup detects Codex, Claude Code, OpenCode, and Hermes folders. Add a custom skill folder only when needed:
+Setup detects Codex, Claude Code, OpenCode, Hermes, and Grok Bot folders. Add a custom skill folder only when needed:
 
 ```bash
 skillsync target add my-agent ~/.config/my-agent/skills
@@ -274,6 +274,12 @@ Or create a target with adoption disabled from the start:
 
 ```bash
 skillsync target add codex ~/.codex/skills --no-auto-adopt
+```
+
+On a Grok Bot computer, setup detects `~/agent-data/workflows`. You can also add it manually:
+
+```bash
+skillsync target add grok ~/agent-data/workflows
 ```
 
 If a different skill with the same name is already in the vault, SkillSync leaves both copies untouched and reports the conflict.

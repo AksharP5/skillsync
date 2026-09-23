@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
+  chmod,
   lstat,
   mkdtemp,
   mkdir,
@@ -20,6 +21,7 @@ import {
   applyLinks,
   installSkill,
   loadDevice,
+  loadLocalDevice,
   scanTargets,
   setTargetAutoImport,
 } from '../src/core/device.js';
@@ -69,6 +71,44 @@ async function writeConfig(home, vault, deviceId = 'test-device') {
     deviceId,
   }, null, 2));
 }
+
+test('setup detects the Grok Bot target when its agent-data directory exists', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const remote = path.join(home, 'vault.git');
+  const bin = path.join(home, 'bin');
+  await git(['init', '--bare', remote]);
+  await mkdir(path.join(home, 'agent-data'));
+  await mkdir(bin);
+  const gh = path.join(bin, 'gh');
+  await writeFile(gh, `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '${JSON.stringify({ isPrivate: true, url: `file://${remote}` })}'
+  exit 0
+fi
+exit 1
+`);
+  await chmod(gh, 0o755);
+
+  await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'), 'setup', '--repo', 'test/skills', '--path', vault, '--yes',
+  ], {
+    cwd: path.resolve('.'),
+    env: {
+      ...cliEnv(home),
+      PATH: `${bin}:${process.env.PATH}`,
+      GIT_AUTHOR_NAME: 'SkillSync Test',
+      GIT_AUTHOR_EMAIL: 'test@example.invalid',
+      GIT_COMMITTER_NAME: 'SkillSync Test',
+      GIT_COMMITTER_EMAIL: 'test@example.invalid',
+    },
+  });
+
+  const config = JSON.parse(await readFile(path.join(home, '.config', 'skillsync', 'config.json')));
+  const device = await loadLocalDevice(vault, config.deviceId);
+  assert.equal(device.targets.grok.path, '~/agent-data/workflows');
+});
 
 test('installed command shows concrete paths for managed symlink projections', async () => {
   const home = await tempDir();
