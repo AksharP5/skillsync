@@ -15,7 +15,7 @@ Set up SkillSync completely on this device.
 2. Ask whether I already have a SkillSync vault. If I do, run `npx -y @akshar5/skillsync@latest setup --repo OWNER/REPO`. Otherwise, run `npx -y @akshar5/skillsync@latest setup`.
 3. Let setup detect my Codex, OpenCode, Claude Code, Hermes, and Grok Bot skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
 4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
-5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex and OpenCode AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file.
+5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex, OpenCode, and Grok Bot AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file. Grok Bot needs a separate always-apply skill to use the linked file.
 6. Ask whether I want to sync installed Codex plugins. If I want one universal profile, run `skillsync plugins import --name shared --auto-adopt`; every current and future enabled user-managed plugin on an assigned device will join it. If I want a selected profile instead, inspect `codex plugin list --json`, ask which plugins are portable, and pass those exact selectors with `--plugin PLUGIN@MARKETPLACE`. Assign the profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied.
 7. Verify `skillsync doctor`, `skillsync status`, `skillsync matrix`, `skillsync instructions status`, `skillsync plugins status`, and the background service. Report the vault, detected targets, auto-adoption settings, instruction and plugin profiles, service state, and anything that still needs my decision.
 ```
@@ -110,7 +110,7 @@ Global instruction locations depend on the agent:
 - Codex: `~/.codex/AGENTS.md`
 - OpenCode: `~/.config/opencode/AGENTS.md`
 - Claude Code: `~/.claude/CLAUDE.md`
-- Grok Bot: `~/agent-data/AGENTS.md` (always-on principles; Grok bots also keep an `agents-md` skill projection under `~/agent-data/workflows`)
+- Grok Bot: `~/agent-data/AGENTS.md`
 
 SkillSync stores global instructions as named profiles. Each device selects its own profile, so devices can stay different or intentionally share one.
 
@@ -129,6 +129,14 @@ If Codex and OpenCode on that device should use the same profile, link the other
 ```bash
 skillsync instructions link ~/.codex/AGENTS.md
 ```
+
+On a Grok Bot computer, link the selected profile to its instruction file:
+
+```bash
+skillsync instructions link ~/agent-data/AGENTS.md
+```
+
+Grok Bot does not load this file automatically. It needs a separate always-apply skill under `~/agent-data/workflows` to use the instructions.
 
 Import another device’s different version under another name, or switch it to an existing profile:
 
