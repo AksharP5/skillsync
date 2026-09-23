@@ -372,6 +372,7 @@ async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
     { name: 'claude', path: '~/.claude/skills' },
     { name: 'codex', path: '~/.codex/skills' },
     { name: 'opencode', path: '~/.config/opencode/skills' },
+    { name: 'grok', path: '~/agent-data/workflows' },
   ];
   const detected = [];
   for (const candidate of candidates) {
@@ -2705,7 +2706,7 @@ async function targetsScreen(config) {
   }));
   if (!choice || choice === 'back') return;
   if (choice === 'add') {
-    const name = await input({ message: 'Target name (codex, claude, hermes, custom):' });
+    const name = await input({ message: 'Target name (codex, claude, hermes, grok, custom):' });
     const targetPath = await input({ message: 'Target skill directory path:' });
     const scanPath = await input({ message: 'Optional scan path for existing skills:', default: '' });
     const autoAdopt = await confirm({

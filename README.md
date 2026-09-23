@@ -274,6 +274,7 @@ Or create a target with adoption disabled from the start:
 
 ```bash
 skillsync target add codex ~/.codex/skills --no-auto-adopt
+skillsync target add grok ~/agent-data/workflows
 ```
 
 If a different skill with the same name is already in the vault, SkillSync leaves both copies untouched and reports the conflict.
