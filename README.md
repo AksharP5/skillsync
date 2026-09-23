@@ -110,6 +110,7 @@ Global instruction locations depend on the agent:
 - Codex: `~/.codex/AGENTS.md`
 - OpenCode: `~/.config/opencode/AGENTS.md`
 - Claude Code: `~/.claude/CLAUDE.md`
+- Grok Bot: `~/agent-data/AGENTS.md` (always-on principles; Grok bots also keep an `agents-md` skill projection under `~/agent-data/workflows`)
 
 SkillSync stores global instructions as named profiles. Each device selects its own profile, so devices can stay different or intentionally share one.
 
