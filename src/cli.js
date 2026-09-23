@@ -2706,7 +2706,7 @@ async function targetsScreen(config) {
   }));
   if (!choice || choice === 'back') return;
   if (choice === 'add') {
-    const name = await input({ message: 'Target name (codex, claude, hermes, grok, custom):' });
+    const name = await input({ message: 'Target name (codex, claude, opencode, hermes, grok, custom):' });
     const targetPath = await input({ message: 'Target skill directory path:' });
     const scanPath = await input({ message: 'Optional scan path for existing skills:', default: '' });
     const autoAdopt = await confirm({
