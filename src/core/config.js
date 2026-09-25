@@ -1,8 +1,8 @@
-import { lstat, mkdir } from 'node:fs/promises';
+import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { exists, expandHome, readJson, writeJson } from './fs.js';
+import { expandHome, readJson, writeJson } from './fs.js';
 import { defaultDeviceId } from './device.js';
 
 export function defaultConfigPath() {
@@ -13,14 +13,30 @@ export function defaultRepoPath() {
   return path.join(homedir(), '.skillsync', 'repo');
 }
 
-export async function loadConfig(configPath = defaultConfigPath()) {
-  let config = null;
-  try {
-    const info = await lstat(configPath).catch((error) => {
+async function configFileExists(configPath) {
+  const filePath = path.resolve(configPath);
+  let candidate = filePath;
+  while (true) {
+    const info = await lstat(candidate).catch((error) => {
       if (error.code === 'ENOENT') return null;
       throw error;
     });
-    if (info) config = await readJson(configPath);
+    if (info) {
+      if (candidate === filePath) return true;
+      // Missing descendants use defaults only when their existing ancestor resolves.
+      await realpath(candidate);
+      return false;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return false;
+    candidate = parent;
+  }
+}
+
+export async function loadConfig(configPath = defaultConfigPath()) {
+  let config = null;
+  try {
+    if (await configFileExists(configPath)) config = await readJson(configPath);
   } catch (error) {
     throw new Error(`Cannot read SkillSync config at ${configPath}: ${error.message}`, { cause: error });
   }
@@ -38,7 +54,7 @@ export async function saveConfig(config, configPath = defaultConfigPath()) {
 }
 
 export async function isConfigured(configPath = defaultConfigPath()) {
-  if (!await exists(configPath)) return false;
+  if (!await configFileExists(configPath)) return false;
   const config = await loadConfig(configPath);
   return Boolean(config.repoPath);
 }

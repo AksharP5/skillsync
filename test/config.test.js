@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -10,7 +10,7 @@ import { defaultDeviceId } from '../src/core/device.js';
 test('missing configuration keeps the default vault and device', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-config-test-'));
 
-  assert.deepEqual(await loadConfig(path.join(root, 'config.json')), {
+  assert.deepEqual(await loadConfig(path.join(root, 'missing', 'skillsync', 'config.json')), {
     version: 1,
     repo: null,
     repoPath: defaultRepoPath(),
@@ -47,4 +47,26 @@ test('configuration symlinks load their target and fail when it is missing', asy
   const config = { version: 1, repo: 'test/skills', repoPath: path.join(root, 'vault'), deviceId: 'laptop' };
   await writeFile(target, JSON.stringify(config));
   assert.deepEqual(await loadConfig(configPath), config);
+});
+
+test('missing configuration under a directory symlink requires a readable target', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-config-test-'));
+  const target = path.join(root, 'dotfiles');
+  const alias = path.join(root, 'skillsync');
+  const configPath = path.join(alias, 'nested', 'config.json');
+  await symlink(target, alias, 'dir');
+
+  await assert.rejects(() => loadConfig(configPath), (error) => {
+    assert.ok(error.message.includes(configPath));
+    assert.match(error.message, /Cannot read SkillSync config.*ENOENT/);
+    return true;
+  });
+
+  await mkdir(target);
+  assert.deepEqual(await loadConfig(configPath), {
+    version: 1,
+    repo: null,
+    repoPath: defaultRepoPath(),
+    deviceId: defaultDeviceId(),
+  });
 });

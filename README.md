@@ -63,7 +63,7 @@ skillsync service install
 
 Repeat the install, existing-vault setup, and service steps on each device.
 
-SkillSync stores local configuration in `~/.config/skillsync/config.json`. Read and parse errors, including broken config symlinks, are reported with the file path instead of silently switching vaults. Repair the file before retrying; an absent config file still uses the default vault at `~/.skillsync/repo`.
+SkillSync stores local configuration in `~/.config/skillsync/config.json`. Read and parse errors, including broken symlinks in the config path, are reported instead of silently switching vaults. Repair the file or symlink before retrying; an absent config file still uses the default vault at `~/.skillsync/repo`.
 
 ## Interactive UI
 
