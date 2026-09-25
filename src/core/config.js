@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { lstat, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -14,9 +14,16 @@ export function defaultRepoPath() {
 }
 
 export async function loadConfig(configPath = defaultConfigPath()) {
-  const config = await readJson(configPath, null).catch((error) => {
+  let config = null;
+  try {
+    const info = await lstat(configPath).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (info) config = await readJson(configPath);
+  } catch (error) {
     throw new Error(`Cannot read SkillSync config at ${configPath}: ${error.message}`, { cause: error });
-  });
+  }
   return {
     version: 1,
     repo: config?.repo || null,
