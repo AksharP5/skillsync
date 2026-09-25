@@ -14,7 +14,9 @@ export function defaultRepoPath() {
 }
 
 export async function loadConfig(configPath = defaultConfigPath()) {
-  const config = await readJson(configPath, null).catch(() => null);
+  const config = await readJson(configPath, null).catch((error) => {
+    throw new Error(`Cannot read SkillSync config at ${configPath}: ${error.message}`, { cause: error });
+  });
   return {
     version: 1,
     repo: config?.repo || null,

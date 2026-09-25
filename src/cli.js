@@ -215,8 +215,8 @@ function promptPageSize(itemCount, { min = 8, max = 28, reservedRows = 6 } = {})
   return Math.max(1, Math.min(itemCount, max, availableRows));
 }
 
-async function configured({ initialize = true } = {}) {
-  const config = await loadConfig();
+async function configured({ initialize = true, config } = {}) {
+  config ??= await loadConfig();
   if (!config.repoPath || !await exists(config.repoPath)) {
     throw new Error('SkillSync is not set up. Run: skillsync setup');
   }
@@ -1910,9 +1910,9 @@ async function daemon(rest) {
 
 async function runUi() {
   if (!process.stdin.isTTY) return listSkills();
-  let config;
+  let config = await loadConfig();
   try {
-    config = await configured();
+    config = await configured({ config });
   } catch {
     const shouldSetup = await confirm({ message: 'SkillSync is not set up. Run setup now?', default: true });
     if (!shouldSetup) return;

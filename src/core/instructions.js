@@ -366,7 +366,7 @@ async function createOwnedInstructionsSymlink(source, destination) {
 }
 
 async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
-  const unmanaged = [];
+  const unmanaged = new Map();
   for (const targetPath of targetPaths) {
     const destination = resolvedDestination(targetPath);
     const info = await pathInfo(destination);
@@ -374,13 +374,13 @@ async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
     if (info.isDirectory()) {
       throw new Error(`Global instructions destination is a directory: ${destination}`);
     }
-    unmanaged.push({ destination });
+    unmanaged.set(await canonicalDestination(destination), destination);
   }
   const backups = [];
-  for (const entry of unmanaged) {
+  for (const destination of unmanaged.values()) {
     backups.push({
-      destination: entry.destination,
-      backup: await backupPath(entry.destination),
+      destination,
+      backup: await backupPath(destination),
     });
   }
   return backups;
@@ -429,12 +429,10 @@ export async function selectGlobalInstructionsProfile({
         ? device.instructions.agents.paths
         : [DEFAULT_GLOBAL_INSTRUCTIONS_PATH],
   )];
-  for (const targetPath of paths) {
-    if (resolvedDestination(targetPath) === path.resolve(selected.source)) {
-      throw new Error('Global instructions destination cannot be its vault profile file');
-    }
-  }
   const destinations = new Set(await Promise.all(paths.map(canonicalDestination)));
+  if (destinations.has(await canonicalDestination(selected.source))) {
+    throw new Error('Global instructions destination cannot be its vault profile file');
+  }
   const removed = [];
   for (const targetPath of device.instructions.agents?.paths || []) {
     if (destinations.has(await canonicalDestination(targetPath))) continue;

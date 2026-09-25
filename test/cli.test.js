@@ -97,6 +97,33 @@ exit 1
   };
 }
 
+for (const interactive of [false, true]) {
+  test(`${interactive ? 'interactive menu' : 'status'} stops on invalid config without touching the default vault`, async () => {
+    const home = await tempDir();
+    const vault = path.join(home, '.skillsync', 'repo');
+    await writeConfig(home, vault);
+    const configPath = path.join(home, '.config', 'skillsync', 'config.json');
+    await writeFile(configPath, '{');
+    const args = interactive
+      ? ['--import', 'data:text/javascript,process.stdin.isTTY=true', path.resolve('src/cli.js')]
+      : [path.resolve('src/cli.js'), 'status'];
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, args, { env: cliEnv(home), timeout: 5000 }),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.ok(error.stderr.includes(configPath));
+        assert.match(error.stderr, /Cannot read SkillSync config/);
+        assert.doesNotMatch(error.stdout, /Run setup now/);
+        return true;
+      },
+    );
+    assert.equal(await readFile(configPath, 'utf8'), '{');
+    assert.equal(await exists(path.join(vault, 'registry.json')), false);
+    assert.equal(await exists(await gitPrivatePath(vault, 'skillsync')), false);
+  });
+}
+
 test('setup detects the Grok Bot target when its agent-data directory exists', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
