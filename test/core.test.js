@@ -1197,6 +1197,36 @@ test('remote instruction assignment waits for the target to report profile suppo
   assert.equal((await loadDevice(vault, 'remote')).instructions.agents.profile, 'shared');
 });
 
+test('instruction profile selection backs up an aliased local file only once', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const profile = globalInstructionsVaultPath(vault);
+  const directory = path.join(root, 'local');
+  const alias = path.join(root, 'alias');
+  const localFile = path.join(directory, 'AGENTS.md');
+  const aliasedFile = path.join(alias, 'AGENTS.md');
+  await mkdir(path.dirname(profile), { recursive: true });
+  await mkdir(directory);
+  await symlink(directory, alias, 'dir');
+  await writeFile(profile, '# Shared\n');
+  await writeFile(localFile, '# Local\n');
+
+  const result = await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    targetPaths: [localFile, aliasedFile],
+  });
+
+  assert.equal(result.backups.length, 1);
+  assert.equal(await readFile(result.backups[0].backup, 'utf8'), '# Local\n');
+  for (const destination of [localFile, aliasedFile]) {
+    assert.equal((await lstat(destination)).isSymbolicLink(), true);
+    assert.equal(await realpath(destination), await realpath(profile));
+    assert.equal(await readFile(destination, 'utf8'), '# Shared\n');
+  }
+});
+
 test('instruction profile selection validates every destination before moving local files', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -1221,16 +1251,21 @@ test('instruction profile selection validates every destination before moving lo
   assert.equal(await readFile(localFile, 'utf8'), '# Local\n');
   assert.equal(await readFile(profile, 'utf8'), '# Shared\n');
 
-  await assert.rejects(
-    () => selectGlobalInstructionsProfile({
-      vaultPath: vault,
-      deviceId: 'macbook',
-      profile: 'shared',
-      targetPaths: [profile],
-    }),
-    /cannot be its vault profile file/,
-  );
-  assert.equal(await readFile(profile, 'utf8'), '# Shared\n');
+  const profileAlias = path.join(root, 'profile-alias');
+  await symlink(path.dirname(profile), profileAlias, 'dir');
+  for (const destination of [profile, path.join(profileAlias, 'AGENTS.md')]) {
+    await assert.rejects(
+      () => selectGlobalInstructionsProfile({
+        vaultPath: vault,
+        deviceId: 'macbook',
+        profile: 'shared',
+        targetPaths: [localFile, destination],
+      }),
+      /cannot be its vault profile file/,
+    );
+    assert.equal(await readFile(profile, 'utf8'), '# Shared\n');
+    assert.equal(await readFile(localFile, 'utf8'), '# Local\n');
+  }
 });
 
 test('skill matrix distinguishes assigned, detected, and absent skills', () => {
