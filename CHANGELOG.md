@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/AksharP5/skillsync/compare/v0.12.2...v0.13.0) (2026-09-25)
+
+
+### Features
+
+* auto-detect Grok Bot skills target ([#70](https://github.com/AksharP5/skillsync/issues/70)) ([e3d53c1](https://github.com/AksharP5/skillsync/commit/e3d53c12f4e4188688e4b48d1add04de061adaca))
+* sync global AGENTS.md to Grok Bot ([#72](https://github.com/AksharP5/skillsync/issues/72)) ([dd24ae3](https://github.com/AksharP5/skillsync/commit/dd24ae30a972ba3cfc63eafb9d2abea8e88985f1))
+
+
+### Bug Fixes
+
+* preserve local files when changing sync targets ([#74](https://github.com/AksharP5/skillsync/issues/74)) ([3eb7296](https://github.com/AksharP5/skillsync/commit/3eb729646f39d2ba961be68da3c70120323c12e1))
+* stop config fallback and duplicate instruction backups ([#76](https://github.com/AksharP5/skillsync/issues/76)) ([7b5a19f](https://github.com/AksharP5/skillsync/commit/7b5a19ff2c921fdc10321d9bfe763e61b8e07c71))
+
 ## [0.12.2](https://github.com/AksharP5/skillsync/compare/v0.12.1...v0.12.2) (2026-09-10)
 
 
