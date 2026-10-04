@@ -1055,6 +1055,47 @@ test('Cursor rule repair recognizes a missing generated file through aliased par
   assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Shared\n$/);
 });
 
+for (const action of ['unlink', 'remote disable']) {
+  test(`Cursor ${action} preserves standalone instructions when the generated rule is missing`, async () => {
+    const root = await tempDir();
+    const vault = path.join(root, 'vault');
+    const source = path.join(root, 'AGENTS.md');
+    const codex = path.join(root, '.codex', 'AGENTS.md');
+    const cursor = path.join(root, '.cursor', 'rules', 'skillsync.mdc');
+    await writeFile(source, '# Original\n');
+    await importGlobalInstructionsProfile({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      profile: 'shared',
+      sourcePath: source,
+      targetPaths: [codex, cursor],
+    });
+    const profile = globalInstructionsVaultPath(vault);
+    await writeFile(profile, '# Latest instructions\n');
+    await unlink(await realpath(cursor));
+
+    if (action === 'unlink') {
+      await removeGlobalInstructionsPath({ vaultPath: vault, deviceId: 'macbook', targetPath: cursor });
+      assert.equal((await lstat(codex)).isSymbolicLink(), true);
+      assert.equal(await readFile(codex, 'utf8'), '# Latest instructions\n');
+    }
+    if (action === 'remote disable') {
+      await unlink(codex);
+      await writeFile(codex, '# Unmanaged local instructions\n');
+      await setGlobalInstructionsProfile({ vaultPath: vault, deviceId: 'macbook', profile: null });
+      const applied = await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+      assert.equal(applied.enabled, false);
+      assert.deepEqual(applied.prunedProfiles, ['shared']);
+      assert.equal(await readFile(codex, 'utf8'), '# Unmanaged local instructions\n');
+    }
+
+    assert.equal((await lstat(cursor)).isFile(), true);
+    assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Latest instructions\n$/);
+    const device = await loadLocalDevice(vault, 'macbook');
+    assert.equal(device.instructions.agents.applied_profile, action === 'unlink' ? 'shared' : null);
+  });
+}
+
 for (const localRule of [null, 'matching', 'different']) {
   test(`first-time Cursor enable handles a ${localRule || 'missing'} local rule without a generated cache`, async () => {
     const root = await tempDir();
