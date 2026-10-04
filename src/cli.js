@@ -47,6 +47,7 @@ import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push,
 import { generateGroups } from './core/groups.js';
 import {
   DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
+  DEFAULT_CURSOR_RULE_PATH,
   DEFAULT_GLOBAL_INSTRUCTIONS_PATH,
   addGlobalInstructionsPath,
   assignGlobalInstructionsProfile,
@@ -58,6 +59,7 @@ import {
   globalInstructionProviderPaths,
   importGlobalInstructionsProfile,
   inspectGlobalInstructions,
+  isCursorRulePath,
   listGlobalInstructionProfiles,
   removeGlobalInstructionsPath,
   selectGlobalInstructionsProfile,
@@ -1147,12 +1149,18 @@ async function instructionsCommand(rest = []) {
       && !inspected.destinationOwned
       && !inspected.sameContents
       && process.stdin.isTTY) {
+      const cursorRule = isCursorRulePath(targetPath);
       strategy = await promptWithEscape(select({
-        message: 'Your local and vault AGENTS.md files differ. Which should become canonical?',
+        message: cursorRule
+          ? 'Your local Cursor rule differs from the selected profile. Use the profile?'
+          : 'Your local and vault AGENTS.md files differ. Which should become canonical?',
         loop: false,
         choices: [
-          { name: 'Use this device’s local AGENTS.md', value: 'from-local' },
-          { name: 'Use the vault AGENTS.md on this device', value: 'use-vault' },
+          ...(cursorRule ? [] : [{ name: 'Use this device’s local AGENTS.md', value: 'from-local' }]),
+          {
+            name: cursorRule ? 'Use the profile and preserve a local backup' : 'Use the vault AGENTS.md on this device',
+            value: 'use-vault',
+          },
           { name: 'Cancel', value: 'cancel' },
         ],
       }), 'cancel');
@@ -2872,11 +2880,17 @@ async function instructionProfileSettingsScreen(config, device) {
   if (choice === 'link') {
     const hasClaude = await deviceHasClaude();
     const claudeLinked = (agents.paths || []).includes(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
+    const cursorLinked = (agents.paths || []).includes(DEFAULT_CURSOR_RULE_PATH);
+    let suggestedPath = '~/.config/opencode/AGENTS.md';
+    if (await commandExists('agent') && !cursorLinked) {
+      suggestedPath = DEFAULT_CURSOR_RULE_PATH;
+    }
+    if (hasClaude && !claudeLinked) {
+      suggestedPath = DEFAULT_CLAUDE_INSTRUCTIONS_PATH;
+    }
     const targetPath = await input({
       message: 'Additional global instructions path',
-      default: hasClaude && !claudeLinked
-        ? DEFAULT_CLAUDE_INSTRUCTIONS_PATH
-        : '~/.config/opencode/AGENTS.md',
+      default: suggestedPath,
     });
     await instructionsCommand(['link', targetPath]);
     return;

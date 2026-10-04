@@ -639,6 +639,37 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
   assert.equal(await readFile(grok, 'utf8'), '# Shared instructions\n');
 });
 
+test('Cursor CLI instructions enable from an existing profile and remain stable during status checks', async () => {
+  const home = await tempDir();
+  const vault = path.join(home, '.skillsync', 'repo');
+  const codex = path.join(home, '.codex', 'AGENTS.md');
+  const cursor = path.join(home, '.cursor', 'rules', 'skillsync.mdc');
+  await mkdir(vault, { recursive: true });
+  await mkdir(path.dirname(codex), { recursive: true });
+  await writeFile(codex, '# Shared instructions\n');
+  await writeConfig(home, vault, 'macbook');
+  const instructions = (args) => execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'), 'instructions', ...args,
+  ], { cwd: path.resolve('.'), env: cliEnv(home) });
+
+  await instructions(['import', '--name', 'macbook', '--from', codex]);
+  const enabled = await instructions([
+    'enable', '--profile', 'macbook', '--path', '~/.cursor/rules/skillsync.mdc',
+  ]);
+  assert.match(enabled.stdout, /Global AGENTS\.md profile enabled: macbook/);
+  assert.equal((await lstat(cursor)).isSymbolicLink(), true);
+  assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Shared instructions\n$/);
+
+  const before = (await git(['rev-parse', 'HEAD'], vault)).stdout;
+  const status = await instructions(['status']);
+  assert.match(status.stdout, /cursor: ~\/\.cursor\/rules\/skillsync\.mdc \(profile macbook\)/);
+  assert.equal((await git(['rev-parse', 'HEAD'], vault)).stdout, before);
+
+  await instructions(['disable']);
+  assert.equal((await lstat(cursor)).isFile(), true);
+  assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Shared instructions\n$/);
+});
+
 test('explicit OpenCode import manages that file before linking an existing Codex path', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');

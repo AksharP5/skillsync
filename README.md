@@ -110,6 +110,7 @@ Remote changes apply automatically when those devices next sync. If a skill is r
 Global instruction locations depend on the agent:
 
 - Codex: `~/.codex/AGENTS.md`
+- Cursor CLI: `~/.cursor/rules/skillsync.mdc`
 - OpenCode: `~/.config/opencode/AGENTS.md`
 - Claude Code: `~/.claude/CLAUDE.md`
 - Grok Bot: `~/agent-data/AGENTS.md`
@@ -131,6 +132,18 @@ If Codex and OpenCode on that device should use the same profile, link the other
 ```bash
 skillsync instructions link ~/.codex/AGENTS.md
 ```
+
+For Cursor CLI, link an always-apply `.mdc` rule to the same profile:
+
+```bash
+skillsync instructions link ~/.cursor/rules/skillsync.mdc
+```
+
+SkillSync generates this rule from the selected `AGENTS.md` profile. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile. Unlinking or disabling leaves a standalone Cursor rule with the latest profile content.
+
+Cursor CLI discovers rules in parent directories, so this home-directory rule applies to projects beneath your home. For projects outside your home directory, use a project-level Cursor rule or `AGENTS.md`. `~/.cursor/AGENTS.md` is not a global instruction location.
+
+Cursor CLI can also read skills projected to `~/.agents/skills` or `~/.codex/skills`; a separate Cursor skill target is unnecessary. See [Cursor's skill locations](https://cursor.com/docs/skills).
 
 On a Grok Bot computer, link the selected profile to its instruction file:
 
