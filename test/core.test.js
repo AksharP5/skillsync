@@ -1029,8 +1029,10 @@ test('Cursor rule stays linked to the selected AGENTS.md profile as it changes',
   );
 });
 
-test('Cursor rule repair recognizes a missing generated file through a vault directory alias', async () => {
-  const root = await tempDir();
+test('Cursor rule repair recognizes a missing generated file through aliased parent and vault directories', async () => {
+  const physicalRoot = await tempDir();
+  const root = path.join(await tempDir(), 'root');
+  await symlink(physicalRoot, root, 'dir');
   const physicalVault = path.join(root, 'physical-vault');
   const vault = path.join(root, 'vault');
   const source = path.join(root, 'AGENTS.md');

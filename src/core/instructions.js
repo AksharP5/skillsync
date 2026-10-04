@@ -178,10 +178,13 @@ async function ownedProfileAt(destination, vaultPath) {
   if (resolved) {
     return profileFromVaultPath(canonicalVault || vaultPath, resolved);
   }
-  const link = await readlink(destination);
+  const [link, parent] = await Promise.all([
+    readlink(destination),
+    realpath(path.dirname(destination)),
+  ]);
   return profileFromVaultPath(
     canonicalVault || vaultPath,
-    path.resolve(path.dirname(destination), link),
+    path.resolve(parent, link),
   );
 }
 
