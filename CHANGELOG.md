@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/AksharP5/skillsync/compare/v0.13.0...v0.14.0) (2026-10-04)
+
+
+### Features
+
+* share instruction profiles with Cursor CLI ([519a9cc](https://github.com/AksharP5/skillsync/commit/519a9ccec002f9e3ffaba6eee304380e324804ea))
+
+
+### Bug Fixes
+
+* preserve instructions when recovering broken links ([b1e0586](https://github.com/AksharP5/skillsync/commit/b1e058633669c9daf34584189cc00a823eed28a5))
+
 ## [0.13.0](https://github.com/AksharP5/skillsync/compare/v0.12.2...v0.13.0) (2026-10-04)
 
 
