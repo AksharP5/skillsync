@@ -163,6 +163,8 @@ Editing a shared profile updates every device assigned to that profile. View pro
 
 After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies. Replacing managed paths with an explicit `--path` or `--from` also leaves the old linked files as standalone copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
 
+Unlinking a path leaves a standalone local copy unless another configured path reaches the same file through a directory symlink. In that case, the remaining path stays linked to the profile.
+
 ## Sync Codex plugins
 
 Codex installs plugins per environment. SkillSync stores the selected plugin identifiers in a named profile, assigns that profile per device, and additively installs anything missing during sync.
