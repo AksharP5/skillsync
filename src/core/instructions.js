@@ -568,16 +568,18 @@ export async function removeGlobalInstructionsPath({
   if (agents.paths.length === 1) {
     throw new Error('Cannot unlink the only global instructions path; disable the profile instead');
   }
+  const paths = agents.paths.filter((candidate) => candidate !== targetPath);
   const destination = resolvedDestination(targetPath);
+  const remainingDestinations = new Set(await Promise.all(paths.map(canonicalDestination)));
+  const stillLinked = remainingDestinations.has(await canonicalDestination(targetPath));
   const applied = agents?.applied_profile;
-  if (applied && await isSelectedProfileLink(destination, vaultPath, applied)) {
+  if (!stillLinked && applied && await isSelectedProfileLink(destination, vaultPath, applied)) {
     const source = (await requireProfile(vaultPath, applied)).source;
     await removePath(destination);
     await writeFile(destination, await readFile(source));
-  } else if (await ownedProfileAt(destination, vaultPath)) {
+  } else if (!stillLinked && await ownedProfileAt(destination, vaultPath)) {
     throw new Error(`Refusing to unlink a different global instructions profile: ${destination}`);
   }
-  const paths = agents.paths.filter((candidate) => candidate !== targetPath);
   await configureGlobalInstructions({
     vaultPath,
     deviceId,

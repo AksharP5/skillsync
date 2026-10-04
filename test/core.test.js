@@ -63,6 +63,7 @@ import {
   importGlobalInstructionsProfile,
   listGlobalInstructionProfiles,
   reconcileGlobalInstructionProviders,
+  removeGlobalInstructionsPath,
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import {
@@ -1225,6 +1226,47 @@ test('instruction profile selection backs up an aliased local file only once', a
     assert.equal(await realpath(destination), await realpath(profile));
     assert.equal(await readFile(destination, 'utf8'), '# Shared\n');
   }
+});
+
+test('unlinking an instruction path keeps its remaining directory alias linked', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const profile = globalInstructionsVaultPath(vault);
+  const directory = path.join(root, 'local');
+  const alias = path.join(root, 'alias');
+  const localFile = path.join(directory, 'AGENTS.md');
+  const aliasedFile = path.join(alias, 'AGENTS.md');
+  const otherFile = path.join(root, 'other', 'AGENTS.md');
+  await mkdir(path.dirname(profile), { recursive: true });
+  await mkdir(directory);
+  await symlink(directory, alias, 'dir');
+  await writeFile(profile, '# Shared\n');
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    targetPaths: [localFile, aliasedFile, otherFile],
+  });
+
+  const result = await removeGlobalInstructionsPath({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    targetPath: aliasedFile,
+  });
+  assert.deepEqual(result.paths, [localFile, otherFile]);
+  assert.equal(await realpath(localFile), await realpath(profile));
+  await writeFile(profile, '# Updated\n');
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal(await readFile(localFile, 'utf8'), '# Updated\n');
+
+  await removeGlobalInstructionsPath({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    targetPath: localFile,
+  });
+  assert.equal((await lstat(localFile)).isSymbolicLink(), false);
+  assert.equal(await readFile(localFile, 'utf8'), '# Updated\n');
+  assert.equal(await realpath(otherFile), await realpath(profile));
 });
 
 test('instruction profile selection validates every destination before moving local files', async () => {
