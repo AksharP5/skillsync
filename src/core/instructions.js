@@ -30,6 +30,7 @@ import { commandExists } from './git.js';
 
 export const DEFAULT_GLOBAL_INSTRUCTIONS_PATH = '~/.codex/AGENTS.md';
 export const DEFAULT_CLAUDE_INSTRUCTIONS_PATH = '~/.claude/CLAUDE.md';
+export const DEFAULT_CURSOR_RULE_PATH = '~/.cursor/rules/skillsync.mdc';
 export const LEGACY_GLOBAL_INSTRUCTIONS_PROFILE = 'shared';
 
 export function globalInstructionProviderPaths(
@@ -41,6 +42,7 @@ export function globalInstructionProviderPaths(
     : '~/.config/opencode/AGENTS.md';
   const providers = [
     { provider: 'codex', path: DEFAULT_GLOBAL_INSTRUCTIONS_PATH },
+    { provider: 'cursor', path: DEFAULT_CURSOR_RULE_PATH },
     { provider: 'opencode', path: opencode },
     { provider: 'grok', path: '~/agent-data/AGENTS.md' },
   ];
@@ -63,6 +65,42 @@ export function globalInstructionsVaultPath(
     return path.join(vaultPath, 'globals', 'AGENTS.md');
   }
   return path.join(vaultPath, 'globals', 'agents', `${normalized}.md`);
+}
+
+function cursorRuleVaultPath(vaultPath, profile) {
+  return path.join(vaultPath, 'globals', 'cursor', `${profileId(profile)}.mdc`);
+}
+
+export function isCursorRulePath(targetPath) {
+  const destination = resolvedDestination(targetPath);
+  const rules = path.dirname(destination);
+  return path.basename(destination) === 'skillsync.mdc'
+    && path.basename(rules) === 'rules'
+    && path.basename(path.dirname(rules)) === '.cursor';
+}
+
+function projectedInstructionsSource(vaultPath, profile, targetPath) {
+  return isCursorRulePath(targetPath)
+    ? cursorRuleVaultPath(vaultPath, profile)
+    : globalInstructionsVaultPath(vaultPath, profile);
+}
+
+async function updateCursorRule(vaultPath, profile) {
+  const destination = cursorRuleVaultPath(vaultPath, profile);
+  const content = await projectedInstructionsContent(vaultPath, profile, DEFAULT_CURSOR_RULE_PATH);
+  const current = await readOptionalFile(destination);
+  if (current?.equals(content)) return;
+  await ensureDir(path.dirname(destination));
+  await writeFile(destination, content);
+}
+
+async function projectedInstructionsContent(vaultPath, profile, targetPath) {
+  const content = await readFile(globalInstructionsVaultPath(vaultPath, profile));
+  if (!isCursorRulePath(targetPath)) return content;
+  return Buffer.concat([
+    Buffer.from('---\ndescription: Shared SkillSync instructions\nalwaysApply: true\n---\n'),
+    content,
+  ]);
 }
 
 export async function globalInstructionsHash(filePath) {
@@ -122,6 +160,10 @@ function profileFromVaultPath(vaultPath, source) {
   if (resolved === path.resolve(globalInstructionsVaultPath(vaultPath))) {
     return LEGACY_GLOBAL_INSTRUCTIONS_PROFILE;
   }
+  const cursorDirectory = path.resolve(vaultPath, 'globals', 'cursor');
+  if (path.dirname(resolved) === cursorDirectory && path.extname(resolved) === '.mdc') {
+    return profileId(path.basename(resolved, '.mdc'));
+  }
   const directory = path.resolve(vaultPath, 'globals', 'agents');
   if (path.dirname(resolved) !== directory || path.extname(resolved) !== '.md') return null;
   const profile = path.basename(resolved, '.md');
@@ -132,20 +174,23 @@ async function ownedProfileAt(destination, vaultPath) {
   const info = await pathInfo(destination);
   if (!info?.isSymbolicLink()) return null;
   const resolved = await optionalRealpath(destination);
+  const canonicalVault = await optionalRealpath(vaultPath);
   if (resolved) {
-    const canonicalVault = await optionalRealpath(vaultPath);
     return profileFromVaultPath(canonicalVault || vaultPath, resolved);
   }
-  const link = await readlink(destination);
+  const [link, parent] = await Promise.all([
+    readlink(destination),
+    realpath(path.dirname(destination)),
+  ]);
   return profileFromVaultPath(
-    vaultPath,
-    path.resolve(path.dirname(destination), link),
+    canonicalVault || vaultPath,
+    path.resolve(parent, link),
   );
 }
 
 async function isSelectedProfileLink(destination, vaultPath, profile) {
   if (await ownedProfileAt(destination, vaultPath) !== profile) return false;
-  const source = globalInstructionsVaultPath(vaultPath, profile);
+  const source = projectedInstructionsSource(vaultPath, profile, destination);
   const resolved = await Promise.all([
     optionalRealpath(destination),
     optionalRealpath(source),
@@ -308,6 +353,7 @@ export async function sweepUnusedGlobalInstructionProfiles(vaultPath) {
   const unused = await listUnusedGlobalInstructionProfiles(vaultPath);
   for (const profile of unused) {
     await removePath(profile.path);
+    await removePath(cursorRuleVaultPath(vaultPath, profile.id));
   }
   return unused.map((profile) => profile.id);
 }
@@ -323,6 +369,10 @@ export async function inspectGlobalInstructions({
     pathInfo(source),
     pathInfo(destination),
   ]);
+  const [content, localContent] = await Promise.all([
+    sourceInfo?.isFile() ? projectedInstructionsContent(vaultPath, profile, targetPath) : null,
+    destinationInfo ? readOptionalFile(destination) : null,
+  ]);
   return {
     profile,
     source,
@@ -331,9 +381,7 @@ export async function inspectGlobalInstructions({
     destinationExists: Boolean(destinationInfo),
     destinationOwned: await isSelectedProfileLink(destination, vaultPath, profile),
     destinationProfile: await ownedProfileAt(destination, vaultPath),
-    sameContents: sourceInfo?.isFile() && destinationInfo
-      ? await sameContents(source, destination)
-      : false,
+    sameContents: Boolean(content && localContent && content.equals(localContent)),
   };
 }
 
@@ -430,15 +478,17 @@ export async function selectGlobalInstructionsProfile({
         : [DEFAULT_GLOBAL_INSTRUCTIONS_PATH],
   )];
   const destinations = new Set(await Promise.all(paths.map(canonicalDestination)));
-  if (destinations.has(await canonicalDestination(selected.source))) {
+  if (destinations.has(await canonicalDestination(selected.source))
+    || destinations.has(await canonicalDestination(cursorRuleVaultPath(vaultPath, selected.profile)))) {
     throw new Error('Global instructions destination cannot be its vault profile file');
   }
   const removed = [];
   for (const targetPath of device.instructions.agents?.paths || []) {
     if (destinations.has(await canonicalDestination(targetPath))) continue;
     const destination = resolvedDestination(targetPath);
-    if (!await ownedProfileAt(destination, vaultPath)) continue;
-    removed.push({ destination, content: await readFile(destination) });
+    const owned = await ownedProfileAt(destination, vaultPath);
+    if (!owned) continue;
+    removed.push({ destination, content: await projectedInstructionsContent(vaultPath, owned, targetPath) });
   }
   const backups = await preserveUnmanagedDestinations(vaultPath, paths);
   for (const { destination, content } of removed) {
@@ -472,6 +522,9 @@ export async function importGlobalInstructionsProfile({
   targetPaths,
   separate = false,
 }) {
+  if (isCursorRulePath(sourcePath)) {
+    throw new Error('Import an AGENTS.md file, not the generated Cursor rule');
+  }
   const source = resolvedDestination(sourcePath);
   if (!(await pathInfo(source))) {
     throw new Error(`Cannot import missing local instructions: ${source}`);
@@ -574,9 +627,10 @@ export async function removeGlobalInstructionsPath({
   const stillLinked = remainingDestinations.has(await canonicalDestination(targetPath));
   const applied = agents?.applied_profile;
   if (!stillLinked && applied && await isSelectedProfileLink(destination, vaultPath, applied)) {
-    const source = (await requireProfile(vaultPath, applied)).source;
+    await requireProfile(vaultPath, applied);
+    const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
     await removePath(destination);
-    await writeFile(destination, await readFile(source));
+    await writeFile(destination, content);
   } else if (!stillLinked && await ownedProfileAt(destination, vaultPath)) {
     throw new Error(`Refusing to unlink a different global instructions profile: ${destination}`);
   }
@@ -623,13 +677,14 @@ export async function applyGlobalInstructions({
   if (!selected) {
     const applied = agents.applied_profile;
     if (applied) {
-      const source = (await requireProfile(vaultPath, applied)).source;
+      await requireProfile(vaultPath, applied);
       for (const targetPath of paths) {
         const destination = resolvedDestination(targetPath);
         if (!await isSelectedProfileLink(destination, vaultPath, applied)) continue;
+        const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
         await removePath(destination);
         await ensureDir(path.dirname(destination));
-        await writeFile(destination, await readFile(source));
+        await writeFile(destination, content);
       }
     }
     await configureGlobalInstructions({
@@ -661,9 +716,15 @@ export async function applyGlobalInstructions({
       replace: Boolean(destinationInfo),
     });
   }
+  if (paths.some(isCursorRulePath)) {
+    await updateCursorRule(vaultPath, selected);
+  }
   for (const { destination, replace } of updates.values()) {
     if (replace) await removePath(destination);
-    await createOwnedInstructionsSymlink(source, destination);
+    await createOwnedInstructionsSymlink(
+      projectedInstructionsSource(vaultPath, selected, destination),
+      destination,
+    );
   }
   await configureGlobalInstructions({
     vaultPath,
@@ -719,6 +780,9 @@ export async function enableGlobalInstructions({
     } else if (inspected.destinationExists
       && !inspected.destinationOwned
       && !inspected.sameContents) {
+      if (isCursorRulePath(targetPath)) {
+        throw new Error('Local Cursor rule and selected profile differ. Choose --use-vault to preserve the local rule and link the profile.');
+      }
       throw new Error('Local and selected AGENTS.md profile differ. Choose --from-local or --use-vault.');
     } else {
       strategy = 'use-vault';

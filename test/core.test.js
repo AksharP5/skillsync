@@ -61,6 +61,7 @@ import {
   globalInstructionsHash,
   globalInstructionsVaultPath,
   importGlobalInstructionsProfile,
+  inspectGlobalInstructions,
   listGlobalInstructionProfiles,
   reconcileGlobalInstructionProviders,
   removeGlobalInstructionsPath,
@@ -971,6 +972,169 @@ test('one device profile can safely project to both Codex and OpenCode global pa
   assert.equal(await readFile(opencode, 'utf8'), '# Device profile\n');
   const device = await loadLocalDevice(vault, 'macbook');
   assert.deepEqual(device.instructions.agents.paths, [codex, opencode]);
+});
+
+test('Cursor rule stays linked to the selected AGENTS.md profile as it changes', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const source = path.join(root, 'source', 'AGENTS.md');
+  const codex = path.join(root, '.codex', 'AGENTS.md');
+  const cursor = path.join(root, '.cursor', 'rules', 'skillsync.mdc');
+  const cursorDirectory = path.join(root, 'dotfiles', '.cursor');
+  const aliasDirectory = path.join(root, 'alias', '.cursor');
+  const aliasedCursor = path.join(aliasDirectory, 'rules', 'skillsync.mdc');
+  await mkdir(path.dirname(source), { recursive: true });
+  await mkdir(path.join(cursorDirectory, 'rules'), { recursive: true });
+  await mkdir(path.dirname(aliasDirectory), { recursive: true });
+  await symlink(cursorDirectory, path.join(root, '.cursor'), 'dir');
+  await symlink(cursorDirectory, aliasDirectory, 'dir');
+  await writeFile(source, '# First version\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    sourcePath: source,
+    targetPaths: [codex, cursor, aliasedCursor],
+  });
+
+  const profile = globalInstructionsVaultPath(vault, 'shared');
+  assert.equal(await realpath(codex), await realpath(profile));
+  assert.equal((await lstat(cursor)).isSymbolicLink(), true);
+  assert.equal(await readFile(cursor, 'utf8'),
+    '---\ndescription: Shared SkillSync instructions\nalwaysApply: true\n---\n# First version\n');
+
+  await writeFile(profile, '# Updated version\n');
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.match(await readFile(cursor, 'utf8'), /# Updated version\n$/);
+  assert.equal((await inspectGlobalInstructions({
+    vaultPath: vault,
+    profile: 'shared',
+    targetPath: cursor,
+  })).destinationOwned, true);
+  await removeGlobalInstructionsPath({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    targetPath: aliasedCursor,
+  });
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal((await lstat(cursor)).isSymbolicLink(), true);
+  await assert.rejects(
+    () => importGlobalInstructionsProfile({
+      vaultPath: vault,
+      deviceId: 'other',
+      profile: 'other',
+      sourcePath: cursor,
+    }),
+    /Import an AGENTS.md file/,
+  );
+});
+
+test('Cursor rule repair recognizes a missing generated file through aliased parent and vault directories', async () => {
+  const physicalRoot = await tempDir();
+  const root = path.join(await tempDir(), 'root');
+  await symlink(physicalRoot, root, 'dir');
+  const physicalVault = path.join(root, 'physical-vault');
+  const vault = path.join(root, 'vault');
+  const source = path.join(root, 'AGENTS.md');
+  const cursor = path.join(root, '.cursor', 'rules', 'skillsync.mdc');
+  await mkdir(physicalVault);
+  await symlink(physicalVault, vault, 'dir');
+  await writeFile(source, '# Shared\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    sourcePath: source,
+    targetPaths: [cursor],
+  });
+  const generatedRule = await realpath(cursor);
+  await unlink(generatedRule);
+
+  await applyGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal(await realpath(cursor), generatedRule);
+  assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Shared\n$/);
+});
+
+for (const localRule of [null, 'matching', 'different']) {
+  test(`first-time Cursor enable handles a ${localRule || 'missing'} local rule without a generated cache`, async () => {
+    const root = await tempDir();
+    const vault = path.join(root, 'vault');
+    const profile = globalInstructionsVaultPath(vault);
+    const cursor = path.join(root, '.cursor', 'rules', 'skillsync.mdc');
+    const expected = '---\ndescription: Shared SkillSync instructions\nalwaysApply: true\n---\n# Shared\n';
+    const localContent = localRule === 'matching' ? expected : '# Local rule\n';
+    await mkdir(path.dirname(profile), { recursive: true });
+    await writeFile(profile, '# Shared\n');
+    if (localRule) {
+      await mkdir(path.dirname(cursor), { recursive: true });
+      await writeFile(cursor, localContent);
+    }
+
+    const inspected = await inspectGlobalInstructions({ vaultPath: vault, targetPath: cursor });
+    assert.equal(inspected.canonicalExists, true);
+    assert.equal(inspected.sameContents, localRule === 'matching');
+    if (localRule === 'different') {
+      await assert.rejects(
+        () => enableGlobalInstructions({ vaultPath: vault, deviceId: 'macbook', targetPath: cursor }),
+        /--use-vault/,
+      );
+      assert.equal(await readFile(cursor, 'utf8'), localContent);
+    }
+    const result = await enableGlobalInstructions({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      targetPath: cursor,
+      strategy: localRule === 'different' ? 'use-vault' : undefined,
+    });
+    assert.equal((await lstat(cursor)).isSymbolicLink(), true);
+    assert.equal(await readFile(cursor, 'utf8'), expected);
+    assert.equal(await readFile(profile, 'utf8'), '# Shared\n');
+    assert.equal(result.profile, 'shared');
+    if (localRule) assert.equal(await readFile(result.backup, 'utf8'), localContent);
+  });
+}
+
+test('Cursor rules preserve their format and latest profile content when switching, unlinking, and disabling', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const source = path.join(root, 'AGENTS.md');
+  const codex = path.join(root, '.codex', 'AGENTS.md');
+  const cursor = path.join(root, '.cursor', 'rules', 'skillsync.mdc');
+  await writeFile(source, '# Original\n');
+  await importGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'shared',
+    sourcePath: source,
+    targetPaths: [codex, cursor],
+  });
+  const originalRule = await realpath(cursor);
+  const alternate = globalInstructionsVaultPath(vault, 'alternate');
+  await mkdir(path.dirname(alternate), { recursive: true });
+  await writeFile(alternate, '# Alternate\n');
+  await selectGlobalInstructionsProfile({ vaultPath: vault, deviceId: 'macbook', profile: 'alternate' });
+  assert.equal(await readFile(codex, 'utf8'), '# Alternate\n');
+  assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Alternate\n$/);
+  await assert.rejects(() => lstat(originalRule), { code: 'ENOENT' });
+
+  await writeFile(alternate, '# Updated before unlink\n');
+  await removeGlobalInstructionsPath({ vaultPath: vault, deviceId: 'macbook', targetPath: cursor });
+  assert.equal((await lstat(cursor)).isFile(), true);
+  assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Updated before unlink\n$/);
+
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'macbook',
+    profile: 'alternate',
+    targetPaths: [codex, cursor],
+  });
+  const generatedRule = await realpath(cursor);
+  await writeFile(alternate, '# Updated before disable\n');
+  await disableGlobalInstructions({ vaultPath: vault, deviceId: 'macbook' });
+  assert.equal((await lstat(cursor)).isFile(), true);
+  assert.match(await readFile(cursor, 'utf8'), /alwaysApply: true\n---\n# Updated before disable\n$/);
+  assert.equal(await readFile(codex, 'utf8'), '# Updated before disable\n');
+  await assert.rejects(() => lstat(generatedRule), { code: 'ENOENT' });
 });
 
 test('global instruction links work through a symlinked config directory', async () => {
