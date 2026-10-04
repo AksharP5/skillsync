@@ -626,12 +626,13 @@ export async function removeGlobalInstructionsPath({
   const remainingDestinations = new Set(await Promise.all(paths.map(canonicalDestination)));
   const stillLinked = remainingDestinations.has(await canonicalDestination(targetPath));
   const applied = agents?.applied_profile;
-  if (!stillLinked && applied && await isSelectedProfileLink(destination, vaultPath, applied)) {
+  const owned = await ownedProfileAt(destination, vaultPath);
+  if (!stillLinked && applied && owned === applied) {
     await requireProfile(vaultPath, applied);
     const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
     await removePath(destination);
     await writeFile(destination, content);
-  } else if (!stillLinked && await ownedProfileAt(destination, vaultPath)) {
+  } else if (!stillLinked && owned) {
     throw new Error(`Refusing to unlink a different global instructions profile: ${destination}`);
   }
   await configureGlobalInstructions({
@@ -680,7 +681,7 @@ export async function applyGlobalInstructions({
       await requireProfile(vaultPath, applied);
       for (const targetPath of paths) {
         const destination = resolvedDestination(targetPath);
-        if (!await isSelectedProfileLink(destination, vaultPath, applied)) continue;
+        if (await ownedProfileAt(destination, vaultPath) !== applied) continue;
         const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
         await removePath(destination);
         await ensureDir(path.dirname(destination));

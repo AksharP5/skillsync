@@ -133,13 +133,21 @@ If Codex and OpenCode on that device should use the same profile, link the other
 skillsync instructions link ~/.codex/AGENTS.md
 ```
 
+If an editor replaces a managed link with a regular file, automatic sync leaves that file untouched. To preserve a backup and restore the selected profile, run:
+
+```bash
+skillsync instructions enable --profile laptop --path ~/.codex/AGENTS.md --use-vault
+```
+
 For Cursor CLI, link an always-apply `.mdc` rule to the same profile:
 
 ```bash
 skillsync instructions link ~/.cursor/rules/skillsync.mdc
 ```
 
-SkillSync generates this rule from the selected `AGENTS.md` profile. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile. Unlinking or disabling leaves a standalone Cursor rule with the latest profile content.
+SkillSync generates this rule from the selected `AGENTS.md` profile. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile.
+
+Unlinking or disabling leaves a standalone Cursor rule with the latest profile content, even if the generated file is missing. To recover a replaced Cursor link, use the `--use-vault` command above with `~/.cursor/rules/skillsync.mdc` as the path.
 
 Cursor CLI discovers rules in parent directories, so this home-directory rule applies to projects beneath your home. For projects outside your home directory, use a project-level Cursor rule or `AGENTS.md`. `~/.cursor/AGENTS.md` is not a global instruction location.
 

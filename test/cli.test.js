@@ -11,6 +11,7 @@ import {
   readlink,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -638,6 +639,44 @@ test('instructions enable adopts the global AGENTS.md and disable leaves a local
   assert.equal((await lstat(grok)).isFile(), true);
   assert.equal(await readFile(grok, 'utf8'), '# Shared instructions\n');
 });
+
+for (const provider of ['codex', 'cursor']) {
+  test(`instructions --use-vault recovers a replaced ${provider} link while automatic sync preserves the replacement`, async () => {
+    const home = await tempDir();
+    const vault = path.join(home, '.skillsync', 'repo');
+    const source = path.join(home, 'AGENTS.md');
+    const destination = provider === 'cursor'
+      ? path.join(home, '.cursor', 'rules', 'skillsync.mdc')
+      : path.join(home, '.codex', 'AGENTS.md');
+    await writeConfig(home, vault);
+    await writeFile(source, '# Shared instructions\n');
+    const cli = (args) => execFileAsync(process.execPath, [path.resolve('src/cli.js'), ...args], {
+      cwd: path.resolve('.'),
+      env: cliEnv(home),
+    });
+    await cli(['instructions', 'import', '--name', 'shared', '--from', source, '--to', destination]);
+    await unlink(destination);
+    await writeFile(destination, '# Local replacement\n');
+
+    await assert.rejects(() => cli(['sync', '--no-pull']), (error) => {
+      assert.match(error.stderr, /Refusing to overwrite unmanaged global instructions/);
+      return true;
+    });
+    assert.equal(await readFile(destination, 'utf8'), '# Local replacement\n');
+
+    const recovered = await cli([
+      'instructions', 'enable', '--profile', 'shared', '--path', destination, '--use-vault',
+    ]);
+    const backup = recovered.stdout.match(/Preserved previous local path: (.+)/)?.[1];
+    assert.ok(backup);
+    assert.equal(await readFile(backup, 'utf8'), '# Local replacement\n');
+    assert.equal((await lstat(destination)).isSymbolicLink(), true);
+    assert.equal(await readFile(path.join(vault, 'globals', 'AGENTS.md'), 'utf8'), '# Shared instructions\n');
+    const content = await readFile(destination, 'utf8');
+    if (provider === 'cursor') assert.match(content, /alwaysApply: true\n---\n# Shared instructions\n$/);
+    if (provider === 'codex') assert.equal(content, '# Shared instructions\n');
+  });
+}
 
 test('Cursor CLI instructions enable from an existing profile and remain stable during status checks', async () => {
   const home = await tempDir();

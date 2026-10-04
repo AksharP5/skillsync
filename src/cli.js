@@ -937,7 +937,10 @@ async function matrixCommand(rest = []) {
 async function instructionsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
   const config = await configured();
-  await syncInstructionChanges(config, { pull: true });
+  await syncInstructionChanges(config, {
+    pull: true,
+    apply: subcommand === 'status' || subcommand === 'profiles',
+  });
 
   if (subcommand === 'status' || subcommand === 'profiles') {
     const [profiles, reportedDevices, localDevice] = await Promise.all([
@@ -1237,10 +1240,10 @@ function printInstructionSyncMessages(result, prefix = '') {
   }
 }
 
-async function syncInstructionChanges(config, { pull = false } = {}) {
+async function syncInstructionChanges(config, { pull = false, apply = true } = {}) {
   const result = await syncVault({
     vaultPath: config.repoPath,
-    deviceId: config.deviceId,
+    deviceId: apply ? config.deviceId : undefined,
     pull,
   });
   printInstructionSyncMessages(result);
