@@ -150,16 +150,20 @@ export async function listPluginAssignments(vaultPath) {
 }
 
 function pluginSelector(plugin) {
+  if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin)) {
+    throw new Error('Invalid installed Codex plugin');
+  }
   if (plugin.pluginId) return normalizePluginSelector(plugin.pluginId);
   const name = plugin.name;
   const marketplace = plugin.marketplaceName || plugin.marketplace;
-  if (!name || !marketplace) return null;
+  if (typeof name !== 'string' || typeof marketplace !== 'string') {
+    throw new Error('Invalid installed Codex plugin');
+  }
   return normalizePluginSelector(`${name}@${marketplace}`);
 }
 
 function normalizeInstalledPlugin(plugin) {
   const selector = pluginSelector(plugin);
-  if (!selector) return null;
   const separator = selector.lastIndexOf('@');
   return {
     selector,
@@ -172,10 +176,11 @@ function normalizeInstalledPlugin(plugin) {
 }
 
 export function normalizePluginList(payload) {
-  const installed = Array.isArray(payload?.installed) ? payload.installed : [];
-  return installed
+  if (!Array.isArray(payload?.installed)) {
+    throw new Error('Invalid Codex plugin inventory');
+  }
+  return payload.installed
     .map(normalizeInstalledPlugin)
-    .filter(Boolean)
     .sort((a, b) => a.selector.localeCompare(b.selector));
 }
 

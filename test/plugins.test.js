@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -460,6 +460,62 @@ test('failed inspection leaves the last durable report unchanged', async () => {
   assert.deepEqual(await loadPluginState(vaultPath, deviceId), reported);
   assert.equal(Object.hasOwn(reported, 'available'), false);
   assert.equal(Object.hasOwn(reported, 'errors'), false);
+});
+
+test('malformed plugin inventories preserve the last report and auto-adopted selections', async (t) => {
+  const vaultPath = await tempDir();
+  t.after(() => rm(vaultPath, { recursive: true, force: true }));
+  const deviceId = 'vps';
+  const profile = await savePluginProfile({
+    vaultPath,
+    name: 'shared',
+    plugins: ['github@openai-curated'],
+    autoAdopt: true,
+  });
+  const assignment = await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
+  await syncCodexPlugins({
+    vaultPath,
+    deviceId,
+    commandAvailable: async () => true,
+    runCommand: async () => ({
+      stdout: JSON.stringify({
+        installed: [
+          { pluginId: 'github@openai-curated', enabled: true },
+          { pluginId: 'notion@openai-curated', enabled: true },
+        ],
+      }),
+    }),
+  });
+  const reported = await loadPluginState(vaultPath, deviceId);
+
+  for (const payload of [
+    null,
+    {},
+    { installed: null },
+    { installed: {} },
+    { installed: [{}] },
+    { installed: [{ pluginId: 'github@openai-curated' }, {}] },
+  ]) {
+    const calls = [];
+    const state = await syncCodexPlugins({
+      vaultPath,
+      deviceId,
+      commandAvailable: async () => true,
+      runCommand: async (_command, args) => {
+        calls.push(args);
+        return { stdout: JSON.stringify(payload) };
+      },
+    });
+
+    assert.equal(state.available, false, JSON.stringify(payload));
+    assert.deepEqual(state.errors, ['Could not inspect Codex plugins on this device']);
+    assert.deepEqual(calls, [['plugin', 'list', '--json']]);
+    assert.deepEqual(await loadPluginState(vaultPath, deviceId), reported);
+  }
+  assert.deepEqual(effectivePluginProfile(profile, {
+    assignments: [assignment],
+    states: [await loadPluginState(vaultPath, deviceId)],
+  }).plugins, ['github@openai-curated', 'notion@openai-curated']);
 });
 
 test('failed first inspection does not create a device report', async () => {
