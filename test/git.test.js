@@ -21,7 +21,7 @@ import {
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import { exists } from '../src/core/fs.js';
-import { git, gitPrivatePath, pushWithPullRebaseRetry, run } from '../src/core/git.js';
+import { commitAllIfChanged, git, gitPrivatePath, pushWithPullRebaseRetry, run } from '../src/core/git.js';
 import { addSkillToVault, ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
 import { checkVault } from '../src/core/check.js';
@@ -215,6 +215,61 @@ test('syncVault pushes existing ahead commits after pulling remote changes', asy
   const { stdout } = await git(['log', '--oneline', '--format=%s'], fresh);
   assert.match(stdout, /local change/);
   assert.match(stdout, /remote change/);
+});
+
+test('sync preserves unresolved autostash conflicts until the user resolves them', async () => {
+  const root = await tempDir();
+  const remote = path.join(root, 'remote.git');
+  const local = path.join(root, 'local');
+  const other = path.join(root, 'other');
+  const skillPath = path.join('skills', 'demo', 'SKILL.md');
+
+  await git(['init', '--bare', remote]);
+  await git(['clone', remote, local]);
+  await git(['checkout', '-b', 'main'], local);
+  await configureUser(local);
+  await ensureVault(local);
+  await mkdir(path.dirname(path.join(local, skillPath)), { recursive: true });
+  await writeFile(path.join(local, skillPath), '# Demo\nOriginal instruction\n');
+  await rebuildRegistry(local);
+  await git(['add', '-A'], local);
+  await git(['commit', '-m', 'initial vault'], local);
+  await git(['push', '-u', 'origin', 'main'], local);
+  await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
+  const registryBefore = await readFile(path.join(local, 'registry.json'), 'utf8');
+
+  await git(['clone', remote, other]);
+  await configureUser(other);
+  await commitFile(other, skillPath, '# Demo\nRemote instruction\n', 'remote edit');
+  await git(['push'], other);
+  const remoteHead = (await git(['rev-parse', 'HEAD'], other)).stdout;
+  await writeFile(path.join(local, skillPath), '# Demo\nLocal instruction\n');
+
+  await assert.rejects(
+    syncVault({ vaultPath: local }),
+    /Unresolved Git conflicts/,
+  );
+  const conflicts = (await git(['ls-files', '--unmerged'], local)).stdout;
+  assert.ok(conflicts.includes('skills/demo/SKILL.md'));
+  const conflictedContent = await readFile(path.join(local, skillPath), 'utf8');
+  assert.match(conflictedContent, /Remote instruction/);
+  assert.match(conflictedContent, /Local instruction/);
+  assert.equal(await readFile(path.join(local, 'registry.json'), 'utf8'), registryBefore);
+  assert.equal((await git(['rev-parse', 'refs/heads/main'], remote)).stdout, remoteHead);
+
+  await assert.rejects(syncVault({ vaultPath: local, pull: false }), /Unresolved Git conflicts/);
+  await assert.rejects(commitAllIfChanged(local, 'must not resolve conflicts'), /Unresolved Git conflicts/);
+  assert.equal((await git(['ls-files', '--unmerged'], local)).stdout, conflicts);
+  assert.equal(await readFile(path.join(local, skillPath), 'utf8'), conflictedContent);
+
+  await writeFile(path.join(local, skillPath), '# Demo\nResolved instruction\n');
+  await git(['add', skillPath], local);
+  const result = await syncVault({ vaultPath: local, pull: false });
+  assert.equal(result.pushed, true);
+  assert.equal(
+    (await git(['show', 'main:skills/demo/SKILL.md'], remote)).stdout,
+    '# Demo\nResolved instruction\n',
+  );
 });
 
 test('sync refuses pending commits that contain a removed credential', async () => {

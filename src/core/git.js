@@ -108,6 +108,15 @@ export async function cloneRepo(repo, repoPath) {
 export async function pullRebase(repoPath) {
   if (!await isGitRepo(repoPath)) return;
   await git(['pull', '--rebase', '--autostash'], repoPath);
+  await assertNoGitConflicts(repoPath);
+}
+
+export async function assertNoGitConflicts(repoPath) {
+  if (!await isGitRepo(repoPath)) return;
+  const { stdout } = await git(['ls-files', '--unmerged', '-z'], repoPath);
+  if (stdout) {
+    throw new Error(`Unresolved Git conflicts in ${repoPath}. Resolve them and stage the resolved files before syncing.`);
+  }
 }
 
 export async function push(repoPath) {
@@ -157,6 +166,7 @@ export async function statusPorcelain(repoPath) {
 
 export async function commitAllIfChanged(repoPath, message) {
   if (!await isGitRepo(repoPath)) return false;
+  await assertNoGitConflicts(repoPath);
   if (!await statusPorcelain(repoPath)) return false;
   await git(['add', '-A'], repoPath);
   if (!await statusPorcelain(repoPath)) return false;

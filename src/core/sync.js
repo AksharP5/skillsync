@@ -8,7 +8,7 @@ import {
   sweepUnusedSkills,
 } from './device.js';
 import { checkVault, checkVaultForPush } from './check.js';
-import { commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
+import { assertNoGitConflicts, commitAllIfChanged, hasLocalCommitsToPush, isGitRepo, pullRebase, pushWithPullRebaseRetry } from './git.js';
 import {
   applyGlobalInstructions,
   reconcileGlobalInstructionProviders,
@@ -24,6 +24,7 @@ export async function syncVault({
   discardLocalChanges = false,
   replaceUnmanagedPaths = [],
 } = {}) {
+  await assertNoGitConflicts(vaultPath);
   if (deviceId) {
     await migrateLegacyLocalPathState({ vaultPath, deviceId });
   }
