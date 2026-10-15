@@ -364,6 +364,10 @@ vault.json       vault-wide settings
 
 This separation lets one device safely edit another device’s assignments without taking ownership of the other device’s paths, inventory, or applied status.
 
+## Skill packs
+
+Run `skillsync groups` to regenerate pack manifests and group pages from `groups.json`. Packs removed from the configuration, or left without available skills, disappear from the generated outputs. Cleanup preserves unmanaged files and edited group pages.
+
 ## Remove skills
 
 Remove a skill from one device:

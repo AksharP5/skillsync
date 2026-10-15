@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assertSafePathSegment, ensureDir, exists, readJson, writeJson } from './fs.js';
@@ -308,6 +308,38 @@ async function writeGroupFiles(vaultPath, docs, packs) {
   for (const packName of Object.keys(packs)) {
     await writeJson(path.join(vaultPath, 'packs', `${packName}.json`), docs.packJson[packName]);
     await writeFile(path.join(vaultPath, 'groups', `${packName}.md`), docs.packPages[packName]);
+  }
+  await removeObsoletePacks(vaultPath, packs);
+}
+
+async function removeObsoletePacks(vaultPath, packs) {
+  const packsPath = path.join(vaultPath, 'packs');
+  const entries = await readdir(packsPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const packName = entry.name.slice(0, -'.json'.length);
+    if (Object.hasOwn(packs, packName)) continue;
+
+    const manifestPath = path.join(packsPath, entry.name);
+    const pack = await readJson(manifestPath).catch((error) => {
+      if (error instanceof SyntaxError) return null;
+      throw error;
+    });
+    if (pack?.generated_by !== 'skillsync groups'
+      || pack.name !== packName
+      || !Array.isArray(pack.skills)
+      || !pack.skills.every((name) => typeof name === 'string')) continue;
+
+    const pagePath = path.join(vaultPath, 'groups', `${packName}.md`);
+    const page = await lstat(pagePath).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    // Group pages have no ownership marker, so preserve anything the user changed.
+    if (page?.isFile() && await readFile(pagePath, 'utf8') === packPage(pack)) {
+      await unlink(pagePath);
+    }
+    await unlink(manifestPath);
   }
 }
 
