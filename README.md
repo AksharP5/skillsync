@@ -244,6 +244,8 @@ Add a local skill folder to the vault:
 skillsync add ~/path/to/my-skill --name my-skill
 ```
 
+Relative paths such as `skills/example` use the local folder when it exists.
+
 Add a skill from GitHub:
 
 ```bash
@@ -271,7 +273,7 @@ skillsync import opencode
 skillsync import hermes
 ```
 
-When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly.
+When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly. Renaming with `--conflict rename --as new-name` preserves the original source and honors `--target` and `--global` for the renamed skill.
 
 ## Automatic skill adoption
 
