@@ -279,6 +279,10 @@ New targets automatically adopt new skills created inside their managed folder. 
 
 SkillSync first records the skills that already exist when a target is added. It only auto-adopts skills that appear after that baseline, so connecting an existing folder does not unexpectedly upload everything in it. Changing a target or scan path establishes a fresh baseline for the new location.
 
+Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Nested folders and mismatched names remain detected for explicit import.
+
+Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.
+
 Disable auto-adoption for every target on the current device:
 
 ```bash

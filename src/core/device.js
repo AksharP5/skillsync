@@ -705,8 +705,22 @@ async function removeOwnedTargetProjections({ vaultPath, device, name }) {
     plan: async () => {
       const registry = await loadRegistry(vaultPath);
       const operations = [];
-      for (const [skillName, targets] of Object.entries(device.installed || {})) {
-        if (!Array.isArray(targets) || !targets.includes(name)) continue;
+      const canonicalPath = await canonicalTargetRoot(targetPath);
+      const sharedTargets = new Set();
+      for (const [targetName, target] of Object.entries(device.targets)) {
+        if (targetName !== name
+          && await canonicalTargetRoot(expandHome(target.path)) === canonicalPath) {
+          sharedTargets.add(targetName);
+        }
+      }
+      const entries = await readdir(targetPath).catch((error) => {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+      });
+      for (const skillName of entries) {
+        const assignedTargets = device.installed[skillName];
+        if (Array.isArray(assignedTargets)
+          && assignedTargets.some((targetName) => sharedTargets.has(targetName))) continue;
         const destination = path.join(targetPath, skillName);
         const info = await projectionInfo(destination, vaultPath);
         if (info.ownedCopy) {
@@ -1262,7 +1276,7 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     for (const skill of currentDetected[targetName] || []) {
       if (previousKeys.has(detectedSkillKey(skill))) continue;
       const sourcePath = path.resolve(scanRoot, skill.path || '.');
-      if (!pathInside(sourcePath, installRoot)) continue;
+      if (sourcePath !== path.join(installRoot, skill.name)) continue;
       const canonicalSource = await realpath(sourcePath).catch(() => null);
       if (!canonicalSource || !pathInside(canonicalSource, canonicalInstallRoot)) continue;
       if (await hasSymlinkBelowRoot(sourcePath, installRoot)) continue;
