@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -35,10 +35,37 @@ for (const deviceId of [undefined, 'test-device']) {
     if (deviceId) {
       assert.equal(await readFile(path.join(targetPath, 'example', 'SKILL.md'), 'utf8'), '# Updated\n');
     }
+    const registryPath = path.join(vaultPath, 'registry.json');
+    await utimes(registryPath, 1, 1);
+    const unchangedMtime = (await stat(registryPath)).mtimeMs;
     await syncVault(options);
     assert.deepEqual(await loadRegistry(vaultPath), after);
+    assert.equal((await stat(registryPath)).mtimeMs, unchangedMtime);
   });
 }
+
+test('sync repairs registry shape and paths even when skill hashes have not changed', async (t) => {
+  const vaultPath = await mkdtemp(path.join(tmpdir(), 'skillsync-registry-'));
+  t.after(() => rm(vaultPath, { recursive: true, force: true }));
+  const skillPath = path.join(vaultPath, 'skills', 'example');
+  await mkdir(skillPath, { recursive: true });
+  await writeFile(path.join(skillPath, 'SKILL.md'), '# Example\n');
+  const registry = await rebuildRegistry(vaultPath);
+  const invalidRegistries = [
+    null,
+    { ...registry, version: 0 },
+    { ...registry, skills: { example: { ...registry.skills.example, path: 'wrong' } } },
+  ];
+
+  for (const invalid of invalidRegistries) {
+    await writeFile(path.join(vaultPath, 'registry.json'), JSON.stringify(invalid));
+
+    await syncVault({ vaultPath, pull: false, pushChanges: false });
+
+    assert.equal((await checkVault(vaultPath)).skills, 1);
+    if (invalid) assert.deepEqual(await loadRegistry(vaultPath), registry);
+  }
+});
 
 test('sync rejects unsafe content outside skills before creating assigned projections', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-sync-'));
