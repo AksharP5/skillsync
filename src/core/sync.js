@@ -34,7 +34,7 @@ export async function syncVault({
   await ensureVault(vaultPath);
   await checkVault(vaultPath, { verifyRegistry: false });
   await refreshChangedRegistryEntries(vaultPath);
-  await checkVault(vaultPath);
+  if (!deviceId) await checkVault(vaultPath);
   let autoImport = { adopted: [], conflicts: [], replaceUnmanagedPaths: [] };
   let instructionProviders = { changed: false, conflicts: [], backups: [] };
   let prunedInstructionProfiles = [];

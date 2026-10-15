@@ -1259,7 +1259,6 @@ function pathInside(childPath, parentPath) {
 
 export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDeviceId() }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
-  const currentDetected = await detectTargets({ vaultPath, device });
   const adopted = [];
   const conflicts = [];
   const replaceUnmanagedPaths = [];
@@ -1270,10 +1269,11 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     if (!Array.isArray(previous)) continue;
     const previousKeys = new Set(previous.map(detectedSkillKey));
     const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
+    const skills = await findLocalSkills(scanRoot);
     const installRoot = path.resolve(expandHome(targetConfig.path));
     const canonicalInstallRoot = await realpath(installRoot).catch(() => installRoot);
 
-    for (const skill of currentDetected[targetName] || []) {
+    for (const skill of skills) {
       if (previousKeys.has(detectedSkillKey(skill))) continue;
       const sourcePath = path.resolve(scanRoot, skill.path || '.');
       if (sourcePath !== path.join(installRoot, skill.name)) continue;
