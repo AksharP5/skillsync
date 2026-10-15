@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.14.1](https://github.com/AksharP5/skillsync/compare/v0.14.0...v0.14.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* honor local sources and renamed skill assignments ([#91](https://github.com/AksharP5/skillsync/issues/91)) ([da749ad](https://github.com/AksharP5/skillsync/commit/da749ad180313c7f43d84d2582b1c81947264f00))
+* keep target folders consistent with managed projections ([#87](https://github.com/AksharP5/skillsync/issues/87)) ([c62a88a](https://github.com/AksharP5/skillsync/commit/c62a88a64ae8a9c4acc1f0dd00976ecaeb2ec19b))
+* preserve instructions after interrupted profile switches ([#85](https://github.com/AksharP5/skillsync/issues/85)) ([633a458](https://github.com/AksharP5/skillsync/commit/633a45832db984888ba3281c32aed6fcf2e1bd8a))
+* preserve plugin reports when inventory is malformed ([#90](https://github.com/AksharP5/skillsync/issues/90)) ([792c5d6](https://github.com/AksharP5/skillsync/commit/792c5d62d1b79d938cb82bda9f84b7cac92a81f5))
+* reject malformed config before selecting a vault ([#89](https://github.com/AksharP5/skillsync/issues/89)) ([e309a05](https://github.com/AksharP5/skillsync/commit/e309a0597bc47316389d33f2c6da851bc8c217fb))
+* remove obsolete generated skill packs ([#88](https://github.com/AksharP5/skillsync/issues/88)) ([760abad](https://github.com/AksharP5/skillsync/commit/760abadc188ec416885cd3834d9d83863031eb46))
+* stop sync before committing unresolved Git conflicts ([#84](https://github.com/AksharP5/skillsync/issues/84)) ([8b81705](https://github.com/AksharP5/skillsync/commit/8b8170532160e72912fffd0a90726f7e1c79dd60))
+
+
+### Performance Improvements
+
+* speed up idle sync by skipping redundant scans ([#92](https://github.com/AksharP5/skillsync/issues/92)) ([bdf1e94](https://github.com/AksharP5/skillsync/commit/bdf1e94476620bf6cdb6dd25035ee0fb1a99c458))
+* stop rewriting unchanged skill registries ([#93](https://github.com/AksharP5/skillsync/issues/93)) ([5b64fbc](https://github.com/AksharP5/skillsync/commit/5b64fbc3b4c5ff63da0cc15e9d9847f6f92120c4))
+
 ## [0.14.0](https://github.com/AksharP5/skillsync/compare/v0.13.0...v0.14.0) (2026-10-04)
 
 
