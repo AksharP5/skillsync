@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { defaultRepoPath, loadConfig } from '../src/core/config.js';
@@ -30,6 +30,36 @@ test('configuration parse and read errors identify the file instead of using def
       return true;
     });
   }
+});
+
+test('malformed configuration values fail instead of selecting the default vault', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-config-test-'));
+  const configPath = path.join(root, 'config.json');
+  for (const config of [
+    null, false, [], 'vault', 1,
+    { repoPath: null }, { repoPath: false }, { repoPath: '' }, { repoPath: 42 },
+    { deviceId: false }, { deviceId: '' }, { deviceId: ['laptop'] },
+    { repo: false }, { repo: {} },
+  ]) {
+    await writeFile(configPath, JSON.stringify(config));
+    await assert.rejects(() => loadConfig(configPath), (error) => {
+      assert.ok(error.message.includes(configPath));
+      assert.match(error.message, /Cannot read SkillSync config/);
+      return true;
+    }, JSON.stringify(config));
+  }
+});
+
+test('optional configuration fields retain their defaults', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-config-test-'));
+  const configPath = path.join(root, 'config.json');
+  await writeFile(configPath, JSON.stringify({ repo: null, repoPath: '~/custom-vault' }));
+
+  const config = await loadConfig(configPath);
+  assert.equal(config.version, 1);
+  assert.equal(config.repo, null);
+  assert.equal(config.repoPath, path.join(homedir(), 'custom-vault'));
+  assert.equal(config.deviceId, defaultDeviceId());
 });
 
 test('configuration symlinks load their target and fail when it is missing', async () => {
