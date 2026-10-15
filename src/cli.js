@@ -1374,6 +1374,7 @@ async function addSkillWithConflictResolution({ config, sourcePath, name, rest =
   if (action === 'rename') {
     const newName = await renamedSkillName({ rest, currentName: comparison.name });
     const added = await addSkillToVault({ vaultPath: config.repoPath, sourcePath, name: newName });
+    await installManagedSkill({ config, skillName: added.name, targets });
     return { name: added.name, status: 'renamed' };
   }
 
@@ -1400,15 +1401,16 @@ async function addSkill(rest) {
   const source = rest[0];
   if (!source) throw new Error('Usage: skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global]');
   const config = await configured();
+  const sourcePath = expandHome(source);
 
-  if (isRemoteSkillSource(source)) {
+  if (isRemoteSkillSource(source) && !await exists(sourcePath)) {
     return addRemoteSkills(source, rest, config);
   }
 
   const targets = await chooseInstallTargets(config, rest);
   const result = await addSkillWithConflictResolution({
     config,
-    sourcePath: expandHome(source),
+    sourcePath,
     name: flagValue(rest, '--name'),
     rest,
     targets,
