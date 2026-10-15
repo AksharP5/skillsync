@@ -1,5 +1,6 @@
 import { mkdir, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
 import { hashSyncedDirectory, ignoredGitPaths } from './git.js';
@@ -187,14 +188,16 @@ export async function rebuildRegistry(vaultPath) {
 }
 
 export async function refreshChangedRegistryEntries(vaultPath) {
-  const before = await loadRegistry(vaultPath);
-  const after = await rebuildRegistry(vaultPath);
+  await ensureVault(vaultPath);
+  const before = await readJson(path.join(vaultPath, REGISTRY_FILE), emptyRegistry());
+  const after = await buildRegistry(vaultPath);
   for (const [name, entry] of Object.entries(after.skills)) {
-    if (before.skills[name]?.hash === entry.hash && before.skills[name]?.updated_at) {
-      after.skills[name].updated_at = before.skills[name].updated_at;
+    const previous = before?.skills?.[name];
+    if (previous?.hash === entry.hash && previous.updated_at) {
+      after.skills[name].updated_at = previous.updated_at;
     }
   }
-  await saveRegistry(vaultPath, after);
+  if (!isDeepStrictEqual(before, after)) await saveRegistry(vaultPath, after);
   return after;
 }
 

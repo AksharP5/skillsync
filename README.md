@@ -400,6 +400,8 @@ Run a sync immediately:
 skillsync sync
 ```
 
+Sync leaves `registry.json` untouched when its entries and metadata are unchanged.
+
 Sync stops if Git leaves unresolved conflicts, including conflicts while restoring local edits after a pull. Resolve and stage the affected files before retrying. `--no-pull` does not bypass this check.
 
 Preview local skill projection changes without pulling or writing:
