@@ -676,17 +676,14 @@ export async function applyGlobalInstructions({
   }
 
   if (!selected) {
-    const applied = agents.applied_profile;
-    if (applied) {
-      await requireProfile(vaultPath, applied);
-      for (const targetPath of paths) {
-        const destination = resolvedDestination(targetPath);
-        if (await ownedProfileAt(destination, vaultPath) !== applied) continue;
-        const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
-        await removePath(destination);
-        await ensureDir(path.dirname(destination));
-        await writeFile(destination, content);
-      }
+    for (const targetPath of paths) {
+      const destination = resolvedDestination(targetPath);
+      const owned = await ownedProfileAt(destination, vaultPath);
+      if (!owned) continue;
+      const content = await projectedInstructionsContent(vaultPath, owned, targetPath);
+      await removePath(destination);
+      await ensureDir(path.dirname(destination));
+      await writeFile(destination, content);
     }
     await configureGlobalInstructions({
       vaultPath,
