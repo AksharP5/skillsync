@@ -34,17 +34,27 @@ async function configFileExists(configPath) {
 }
 
 export async function loadConfig(configPath = defaultConfigPath()) {
-  let config = null;
+  let config = {};
   try {
     if (await configFileExists(configPath)) config = await readJson(configPath);
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new Error('Config must be an object');
+    }
+    for (const field of ['repo', 'repoPath', 'deviceId']) {
+      const value = config[field];
+      if (value === undefined || (field === 'repo' && value === null)) continue;
+      if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`${field} must be a non-empty string`);
+      }
+    }
   } catch (error) {
     throw new Error(`Cannot read SkillSync config at ${configPath}: ${error.message}`, { cause: error });
   }
   return {
     version: 1,
-    repo: config?.repo || null,
-    repoPath: expandHome(config?.repoPath || defaultRepoPath()),
-    deviceId: config?.deviceId || defaultDeviceId(),
+    repo: config.repo ?? null,
+    repoPath: expandHome(config.repoPath ?? defaultRepoPath()),
+    deviceId: config.deviceId ?? defaultDeviceId(),
   };
 }
 
