@@ -412,11 +412,13 @@ Preview local skill projection changes without pulling or writing:
 skillsync sync --dry-run
 ```
 
-SkillSync checks every destination before applying the plan. It backs up changed skill projections in local Git metadata and restores them if the apply or a later local reconciliation step fails. Copy-mode projections also record their deployed content hash. If a managed copy was edited locally, sync stops instead of overwriting it. After reviewing those edits, discard them explicitly with:
+SkillSync checks every destination before applying the plan. It backs up changed skill projections in local Git metadata and restores them if the apply or a later local reconciliation step fails. Copy-mode projections track deployed contents and executable permissions. If a managed copy was edited locally, sync stops instead of overwriting it. After reviewing those edits, discard them explicitly with:
 
 ```bash
 skillsync sync --discard-local-changes
 ```
+
+Copies created by older versions refresh once to record executable permissions when their contents have not been edited. That refresh applies the vault's executable bits, since older copies did not record local permission edits.
 
 Restore the most recent successful local projection apply in an emergency:
 

@@ -1033,7 +1033,7 @@ export async function planLinks({
       }
       // Copy protection covers every deployed file, including Git-ignored local files.
       const sourceHash = group.mode === 'copy' || info.ownedCopy
-        ? await hashDirectory(source)
+        ? await hashDirectory(source, { includeExecutableBits: true })
         : registry.skills[skillName].hash;
       if (group.mode === 'copy') {
         if (info.ownedCopy) {
@@ -1197,7 +1197,7 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
           if (!info.ownedCopy) {
             status = 'unmanaged';
           } else {
-            const sourceHash = await hashDirectory(source);
+            const sourceHash = await hashDirectory(source, { includeExecutableBits: true });
             const state = await copyState({
               destination,
               marker: info.copyMarker,
@@ -1427,8 +1427,11 @@ function copyDriftError(destination) {
 }
 
 async function copyState({ destination, marker, sourceHash }) {
-  const localHash = await hashDirectory(destination, { exclude: [OWNERSHIP_MARKER] });
   const expectedHash = marker?.source_hash || sourceHash || null;
+  const localHash = await hashDirectory(destination, {
+    exclude: [OWNERSHIP_MARKER],
+    includeExecutableBits: typeof expectedHash === 'string' && expectedHash.startsWith('sha256-exec:'),
+  });
   return {
     localHash,
     expectedHash,

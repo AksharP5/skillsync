@@ -107,12 +107,12 @@ export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
     'Skill name',
   );
   const destination = path.join(vaultPath, 'skills', skillName);
-  const sourceHash = await hashDirectory(sourcePath);
+  const sourceHash = await hashDirectory(sourcePath, { includeExecutableBits: true });
   if (!await exists(destination)) {
     return { name: skillName, path: destination, status: 'new', sourceHash };
   }
   await validateSkillFolder(destination);
-  const vaultHash = await hashDirectory(destination);
+  const vaultHash = await hashDirectory(destination, { includeExecutableBits: true });
   return {
     name: skillName,
     path: destination,
