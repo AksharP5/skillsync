@@ -392,6 +392,8 @@ skillsync policy set delete-unassigned-skills on
 
 A full `skillsync sync` then removes a vault skill only when it has no assignment on any device and no device reports a detected local copy. Existing unassigned skills are included, while detected local skills are protected. Changes made for another device remain protected until that device syncs and reports its updated local state.
 
+Permission and I/O errors during scanning stop sync before it replaces the saved inventory or deletes unused skills.
+
 ## Sync and status
 
 Run a sync immediately:
@@ -429,6 +431,8 @@ Validate vault structure, registry hashes, JSON files, symlinks, and common cred
 ```bash
 skillsync check
 ```
+
+`registry.json` and `vault.json` must contain objects with the supported fields. Values such as `null` or `false` fail validation.
 
 Inspect the current configuration:
 
