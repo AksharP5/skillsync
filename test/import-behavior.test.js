@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -76,6 +76,67 @@ for (const localExists of [true, false]) {
     );
   });
 }
+
+test('remote root skills without frontmatter keep the repository name across repeated imports and URL forms', async (t) => {
+  const { home, vault, cli } = await fixture(t);
+  const source = path.join(home, 'remote');
+  await mkdir(source);
+  await writeFile(path.join(source, 'SKILL.md'), '# Root skill\n');
+  await commitFixture(source);
+
+  for (const [input, cloneUrl] of [
+    ['example/repo-name', 'https://github.com/example/repo-name.git'],
+    ['https://example.invalid/example/repo-name.git', 'https://example.invalid/example/repo-name.git'],
+    ['git@example.invalid:example/repo-name.git', 'git@example.invalid:example/repo-name.git'],
+    ['git@example.invalid:repo-name.git', 'git@example.invalid:repo-name.git'],
+    ['ssh://git@example.invalid/example/repo-name.git', 'ssh://git@example.invalid/example/repo-name.git'],
+  ]) {
+    await cli(['add', input], {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
+      GIT_CONFIG_VALUE_0: cloneUrl,
+    });
+    assert.deepEqual(await readdir(path.join(vault, 'skills')), ['repo-name']);
+  }
+});
+
+test('remote --name overrides the selected skill name and rejects multiple skills before importing', async (t) => {
+  const { home, vault, cli } = await fixture(t);
+  const source = path.join(home, 'remote');
+  await makeSkill(source, 'first', '# First');
+  await makeSkill(source, 'second', '# Second');
+  await commitFixture(source);
+  const env = {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
+    GIT_CONFIG_VALUE_0: 'https://github.com/example/multiple.git',
+  };
+
+  await assert.rejects(
+    () => cli(['add', 'example/multiple', '--name', 'renamed'], env),
+    /--name requires exactly one selected skill/,
+  );
+  assert.deepEqual(await readdir(path.join(vault, 'skills')), []);
+
+  await cli(['add', 'example/multiple', '--skill', 'second', '--name', 'renamed'], env);
+  assert.deepEqual(await readdir(path.join(vault, 'skills')), ['renamed']);
+  assert.equal(await readFile(path.join(vault, 'skills', 'renamed', 'SKILL.md'), 'utf8'),
+    '---\nname: second\n---\n# Second\n');
+});
+
+test('remote --name overrides a single root skill name', async (t) => {
+  const { home, vault, cli } = await fixture(t);
+  const source = await makeSkill(home, 'original', '# Root');
+  await commitFixture(source);
+
+  await cli(['add', 'example/original', '--name', 'renamed'], {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
+    GIT_CONFIG_VALUE_0: 'https://github.com/example/original.git',
+  });
+
+  assert.deepEqual(await readdir(path.join(vault, 'skills')), ['renamed']);
+});
 
 test('renaming an add conflict honors target and global assignments while preserving the original source', async (t) => {
   const { home, vault, cli } = await fixture(t);

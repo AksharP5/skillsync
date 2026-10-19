@@ -47,7 +47,10 @@ export function cloneUrlForSource(rawSource) {
 
 export async function cloneSkillSource(rawSource) {
   const { cloneUrl, ref } = cloneUrlForSource(rawSource);
-  const dir = await mkdtemp(path.join(tmpdir(), 'skillsync-source-'));
+  const name = path.basename(cloneUrl.replace(/^git@[^:]+:/, '')).replace(/\.git$/, '');
+  if (!name || name === '.' || name === '..') throw new Error('Git source must include a repository name');
+  const temporary = await mkdtemp(path.join(tmpdir(), 'skillsync-source-'));
+  const dir = path.join(temporary, name);
   const args = ['clone', '--depth', '1'];
   if (ref) args.push('--branch', ref);
   args.push(cloneUrl, dir);
@@ -55,10 +58,10 @@ export async function cloneSkillSource(rawSource) {
     await git(args);
     return {
       path: dir,
-      cleanup: () => rm(dir, { recursive: true, force: true }),
+      cleanup: () => rm(temporary, { recursive: true, force: true }),
     };
   } catch (error) {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await rm(temporary, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 }

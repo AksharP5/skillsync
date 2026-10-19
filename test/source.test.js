@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -81,4 +81,19 @@ test('selectDiscoveredSkills filters by requested skill names', async () => {
     { name: 'example-skill', path: vibe, relative: 'example-skill' },
   ]);
   assert.throws(() => selectDiscoveredSkills(skills, ['missing']), /Skill not found/);
+});
+
+test('discovery preserves frontmatter names and nested folder defaults', async (t) => {
+  const root = await tempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, 'SKILL.md'), '---\nname: declared-root\n---\n# Root\n');
+  await makeSkill(root, 'nested-default');
+  await makeSkill(root, 'nested-folder', '---\nname: declared-nested\n---\n# Nested\n');
+
+  const found = await discoverSkillFolders(root, { fullDepth: true });
+  assert.deepEqual(found.map(({ name, relative }) => ({ name, relative })), [
+    { name: 'declared-nested', relative: 'nested-folder' },
+    { name: 'declared-root', relative: '.' },
+    { name: 'nested-default', relative: 'nested-default' },
+  ]);
 });
