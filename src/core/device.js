@@ -1397,7 +1397,7 @@ async function findLocalSkills(scanPath) {
       return;
     }
 
-    const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
+    const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       const child = path.join(current, entry.name);
@@ -1416,8 +1416,9 @@ async function symlinkedDirectory(child, entry) {
   if (!entry.isSymbolicLink()) return false;
   try {
     return (await stat(child)).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+    throw error;
   }
 }
 

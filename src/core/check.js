@@ -196,12 +196,11 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
   ));
   const registry = await readRequiredJson(root, 'registry.json', errors);
   const config = await readRequiredJson(root, 'vault.json', errors);
-  if (config && (
-    config.version !== 1
+  if (config?.version !== 1
     || !config.policies
     || typeof config.policies !== 'object'
     || typeof config.policies.delete_unassigned_skills !== 'boolean'
-  )) {
+  ) {
     errors.push('vault.json has an unsupported shape');
   }
 
@@ -229,8 +228,8 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
     }
   }
 
-  if (verifyRegistry && registry) {
-    if (registry.version !== 1
+  if (verifyRegistry) {
+    if (registry?.version !== 1
       || !registry.skills
       || typeof registry.skills !== 'object'
       || Array.isArray(registry.skills)) {
