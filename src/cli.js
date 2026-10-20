@@ -1426,6 +1426,7 @@ async function addSkill(rest) {
 
 async function addRemoteSkills(source, rest, config) {
   const wanted = flagList(rest, ['--skill', '-s']);
+  const name = flagValue(rest, '--name');
   const listOnly = hasFlag(rest, '--list') || hasFlag(rest, '-l');
   const fullDepth = hasFlag(rest, '--full-depth');
   const cloned = await cloneSkillSource(source);
@@ -1451,6 +1452,9 @@ async function addRemoteSkills(source, rest, config) {
       console.log('No skills selected.');
       return;
     }
+    if (name && selected.length !== 1) {
+      throw new Error('--name requires exactly one selected skill; use --skill to select one');
+    }
 
     const targets = await chooseInstallTargets(config, rest);
     const results = [];
@@ -1458,7 +1462,7 @@ async function addRemoteSkills(source, rest, config) {
       const result = await addSkillWithConflictResolution({
         config,
         sourcePath: skill.path,
-        name: skill.name,
+        name: name || skill.name,
         rest,
         targets,
       });

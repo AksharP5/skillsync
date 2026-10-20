@@ -252,6 +252,8 @@ Add a skill from GitHub:
 skillsync add https://github.com/example-org/example-skill --skill example-skill
 ```
 
+Use `--name` to override the name of one selected remote skill. For repositories containing multiple skills, select one with `--skill` first. A root skill without a frontmatter name uses the repository name.
+
 Install a vaulted skill on this device:
 
 ```bash
