@@ -9,6 +9,7 @@ import {
   mkdir,
   readFile,
   readlink,
+  realpath,
   rm,
   symlink,
   unlink,
@@ -146,7 +147,7 @@ test('setup detects the Grok Bot target when its agent-data directory exists', a
 
 for (const command of ['setup', 'connect']) {
   test(`${command} keeps a relative vault path anchored when commands run elsewhere`, async (t) => {
-    const home = await tempDir();
+    const home = await realpath(await tempDir());
     t.after(() => rm(home, { recursive: true, force: true }));
     const original = path.join(home, 'original');
     const elsewhere = path.join(home, 'elsewhere');
