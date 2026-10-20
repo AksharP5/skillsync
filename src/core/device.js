@@ -80,14 +80,58 @@ export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
   );
 }
 
+function assertDeviceObject(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+}
+
+async function readDeviceState(filePath) {
+  try {
+    const value = await readJson(filePath);
+    assertDeviceObject(value, 'Device state');
+    if (value.installed !== undefined) {
+      assertDeviceObject(value.installed, 'installed');
+      for (const [skillName, targets] of Object.entries(value.installed)) {
+        assertSafePathSegment(skillName, 'Skill name');
+        if (!Array.isArray(targets)) throw new Error(`Assignment for ${skillName} must be an array`);
+        for (const target of targets) assertSafePathSegment(target, 'Target name');
+      }
+    }
+    for (const field of ['global_installed', 'globalInstalled']) {
+      if (value[field] === undefined) continue;
+      if (!Array.isArray(value[field])) throw new Error(`${field} must be an array`);
+      for (const name of value[field]) assertSafePathSegment(name, 'Skill name');
+    }
+    if (value.detected !== undefined) {
+      assertDeviceObject(value.detected, 'detected');
+      for (const [target, skills] of Object.entries(value.detected)) {
+        assertSafePathSegment(target, 'Target name');
+        if (!Array.isArray(skills)) throw new Error(`Detected skills for ${target} must be an array`);
+        for (const skill of skills) {
+          assertDeviceObject(skill, 'Detected skill');
+          assertSafePathSegment(skill.name, 'Skill name');
+        }
+      }
+    }
+    if (value.instructions !== undefined) {
+      assertDeviceObject(value.instructions, 'instructions');
+      if (value.instructions.agents !== undefined) {
+        assertDeviceObject(value.instructions.agents, 'instructions.agents');
+      }
+    }
+    return value;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new Error(`Cannot read device state at ${filePath}: ${error.message}`, { cause: error });
+  }
+}
+
 export async function loadDevice(vaultPath, deviceId = defaultDeviceId(), { ensure = true } = {}) {
   if (ensure) await ensureVault(vaultPath);
-  const desired = await readJson(devicePath(vaultPath, deviceId), null);
-  const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
-  const instructionSelection = await readJson(
-    globalInstructionsAssignmentPath(vaultPath, deviceId),
-    null,
-  );
+  const desired = await readDeviceState(devicePath(vaultPath, deviceId));
+  const reported = await readDeviceState(deviceStatePath(vaultPath, deviceId));
+  const instructionSelection = await readDeviceState(globalInstructionsAssignmentPath(vaultPath, deviceId));
   return composeDevice({
     desired,
     reported,
@@ -245,8 +289,8 @@ export async function migrateLegacyLocalPathState({
 }) {
   const existing = await readLocalPathState(vaultPath, deviceId);
   if (existing) return existing;
-  const reported = await readJson(deviceStatePath(vaultPath, deviceId), null);
-  const desired = await readJson(devicePath(vaultPath, deviceId), null);
+  const reported = await readDeviceState(deviceStatePath(vaultPath, deviceId));
+  const desired = await readDeviceState(devicePath(vaultPath, deviceId));
   const legacy = isLegacyDeviceManifest(desired) ? desired : null;
   const source = reported || legacy;
   const normalized = normalizeReportedState(
@@ -1532,9 +1576,9 @@ export async function listDevices(vaultPath) {
   await mkdir(path.join(vaultPath, 'devices'), { recursive: true });
   await mkdir(path.join(vaultPath, 'state'), { recursive: true });
   await mkdir(path.join(vaultPath, 'globals', 'assignments'), { recursive: true });
-  const desiredFiles = await readdir(path.join(vaultPath, 'devices')).catch(() => []);
-  const reportedFiles = await readdir(path.join(vaultPath, 'state')).catch(() => []);
-  const instructionFiles = await readdir(path.join(vaultPath, 'globals', 'assignments')).catch(() => []);
+  const desiredFiles = await readdir(path.join(vaultPath, 'devices'));
+  const reportedFiles = await readdir(path.join(vaultPath, 'state'));
+  const instructionFiles = await readdir(path.join(vaultPath, 'globals', 'assignments'));
   const deviceIds = new Set([...desiredFiles, ...reportedFiles, ...instructionFiles]
     .filter((file) => file.endsWith('.json'))
     .map((file) => file.slice(0, -'.json'.length)));
