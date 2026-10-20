@@ -305,7 +305,7 @@ async function setup(rest) {
   }
 
   const repoArg = flagValue(rest, '--repo');
-  const repoPath = expandHome(flagValue(rest, '--path', defaultRepoPath()));
+  const repoPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
   let repo = repoArg;
   if (!repo) {
     const { stdout: ownerOut } = await gh(['api', 'user', '--jq', '.login']);
@@ -357,7 +357,7 @@ async function connect(rest) {
   const repoArg = rest[0];
   if (!repoArg) throw new Error('Usage: skillsync connect <github-repo-or-url>');
   const repo = await resolveRepoCloneUrl(repoArg);
-  const repoPath = expandHome(flagValue(rest, '--path', defaultRepoPath()));
+  const repoPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
   await mkdir(path.dirname(repoPath), { recursive: true });
   await ensureVaultCheckout(repo, repoPath);
   await ensureVault(repoPath);
@@ -1649,14 +1649,15 @@ async function target(rest) {
   if (sub === 'add') {
     const [, name, targetPath] = rest;
     if (!name || !targetPath) throw new Error('Usage: skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]');
+    const scanPath = flagValue(rest, '--scan-path');
     const config = await configured();
     await addTarget({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       name,
-      targetPath,
+      targetPath: path.resolve(expandHome(targetPath)),
       mode: flagValue(rest, '--mode', 'symlink'),
-      scanPath: flagValue(rest, '--scan-path'),
+      scanPath: scanPath ? path.resolve(expandHome(scanPath)) : undefined,
       autoImport: hasFlag(rest, '--no-auto-adopt') || hasFlag(rest, '--no-auto-import')
         ? false
         : true,

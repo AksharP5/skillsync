@@ -65,6 +65,8 @@ Repeat the install, existing-vault setup, and service steps on each device.
 
 SkillSync stores local configuration in `~/.config/skillsync/config.json`. Read errors, malformed configuration, and broken symlinks in the config path are reported instead of silently switching vaults. Repair the file or symlink before retrying; an absent config file still uses the default vault at `~/.skillsync/repo`.
 
+Relative vault paths passed to `setup --path` or `connect --path`, target paths, and `--scan-path` values are saved as absolute paths based on the directory where you configure them. Later commands and the background service keep using those locations. To anchor a relative path saved by an older version, rerun its setup, connect, or target-add command from the original directory.
+
 ## Interactive UI
 
 Run SkillSync without a command:

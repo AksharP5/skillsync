@@ -9,6 +9,7 @@ import {
   mkdir,
   readFile,
   readlink,
+  realpath,
   rm,
   symlink,
   unlink,
@@ -142,6 +143,63 @@ test('setup detects the Grok Bot target when its agent-data directory exists', a
   const config = JSON.parse(await readFile(path.join(home, '.config', 'skillsync', 'config.json')));
   const device = await loadLocalDevice(vault, config.deviceId);
   assert.equal(device.targets.grok.path, '~/agent-data/workflows');
+});
+
+for (const command of ['setup', 'connect']) {
+  test(`${command} keeps a relative vault path anchored when commands run elsewhere`, async (t) => {
+    const home = await realpath(await tempDir());
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const original = path.join(home, 'original');
+    const elsewhere = path.join(home, 'elsewhere');
+    const vault = path.join(original, 'vault');
+    const remote = path.join(home, 'vault.git');
+    await mkdir(original);
+    await mkdir(elsewhere);
+    await git(['init', '--bare', remote]);
+    const env = await setupEnv(home, `file://${remote}`);
+    const cliPath = path.resolve('src/cli.js');
+    const args = command === 'setup'
+      ? ['setup', '--repo', 'test/skills', '--path', './vault', '--yes']
+      : ['connect', 'test/skills', '--path', './vault'];
+
+    await execFileAsync(process.execPath, [cliPath, ...args], { cwd: original, env });
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, 'status'], {
+      cwd: elsewhere,
+      env,
+    });
+
+    assert.ok(stdout.split('\n').includes(`Vault: ${vault}`));
+    assert.equal(await exists(path.join(elsewhere, 'vault')), false);
+  });
+}
+
+test('relative target and scan paths stay anchored when syncing and scanning elsewhere', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, '.skillsync', 'repo');
+  const original = path.join(home, 'original');
+  const elsewhere = path.join(home, 'elsewhere');
+  await mkdir(original);
+  await mkdir(elsewhere);
+  await writeConfig(home, vault);
+  await makeSkill(path.join(vault, 'skills'), 'example');
+  await rebuildRegistry(vault);
+  const cliPath = path.resolve('src/cli.js');
+  const cli = (args, cwd) => execFileAsync(process.execPath, [cliPath, ...args], {
+    cwd,
+    env: cliEnv(home),
+  });
+
+  await cli(['target', 'add', 'custom', './skills', '--scan-path', './discovery', '--no-auto-adopt'], original);
+  await cli(['install', 'example', '--target', 'custom'], original);
+  await makeSkill(path.join(original, 'discovery'), 'original-only');
+  await makeSkill(path.join(elsewhere, 'discovery'), 'elsewhere-only');
+  await cli(['sync', '--no-pull'], elsewhere);
+  const { stdout } = await cli(['scan', '--json'], elsewhere);
+
+  assert.equal((await lstat(path.join(original, 'skills', 'example'))).isSymbolicLink(), true);
+  assert.equal(await exists(path.join(elsewhere, 'skills', 'example')), false);
+  assert.deepEqual(JSON.parse(stdout).skills.map((skill) => skill.name), ['original-only']);
 });
 
 test('rerunning setup preserves configured targets and their installed skills', async () => {
