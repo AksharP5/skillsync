@@ -1886,7 +1886,12 @@ async function service(rest) {
     console.log(`Installed LaunchAgent: ${plistPath}`);
     return;
   }
-  const systemdDir = path.join(homedir(), '.config', 'systemd', 'user');
+  const configHome = process.env.XDG_CONFIG_HOME || '';
+  const systemdDir = path.join(
+    path.isAbsolute(configHome) ? configHome : path.join(homedir(), '.config'),
+    'systemd',
+    'user',
+  );
   await mkdir(systemdDir, { recursive: true });
   const unitPath = path.join(systemdDir, 'skillsync.service');
   const unit = renderSystemdUserService(invocation);
