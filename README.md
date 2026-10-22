@@ -151,7 +151,7 @@ For Cursor CLI, link an always-apply `.mdc` rule to the same profile:
 skillsync instructions link ~/.cursor/rules/skillsync.mdc
 ```
 
-SkillSync generates this rule from the selected `AGENTS.md` profile. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile.
+SkillSync generates this rule from the selected `AGENTS.md` profile. Destinations named `skillsync.mdc` use Cursor's rule format, including paths through symlinked directories. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile.
 
 Unlinking or disabling leaves a standalone Cursor rule with the latest profile content, even if the generated file is missing. To recover a replaced Cursor link, use the `--use-vault` command above with `~/.cursor/rules/skillsync.mdc` as the path.
 
