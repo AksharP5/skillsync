@@ -690,6 +690,12 @@ async function installedCommand(rest = []) {
   }
 }
 
+function printPluginIssues(state) {
+  if (state?.missing?.length) console.log(`  missing: ${state.missing.join(', ')}`);
+  if (state?.disabled?.length) console.log(`  disabled: ${state.disabled.join(', ')}`);
+  for (const error of state?.errors || []) console.log(`  error: ${error}`);
+}
+
 async function pluginsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
   const config = await configured();
@@ -798,13 +804,19 @@ async function pluginsCommand(rest = []) {
     await pullBeforeRemoteEdit(config, deviceId);
     await requireKnownDevice(config.repoPath, deviceId);
     await assignPluginProfile({ vaultPath: config.repoPath, deviceId, profile });
-    await syncVault({
+    const { plugins } = await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: false,
     });
     if (deviceId === config.deviceId) {
-      console.log(`Applied Codex plugin profile ${profile} on ${deviceId}. Start a new Codex session to load its plugins.`);
+      if (plugins?.available && plugins.applied_profile === profile) {
+        console.log(`Applied Codex plugin profile ${profile} on ${deviceId}. Start a new Codex session to load its plugins.`);
+        return;
+      }
+      console.log(`Codex plugin profile ${profile} is pending on ${deviceId}.`);
+      printPluginIssues(plugins);
+      console.log('Install or enable required plugins in Codex /plugins, resolve any errors above, then run skillsync sync.');
       return;
     }
     console.log(`Assigned Codex plugin profile ${profile} to ${deviceId}; it will apply on that device's next sync.`);
@@ -906,9 +918,7 @@ async function pluginsCommand(rest = []) {
     );
     const status = assignment ? applied ? 'applied' : 'pending' : 'observed only';
     console.log(`- ${device.device_id}: ${desired} (${status}; ${state?.installed?.length || 0} installed)`);
-    if (missing) console.log(`  missing: ${state.missing.join(', ')}`);
-    if (disabled) console.log(`  disabled: ${state.disabled.join(', ')}`);
-    for (const error of state?.errors || []) console.log(`  error: ${error}`);
+    printPluginIssues(state);
     const auth = (state?.installed || [])
       .filter((plugin) => profile?.plugins.includes(plugin.selector) && plugin.auth_policy)
       .map((plugin) => `${plugin.selector} (${plugin.auth_policy})`);

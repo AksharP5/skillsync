@@ -30,6 +30,13 @@ import {
 } from '../src/core/device.js';
 import { exists } from '../src/core/fs.js';
 import { git, gitPrivatePath } from '../src/core/git.js';
+import {
+  assignPluginProfile,
+  loadPluginAssignment,
+  loadPluginState,
+  savePluginProfile,
+  syncCodexPlugins,
+} from '../src/core/plugins.js';
 import { loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
@@ -664,6 +671,112 @@ exit 1
   assert.match(disabled.stdout, /Plugin auto-adoption for shared: off/);
   assert.equal(JSON.parse(await readFile(profilePath, 'utf8')).auto_adopt, false);
 });
+
+for (const scenario of [
+  {
+    name: 'disabled plugins stay pending without being enabled or reinstalled',
+    installed: [{ pluginId: 'gmail@openai-curated', enabled: false }],
+    details: [/disabled: gmail@openai-curated/],
+  },
+  {
+    name: 'failed installations report missing plugins and actionable errors',
+    installed: [],
+    details: [
+      /missing: gmail@openai-curated/,
+      /error: Could not install gmail@openai-curated; install or authenticate it from Codex \/plugins/,
+    ],
+  },
+  {
+    name: 'unavailable inspection does not reuse a previously applied report',
+    unavailable: true,
+    installed: [{ pluginId: 'gmail@openai-curated', enabled: true }],
+    details: [/error: Could not inspect Codex plugins on this device/],
+  },
+  {
+    name: 'enabled installed plugins are applied',
+    installed: [{ pluginId: 'gmail@openai-curated', enabled: true }],
+    applied: true,
+  },
+  {
+    name: 'remote assignments remain queued',
+    installed: [],
+    remote: true,
+  },
+]) {
+  test(`plugins use: ${scenario.name}`, async (t) => {
+    const home = await tempDir();
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const vault = path.join(home, '.skillsync', 'repo');
+    const bin = path.join(home, 'bin');
+    const callsPath = path.join(home, 'codex-calls');
+    const deviceId = scenario.remote ? 'linux' : 'macbook';
+    await writeConfig(home, vault, 'macbook');
+    await addTarget({ vaultPath: vault, deviceId, name: 'codex', targetPath: path.join(home, 'skills') });
+    await savePluginProfile({ vaultPath: vault, name: 'shared', plugins: ['gmail@openai-curated'] });
+    if (scenario.unavailable) {
+      await assignPluginProfile({ vaultPath: vault, deviceId, profile: 'shared' });
+      await syncCodexPlugins({
+        vaultPath: vault,
+        deviceId,
+        commandAvailable: async () => true,
+        runCommand: async () => ({ stdout: JSON.stringify({ installed: scenario.installed }) }),
+      });
+    }
+    const previousState = await loadPluginState(vault, deviceId);
+    await mkdir(bin);
+    await writeFile(path.join(bin, 'codex'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$SKILLSYNC_TEST_CODEX_CALLS"
+if [ "$1" = "plugin" ] && [ "$2" = "list" ] && [ "$SKILLSYNC_TEST_CODEX_UNAVAILABLE" != "true" ]; then
+  printf '%s\\n' "$SKILLSYNC_TEST_PLUGINS"
+  exit 0
+fi
+printf '%s\\n' 'OAuth test failure SECRET-123' >&2
+exit 1
+`, { mode: 0o755 });
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      path.resolve('src/cli.js'), 'plugins', 'use', 'shared', '--device', deviceId,
+    ], {
+      cwd: path.resolve('.'),
+      env: {
+        ...cliEnv(home),
+        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        SKILLSYNC_TEST_CODEX_CALLS: callsPath,
+        SKILLSYNC_TEST_CODEX_UNAVAILABLE: String(Boolean(scenario.unavailable)),
+        SKILLSYNC_TEST_PLUGINS: JSON.stringify({ installed: scenario.installed }),
+      },
+    });
+
+    assert.equal((await loadPluginAssignment(vault, deviceId)).profile, 'shared');
+    if (scenario.remote) {
+      assert.match(stdout, /Assigned Codex plugin profile shared to linux; it will apply on that device's next sync/);
+      assert.doesNotMatch(stdout, /Applied|pending|Start a new Codex session/);
+      assert.equal(await loadPluginState(vault, deviceId), null);
+      assert.equal(await exists(callsPath), false);
+      return;
+    }
+    if (scenario.applied) {
+      assert.match(stdout, /Applied Codex plugin profile shared on macbook\. Start a new Codex session/);
+      assert.equal((await loadPluginState(vault, deviceId)).applied_profile, 'shared');
+      return;
+    }
+    assert.match(stdout, /Codex plugin profile shared is pending on macbook/);
+    assert.match(stdout, /skillsync sync/);
+    assert.doesNotMatch(stdout, /Applied|Start a new Codex session|SECRET-123/);
+    for (const detail of scenario.details) assert.match(stdout, detail);
+    if (scenario.unavailable) {
+      assert.equal(previousState.applied_profile, 'shared');
+      assert.deepEqual(await loadPluginState(vault, deviceId), previousState);
+      return;
+    }
+    const state = await loadPluginState(vault, deviceId);
+    assert.equal(state.applied_profile, null);
+    if (scenario.installed.length) {
+      assert.deepEqual(state.disabled, ['gmail@openai-curated']);
+      assert.equal(await readFile(callsPath, 'utf8'), 'plugin list --json\n');
+    }
+  });
+}
 
 test('instructions enable adopts the global AGENTS.md and disable leaves a local copy', async () => {
   const home = await tempDir();
