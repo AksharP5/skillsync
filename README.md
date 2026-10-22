@@ -448,6 +448,8 @@ skillsync sync --discard-local-changes
 
 Copies created by older versions refresh once to record executable permissions when their contents have not been edited. That refresh applies the vault's executable bits, since older copies did not record local permission edits.
 
+Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
+
 Restore the most recent successful local projection apply in an emergency:
 
 ```bash
