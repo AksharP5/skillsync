@@ -1411,7 +1411,12 @@ export async function isManagedSkillPath({ vaultPath, device, targetName, skill 
   if (!target?.path) return Boolean(device.installed[skill.name]?.includes(targetName));
   const scanRoot = expandHome(target.scan_path || target.path);
   const detectedPath = path.resolve(scanRoot, skill.path || '.');
-  if (detectedPath !== path.resolve(expandHome(target.path), skill.name)) return false;
+  if (path.basename(detectedPath) !== skill.name) return false;
+  const [detectedParent, targetRoot] = await Promise.all([
+    realpathOrResolve(path.dirname(detectedPath)),
+    realpathOrResolve(expandHome(target.path)),
+  ]);
+  if (detectedParent !== targetRoot) return false;
   const info = await projectionInfo(detectedPath, vaultPath);
   return info.ownedSymlink || info.ownedCopy;
 }

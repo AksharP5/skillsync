@@ -27,7 +27,7 @@ async function makeSkill(directory, body = '# Standalone demo\n') {
   await writeFile(path.join(directory, 'SKILL.md'), body);
 }
 
-async function fixture(t, { mode = 'symlink', scanParent = false, pendingConflict = false } = {}) {
+async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = false, pendingConflict = false } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-local-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -35,6 +35,7 @@ async function fixture(t, { mode = 'symlink', scanParent = false, pendingConflic
   const remote = path.join(root, 'remote.git');
   const scanRoot = path.join(root, 'target');
   const targetPath = scanParent ? path.join(scanRoot, 'personal') : scanRoot;
+  const scanPath = scanAlias ? path.join(root, 'scan-alias') : scanRoot;
   const options = { vaultPath, deviceId: 'local' };
   await git(['init', '--bare', remote]);
   await git(['init', '-b', 'main', vaultPath]);
@@ -46,8 +47,12 @@ async function fixture(t, { mode = 'symlink', scanParent = false, pendingConflic
   ]) await git(['config', name, value], vaultPath);
   await makeSkill(path.join(vaultPath, 'skills', 'demo'), '# Vault demo\n');
   await rebuildRegistry(vaultPath);
+  if (scanAlias) {
+    await mkdir(scanRoot, { recursive: true });
+    await symlink(scanRoot, scanPath, 'dir');
+  }
   if (pendingConflict) await makeSkill(path.join(targetPath, 'demo'));
-  await addTarget({ ...options, name: 'codex', targetPath, scanPath: scanParent ? scanRoot : undefined, mode, autoImport: false });
+  await addTarget({ ...options, name: 'codex', targetPath, scanPath: scanParent ? scanPath : undefined, mode, autoImport: false });
   await installSkill({ ...options, skillName: 'demo', targets: ['codex'] });
   if (pendingConflict) await assert.rejects(applyLinks(options), /Refusing to overwrite unmanaged target path/);
   else await applyLinks(options);
@@ -89,6 +94,20 @@ register('./loader.mjs', import.meta.url); process.stdin.isTTY = true;`);
 }
 
 for (const mode of ['symlink', 'copy']) {
+  test(`scan directory aliases preserve ownership of the configured ${mode} projection`, async (t) => {
+    const { targetPath, vaultPath, options, cli } = await fixture(t, { mode, scanParent: true, scanAlias: true });
+    const nested = path.join(targetPath, 'nested');
+    await mkdir(nested);
+    await symlink(path.join(vaultPath, 'skills', 'demo'), path.join(nested, 'demo'), 'dir');
+    await scanTargets(options);
+
+    const { stdout } = await cli('scan', '--json');
+    assert.deepEqual(JSON.parse(stdout).skills.map(({ path: skillPath, managed }) => ({ path: skillPath, managed })), [
+      { path: 'personal/demo', managed: true },
+      { path: 'personal/nested/demo', managed: false },
+    ]);
+  });
+
   test(`same-named local folders stay unmanaged beside a ${mode} projection`, async (t) => {
     const { targetPath, scanRoot, vaultPath, options, cli, uninstall } = await fixture(t, { mode, scanParent: mode === 'copy' });
     const duplicate = path.join(targetPath, 'nested', 'demo');
