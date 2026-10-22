@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.14.1](https://github.com/AksharP5/skillsync/compare/v0.14.0...v0.14.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* apply pulled changes before retrying a sync push ([#107](https://github.com/AksharP5/skillsync/issues/107)) ([869c004](https://github.com/AksharP5/skillsync/commit/869c0049e1e49585292605237bc7634e5de7e87c))
+* **cli:** report pending plugin profile assignments accurately ([#105](https://github.com/AksharP5/skillsync/issues/105)) ([e3e3859](https://github.com/AksharP5/skillsync/commit/e3e3859bef8a1fde32053b9cec365fe4756988aa))
+* **cli:** suggest unlinked instruction paths in settings ([#121](https://github.com/AksharP5/skillsync/issues/121)) ([bcbe710](https://github.com/AksharP5/skillsync/commit/bcbe71029a3e31df69c6ee638b9aa27a7f47b2bb))
+* detect owned skill projections by their vault name ([#116](https://github.com/AksharP5/skillsync/issues/116)) ([21c4a85](https://github.com/AksharP5/skillsync/commit/21c4a854dac087ee185c6f8d5385920b7067103e))
+* discover OpenCode skills in the XDG config directory ([#109](https://github.com/AksharP5/skillsync/issues/109)) ([54a83f7](https://github.com/AksharP5/skillsync/commit/54a83f7ea1db462956f04e40a939fc0e601fa434))
+* fail safely on scan errors and invalid vault metadata ([#94](https://github.com/AksharP5/skillsync/issues/94)) ([62080a7](https://github.com/AksharP5/skillsync/commit/62080a785e3a7ccb4d5c8c15faf8747c4c9b3a30))
+* honor local sources and renamed skill assignments ([#91](https://github.com/AksharP5/skillsync/issues/91)) ([da749ad](https://github.com/AksharP5/skillsync/commit/da749ad180313c7f43d84d2582b1c81947264f00))
+* install Linux services in the XDG config directory ([#101](https://github.com/AksharP5/skillsync/issues/101)) ([4762cbe](https://github.com/AksharP5/skillsync/commit/4762cbe1e42e66b08c043f7d54cc0a4223a227b4))
+* keep configured paths stable across working directories ([#99](https://github.com/AksharP5/skillsync/issues/99)) ([262b140](https://github.com/AksharP5/skillsync/commit/262b140f1e66f1db42a00bc28b73a6cc1d58ed9c))
+* keep Cursor rules stable through directory aliases ([#123](https://github.com/AksharP5/skillsync/issues/123)) ([e45c411](https://github.com/AksharP5/skillsync/commit/e45c4119e23834711a761fbd857def2256649c4e))
+* keep instruction destinations stable across directories ([#103](https://github.com/AksharP5/skillsync/issues/103)) ([8df5501](https://github.com/AksharP5/skillsync/commit/8df5501eacd8e4d6830a8b0513163984335f6573))
+* keep read-only skill copies recoverable during sync ([#128](https://github.com/AksharP5/skillsync/issues/128)) ([e101880](https://github.com/AksharP5/skillsync/commit/e101880be697ff51f96f55877f20093dc8705d9c))
+* keep remote skill names stable and honor name overrides ([#97](https://github.com/AksharP5/skillsync/issues/97)) ([cf90147](https://github.com/AksharP5/skillsync/commit/cf9014731ae10cddbbc715fdd8f4ad107405a7b5))
+* keep sync working after remote skill deletion ([#125](https://github.com/AksharP5/skillsync/issues/125)) ([96c7a72](https://github.com/AksharP5/skillsync/commit/96c7a72524098ede0982473a6c757e84adfa1845))
+* keep target folders consistent with managed projections ([#87](https://github.com/AksharP5/skillsync/issues/87)) ([c62a88a](https://github.com/AksharP5/skillsync/commit/c62a88a64ae8a9c4acc1f0dd00976ecaeb2ec19b))
+* preserve every local skill path in adoption baselines ([#115](https://github.com/AksharP5/skillsync/issues/115)) ([68bd001](https://github.com/AksharP5/skillsync/commit/68bd001ff34f4d6be8c03e0e67d6c36fa4774d4b))
+* preserve instructions after interrupted profile switches ([#85](https://github.com/AksharP5/skillsync/issues/85)) ([633a458](https://github.com/AksharP5/skillsync/commit/633a45832db984888ba3281c32aed6fcf2e1bd8a))
+* preserve instructions when detaching a managed link fails ([#135](https://github.com/AksharP5/skillsync/issues/135)) ([db971f2](https://github.com/AksharP5/skillsync/commit/db971f2544247b8a4ce8b111df64c1af40560685))
+* preserve legacy assignments when deleting a skill ([#117](https://github.com/AksharP5/skillsync/issues/117)) ([5555169](https://github.com/AksharP5/skillsync/commit/5555169b01f543878c3e7a4ca2b96c489dbbde6d))
+* preserve percent signs in Linux service paths ([#133](https://github.com/AksharP5/skillsync/issues/133)) ([f17cc4e](https://github.com/AksharP5/skillsync/commit/f17cc4eb98c5a1723b6e16e6a1a0d1dc89f80aff))
+* preserve plugin reports when inventory is malformed ([#90](https://github.com/AksharP5/skillsync/issues/90)) ([792c5d6](https://github.com/AksharP5/skillsync/commit/792c5d62d1b79d938cb82bda9f84b7cac92a81f5))
+* preserve vault skills during failed overwrites ([#114](https://github.com/AksharP5/skillsync/issues/114)) ([49d0949](https://github.com/AksharP5/skillsync/commit/49d0949149f6a835302fa365aafb80db83683d27))
+* reject invalid device state before removing skills ([#96](https://github.com/AksharP5/skillsync/issues/96)) ([35b8ee7](https://github.com/AksharP5/skillsync/commit/35b8ee7bbc66f3a92f7175ea0e4d4849df26e655))
+* reject malformed config before selecting a vault ([#89](https://github.com/AksharP5/skillsync/issues/89)) ([e309a05](https://github.com/AksharP5/skillsync/commit/e309a0597bc47316389d33f2c6da851bc8c217fb))
+* reject target names reserved for global installs ([#124](https://github.com/AksharP5/skillsync/issues/124)) ([e3d6096](https://github.com/AksharP5/skillsync/commit/e3d60967eae806f6f455fab3102d5cf74a9a68e3))
+* remove obsolete generated skill packs ([#88](https://github.com/AksharP5/skillsync/issues/88)) ([760abad](https://github.com/AksharP5/skillsync/commit/760abadc188ec416885cd3834d9d83863031eb46))
+* restore target state when persistence fails ([#130](https://github.com/AksharP5/skillsync/issues/130)) ([381ea9c](https://github.com/AksharP5/skillsync/commit/381ea9c7630cbde75990577217289d33b570d47a))
+* retry failed backups after remote skill deletions ([#137](https://github.com/AksharP5/skillsync/issues/137)) ([4f8c02c](https://github.com/AksharP5/skillsync/commit/4f8c02c55a8a85d4ce0336d6f284f7803e23455e))
+* stop skipping standalone folders during uninstall ([#131](https://github.com/AksharP5/skillsync/issues/131)) ([28a557d](https://github.com/AksharP5/skillsync/commit/28a557d5da1f7031c5553b314c60b51a730a7e93))
+* stop sync before committing unresolved Git conflicts ([#84](https://github.com/AksharP5/skillsync/issues/84)) ([8b81705](https://github.com/AksharP5/skillsync/commit/8b8170532160e72912fffd0a90726f7e1c79dd60))
+* sync executable permissions in managed skill copies ([#95](https://github.com/AksharP5/skillsync/issues/95)) ([41d150f](https://github.com/AksharP5/skillsync/commit/41d150ffe7a2681c451a5544426a7806f63387df))
+
+
+### Performance Improvements
+
+* cut repeated reads when syncing multiple copy targets ([#139](https://github.com/AksharP5/skillsync/issues/139)) ([30fbbef](https://github.com/AksharP5/skillsync/commit/30fbbefbbd9372a4669fadf71edf2db82de664a3))
+* speed up idle sync by skipping redundant scans ([#92](https://github.com/AksharP5/skillsync/issues/92)) ([bdf1e94](https://github.com/AksharP5/skillsync/commit/bdf1e94476620bf6cdb6dd25035ee0fb1a99c458))
+* stop rewriting unchanged skill registries ([#93](https://github.com/AksharP5/skillsync/issues/93)) ([5b64fbc](https://github.com/AksharP5/skillsync/commit/5b64fbc3b4c5ff63da0cc15e9d9847f6f92120c4))
+
 ## [0.14.0](https://github.com/AksharP5/skillsync/compare/v0.13.0...v0.14.0) (2026-10-04)
 
 
