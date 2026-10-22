@@ -434,7 +434,7 @@ If another device pushes first, sync pulls its changes, validates and applies th
 
 When a remote deletion leaves local cache files in a skill folder, sync moves those remnants into Git's private `skillsync/deleted-skills/` directory before validating the vault and removing stale projections. These backups stay on this device and are never synced.
 
-If preserving those files fails, repair the reported storage or permission error and run sync again. Sync records its starting Git revision privately before pulling and keeps it until preservation completes, so another pull does not lose the deletion history needed for recovery.
+If preserving those files fails, repair the reported storage or permission error and run sync again. Sync records each pull's starting Git revision privately and saves the identities of pending remnant folders before moving them. Retries retain unfinished backups across later pulls without moving a new folder created at a completed backup's old name.
 
 Sync stops if Git leaves unresolved conflicts, including conflicts while restoring local edits after a pull. Resolve and stage the affected files before retrying. `--no-pull` does not bypass this check.
 

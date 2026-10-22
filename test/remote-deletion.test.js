@@ -12,7 +12,7 @@ import { syncVault } from '../src/core/sync.js';
 
 const cache = Buffer.from([0, 255, 10, 123, 34, 108, 111, 99, 97, 108, 34, 58, 116, 114, 117, 101, 125]);
 
-async function deletionFixture(t, { ignore = 'root', mode = 'symlink', gitDir } = {}) {
+async function deletionFixture(t, { ignore = 'root', mode = 'symlink', gitDir, extraSkills = [] } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-remote-deletion-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const remote = path.join(root, 'remote.git');
@@ -31,6 +31,10 @@ async function deletionFixture(t, { ignore = 'root', mode = 'symlink', gitDir } 
   await mkdir(skill, { recursive: true });
   await writeFile(path.join(skill, 'SKILL.md'), '# Demo\n');
   if (ignore === 'skill') await writeFile(path.join(skill, '.gitignore'), 'cache.bin\n');
+  for (const name of extraSkills) {
+    await mkdir(path.join(local, 'skills', name));
+    await writeFile(path.join(local, 'skills', name, 'SKILL.md'), `# ${name}\n`);
+  }
   await rebuildRegistry(local);
   await addTarget({ ...options, name: 'codex', targetPath: target, autoImport: false, mode });
   await installSkill({ ...options, skillName: 'demo', targets: ['codex'] });
@@ -85,6 +89,13 @@ async function remnantEntries(directory) {
   })));
 }
 
+async function preservedSkills(local) {
+  const root = await gitPrivatePath(local, 'deleted-skills');
+  return Object.values(await remnantEntries(root))
+    .flatMap((backup) => Object.entries(backup))
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
 async function configureUser(repo) {
   await git(['config', 'user.name', 'SkillSync Test'], repo);
   await git(['config', 'user.email', 'test@example.invalid'], repo);
@@ -113,6 +124,22 @@ exec git-receive-pack "$@"
 `);
   await git(['config', 'remote.origin.receivepack', `sh '${hook.replaceAll("'", "'\\''")}'`], fixture.local);
   await writeFile(path.join(fixture.local, 'notes.txt'), 'local change triggers push\n');
+}
+
+async function failSync(t, options, operation, when, code = 'EIO') {
+  const original = fs[operation];
+  const failure = Object.assign(new Error(`Injected ${operation} failure`), { code });
+  const mock = t.mock.method(fs, operation, async (...args) => {
+    if (when(...args)) throw failure;
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(syncVault(options), (error) => error === failure);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
 }
 
 async function assertCachePreserved(local) {
@@ -243,6 +270,9 @@ test('an incomplete cross-filesystem backup preserves sources and retries on the
   assert.equal(complete.length, 1);
   assert.deepEqual(await remnantEntries(complete[0]), expected);
   await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'remnant-recovery.json')), { code: 'ENOENT' });
+  await syncVault(fixture.options);
+  assert.deepEqual(await readdir(backupRoot), backups);
+  assert.deepEqual(await remnantEntries(complete[0]), expected);
 });
 
 for (const retry of [false, true]) {
@@ -326,6 +356,165 @@ test('failure to save remnant recovery state stops before pulling the deletion',
   await syncVault(fixture.options);
 
   await assertDeletionApplied(fixture, 'skill');
+});
+
+test('pending backup retains deletions from later pulls', async (t) => {
+  const fixture = await deletionFixture(t);
+  await deleteSkillFromVault({ vaultPath: fixture.other, skillName: 'demo' });
+  await mkdir(path.join(fixture.other, 'skills', 'new'));
+  await writeFile(path.join(fixture.other, 'skills', 'new', 'SKILL.md'), '# New\n');
+  await rebuildRegistry(fixture.other);
+  await commitAllIfChanged(fixture.other, 'delete demo and add new');
+  await git(['push'], fixture.other);
+  await failSync(t, fixture.options, 'rename', (source) => source === fixture.skill, 'EACCES');
+  const added = path.join(fixture.local, 'skills', 'new');
+  assert.equal(await readFile(path.join(added, 'SKILL.md'), 'utf8'), '# New\n');
+  const newCache = Buffer.from('new cache');
+  await writeFile(path.join(added, 'cache.bin'), newCache);
+  await deleteSkillFromVault({ vaultPath: fixture.other, skillName: 'new' });
+  await commitAllIfChanged(fixture.other, 'delete new');
+  await git(['push'], fixture.other);
+
+  await syncVault(fixture.options);
+  await syncVault(fixture.options);
+
+  await assert.rejects(lstat(fixture.skill), { code: 'ENOENT' });
+  await assert.rejects(lstat(added), { code: 'ENOENT' });
+  await assert.rejects(lstat(path.join(fixture.target, 'demo')), { code: 'ENOENT' });
+  assert.deepEqual(await preservedSkills(fixture.local), [
+    ['demo', { 'cache.bin': cache }], ['new', { 'cache.bin': newCache }],
+  ]);
+  await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'remnant-recovery.json')), { code: 'ENOENT' });
+});
+
+for (const ignore of ['none', 'root']) {
+  test(`checkpoint cleanup failure cannot claim a new folder after ${ignore} remnants`, async (t) => {
+    const fixture = await deletionFixture(t, { ignore });
+    await deleteRemotely(fixture);
+    const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+    await failSync(t, fixture.options, 'rm', (file) => file === checkpoint);
+    await assert.rejects(lstat(fixture.skill), { code: 'ENOENT' });
+    if (ignore !== 'none') await assertCachePreserved(fixture.local);
+    await mkdir(fixture.skill, { recursive: true });
+    await writeFile(path.join(fixture.skill, 'notes.txt'), 'new local notes\n');
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(syncVault(fixture.options), /regular SKILL\.md file: skills\/demo/);
+      assert.equal(await readFile(path.join(fixture.skill, 'notes.txt'), 'utf8'), 'new local notes\n');
+      if (ignore !== 'none') await assertCachePreserved(fixture.local);
+    }
+    if (ignore === 'none') {
+      await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'deleted-skills')), { code: 'ENOENT' });
+    }
+  });
+}
+
+for (const transitionFailure of [false, true]) {
+  test(`pre-rebase history excludes local deletions after ${transitionFailure ? 'checkpoint' : 'backup'} failure and direct push`, async (t) => {
+    const fixture = await deletionFixture(t, { extraSkills: ['keeper-a', 'keeper-b', 'keeper-c', 'local-deleted'] });
+    await deleteSkillFromVault({ vaultPath: fixture.local, skillName: 'local-deleted' });
+    await commitAllIfChanged(fixture.local, 'local deletion');
+    const unrelated = path.join(fixture.local, 'skills', 'local-deleted');
+    await mkdir(unrelated);
+    await writeFile(path.join(unrelated, 'notes.txt'), 'unmanaged local notes\n');
+    const before = (await git(['rev-parse', 'HEAD'], fixture.local)).stdout;
+    const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+    await deleteRemotely(fixture);
+    let writes = 0;
+    await failSync(t, fixture.options, 'rename', (source, destination) => transitionFailure
+      ? destination === checkpoint && ++writes === 2
+      : source === fixture.skill);
+    assert.notEqual((await git(['rev-parse', 'HEAD'], fixture.local)).stdout, before);
+    await git(['push'], fixture.local);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(syncVault(fixture.options), /regular SKILL\.md file: skills\/local-deleted/);
+      assert.equal(await readFile(path.join(unrelated, 'notes.txt'), 'utf8'), 'unmanaged local notes\n');
+    }
+    assert.deepEqual(await preservedSkills(fixture.local), [['demo', { 'cache.bin': cache }]]);
+  });
+}
+
+for (const replace of [false, true]) {
+  test(`failure to save pending identities ${replace ? 'protects a replacement directory' : 'retains recovery evidence'}`, async (t) => {
+    const fixture = await deletionFixture(t);
+    await deleteRemotely(fixture);
+    const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+    const before = (await git(['rev-parse', 'HEAD'], fixture.local)).stdout.trim();
+    let writes = 0;
+    await failSync(t, fixture.options, 'rename', (source, destination) => destination === checkpoint && ++writes === 2, 'ENOSPC');
+    assert.equal(JSON.parse(await readFile(checkpoint, 'utf8')).previous_head, before);
+    assert.deepEqual(await readFile(path.join(fixture.skill, 'cache.bin')), cache);
+    await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'deleted-skills')), { code: 'ENOENT' });
+    const saved = path.join(fixture.root, 'saved-remnant');
+    if (replace) {
+      await fs.rename(fixture.skill, saved);
+      await mkdir(fixture.skill, { recursive: true });
+      await writeFile(path.join(fixture.skill, 'notes.txt'), 'replacement local notes\n');
+    }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!replace) {
+        await syncVault(fixture.options);
+        await assertCachePreserved(fixture.local);
+        continue;
+      }
+      await assert.rejects(syncVault(fixture.options), /regular SKILL\.md file: skills\/demo/);
+      assert.equal(await readFile(path.join(fixture.skill, 'notes.txt'), 'utf8'), 'replacement local notes\n');
+      assert.deepEqual(await readFile(path.join(saved, 'cache.bin')), cache);
+      await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'deleted-skills')), { code: 'ENOENT' });
+    }
+  });
+}
+
+test('pending recovery survives no-pull sync and failed transport', async (t) => {
+  const fixture = await deletionFixture(t);
+  await deleteRemotely(fixture);
+  const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+  await failSync(t, fixture.options, 'rename', (source) => source === fixture.skill);
+  const before = await readFile(checkpoint, 'utf8');
+  await assert.rejects(syncVault({ ...fixture.options, pull: false, pushChanges: false }), /regular SKILL\.md file/);
+  assert.equal(await readFile(checkpoint, 'utf8'), before);
+  await git(['remote', 'set-url', 'origin', path.join(fixture.root, 'missing-remote')], fixture.local);
+  await assert.rejects(syncVault(fixture.options), /git pull --rebase --autostash failed/);
+  assert.deepEqual(await readFile(path.join(fixture.skill, 'cache.bin')), cache);
+  assert.equal(JSON.parse(await readFile(checkpoint, 'utf8')).pending.length, 1);
+  await git(['remote', 'set-url', 'origin', fixture.remote], fixture.local);
+
+  await syncVault(fixture.options);
+  await syncVault(fixture.options);
+
+  await assert.rejects(lstat(fixture.skill), { code: 'ENOENT' });
+  assert.deepEqual(await preservedSkills(fixture.local), [['demo', { 'cache.bin': cache }]]);
+});
+
+test('malformed pending recovery is rejected before pulling or moving data', async (t) => {
+  const fixture = await deletionFixture(t);
+  await deleteRemotely(fixture);
+  const before = (await git(['rev-parse', 'HEAD'], fixture.local)).stdout.trim();
+  const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+  const entry = { name: 'demo', dev: '1', ino: '2', birthtime: '3' };
+  const valid = { previous_head: before, candidates: [], pending: [] };
+  const invalid = [
+    null, [], 'state', {}, { ...valid, previous_head: [before] },
+    { ...valid, previous_head: 'a'.repeat(41) }, { ...valid, candidates: null },
+    { ...valid, pending: {} }, { ...valid, pending: [null] },
+    { ...valid, pending: [{ ...entry, dev: 1 }] },
+    { ...valid, pending: [{ ...entry, ino: ['2'] }] },
+    { ...valid, pending: [{ ...entry, birthtime: '-1' }] },
+    { ...valid, pending: [{ ...entry, name: '../demo' }] },
+    { ...valid, candidates: [{ ...entry, name: 'a\\demo' }] },
+    { ...valid, pending: [entry, entry] },
+  ];
+  for (const value of invalid) {
+    await writeFile(checkpoint, JSON.stringify(value));
+    await assert.rejects(syncVault(fixture.options), /recovery|Recovery/);
+    assert.equal((await git(['rev-parse', 'HEAD'], fixture.local)).stdout.trim(), before);
+    assert.deepEqual(await readFile(path.join(fixture.skill, 'cache.bin')), cache);
+  }
+  await rm(checkpoint);
+  await syncVault(fixture.options);
+  await assertDeletionApplied(fixture, 'root');
 });
 
 test('remote deletion still rejects unrelated malformed local folders before projection cleanup', async (t) => {
