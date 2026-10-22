@@ -430,6 +430,8 @@ Sync leaves `registry.json` untouched when its entries and metadata are unchange
 
 If another device pushes first, sync pulls its changes, validates and applies them locally, and updates the device report before retrying the push once. A second rejection stops sync with an error.
 
+When a remote deletion leaves local cache files in a skill folder, sync moves those remnants into Git's private `skillsync/deleted-skills/` directory before validating the vault and removing stale projections. These backups stay on this device and are never synced.
+
 Sync stops if Git leaves unresolved conflicts, including conflicts while restoring local edits after a pull. Resolve and stage the affected files before retrying. `--no-pull` does not bypass this check.
 
 Preview local skill projection changes without pulling or writing:

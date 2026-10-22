@@ -107,8 +107,10 @@ export async function cloneRepo(repo, repoPath) {
 
 export async function pullRebase(repoPath) {
   if (!await isGitRepo(repoPath)) return;
+  const { stdout: previousHead } = await git(['rev-parse', '--revs-only', 'HEAD'], repoPath);
   await git(['pull', '--rebase', '--autostash'], repoPath);
   await assertNoGitConflicts(repoPath);
+  return previousHead.trim() || null;
 }
 
 export async function assertNoGitConflicts(repoPath) {
@@ -141,8 +143,8 @@ export async function pushWithPullRebaseRetry(repoPath, { beforePush, afterPullR
     return { pushed: true, rebased: false };
   } catch (error) {
     if (!isPushRejectedBecauseRemoteHasWork(error)) throw error;
-    await pullRebase(repoPath);
-    if (afterPullRebase) await afterPullRebase();
+    const previousHead = await pullRebase(repoPath);
+    if (afterPullRebase) await afterPullRebase(previousHead);
     if (beforePush) await beforePush();
     await push(repoPath);
     return { pushed: true, rebased: true };
