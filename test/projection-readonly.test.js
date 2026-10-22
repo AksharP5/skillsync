@@ -230,7 +230,7 @@ test('read-only cleanup does not require chmod ownership of writable shared dire
   const realChmod = fs.chmod;
   const mocked = t.mock.method(fs, 'chmod', async (file, mode) => {
     const info = await lstat(file);
-    if (info.dev === original.dev && info.ino === original.ino) {
+    if (file === destination && info.isDirectory() && info.dev === original.dev && info.ino === original.ino) {
       throw Object.assign(new Error('Shared directory is owned by another user'), { code: 'EPERM' });
     }
     return realChmod(file, mode);
