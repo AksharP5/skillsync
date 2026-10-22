@@ -192,7 +192,7 @@ Instruction destinations are saved as absolute paths when you import, select, en
 
 After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies, including links left by an interrupted profile switch. Replacing managed paths with an explicit `--path` or `--from` also leaves the old linked files as standalone copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
 
-Unlinking a path leaves a standalone local copy unless another configured path reaches the same file through a directory symlink. In that case, the remaining path stays linked to the profile.
+Unlinking a path leaves a standalone local copy unless another configured path reaches the same file through a directory symlink. In that case, the remaining path stays linked to the profile. If writing a standalone copy fails, the managed link is kept so the operation can be retried.
 
 ## Sync Codex plugins
 
