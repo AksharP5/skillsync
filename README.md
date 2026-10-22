@@ -285,6 +285,8 @@ OpenCode setup detection and imports use `$XDG_CONFIG_HOME/opencode/skills` when
 
 When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly. Renaming with `--conflict rename --as new-name` preserves the original source and honors `--target` and `--global` for the renamed skill.
 
+Managed links and copies are detected by their vault name, even when `SKILL.md` retains the source name. Unmanaged folders still use `SKILL.md` frontmatter when present.
+
 ## Automatic skill adoption
 
 New targets automatically adopt new skills created inside their managed folder. For example, if Codex creates `~/.codex/skills/my-new-skill`, the next SkillSync run adds it to the vault, assigns it to Codex on that device, and replaces the standalone folder with a managed projection.
