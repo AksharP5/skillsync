@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   lstat,
   readFile,
@@ -409,6 +409,20 @@ async function createOwnedInstructionsSymlink(source, destination) {
   await symlink(relative, destination, 'file');
 }
 
+async function writeStandaloneInstructions(destination, content) {
+  await ensureDir(path.dirname(destination));
+  const temporary = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  await writeFile(temporary, content, { flag: 'wx' })
+    .then(() => rename(temporary, destination))
+    .catch(async (error) => {
+      await removePath(temporary);
+      throw error;
+    });
+}
+
 async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
   const unmanaged = new Map();
   for (const targetPath of targetPaths) {
@@ -488,8 +502,7 @@ export async function selectGlobalInstructionsProfile({
   }
   const backups = await preserveUnmanagedDestinations(vaultPath, paths);
   for (const { destination, content } of removed) {
-    await removePath(destination);
-    await writeFile(destination, content);
+    await writeStandaloneInstructions(destination, content);
   }
   await setGlobalInstructionsProfile({
     vaultPath,
@@ -627,8 +640,7 @@ export async function removeGlobalInstructionsPath({
   if (!stillLinked && applied && owned === applied) {
     await requireProfile(vaultPath, applied);
     const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
-    await removePath(destination);
-    await writeFile(destination, content);
+    await writeStandaloneInstructions(destination, content);
   } else if (!stillLinked && owned) {
     throw new Error(`Refusing to unlink a different global instructions profile: ${destination}`);
   }
@@ -678,9 +690,7 @@ export async function applyGlobalInstructions({
       const owned = await ownedProfileAt(destination, vaultPath);
       if (!owned) continue;
       const content = await projectedInstructionsContent(vaultPath, owned, targetPath);
-      await removePath(destination);
-      await ensureDir(path.dirname(destination));
-      await writeFile(destination, content);
+      await writeStandaloneInstructions(destination, content);
     }
     await configureGlobalInstructions({
       vaultPath,
