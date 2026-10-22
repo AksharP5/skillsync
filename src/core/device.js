@@ -1,6 +1,7 @@
 import { lstat, mkdir, readlink, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   GLOBAL_INSTALL_TARGET,
@@ -334,12 +335,7 @@ export async function loadLocalDevice(vaultPath, deviceId = defaultDeviceId(), {
 }
 
 export async function saveDevice(vaultPath, device) {
-  await ensureVault(vaultPath);
-  const normalized = normalizeDevice(device, device.device_id);
-  await writeLocalPathState(vaultPath, normalized);
-  await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
-  await writeJson(devicePath(vaultPath, normalized.device_id), desiredStateFromDevice(normalized));
-  return normalized;
+  return saveLocalReportedDevice(vaultPath, device, { saveDesired: true });
 }
 
 async function saveDesiredDevice(vaultPath, device) {
@@ -352,22 +348,59 @@ async function saveDesiredDevice(vaultPath, device) {
   return normalized;
 }
 
-async function saveReportedDevice(vaultPath, device) {
+async function saveLocalReportedDevice(vaultPath, device, { saveDesired = false } = {}) {
   await ensureVault(vaultPath);
   const normalized = normalizeDevice(device, device.device_id);
-  await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
+  const updates = [
+    {
+      filePath: await localPathStatePath(vaultPath, normalized.device_id),
+      value: localPathStateFromDevice(normalized),
+      write: writePrivateJson,
+    },
+    {
+      filePath: deviceStatePath(vaultPath, normalized.device_id),
+      value: reportedStateFromDevice(normalized),
+      write: writeJson,
+    },
+  ];
   const desiredPath = devicePath(vaultPath, normalized.device_id);
   const desired = await readJson(desiredPath, null);
-  if (!desired || isLegacyDeviceManifest(desired)) {
-    await writeJson(desiredPath, desiredStateFromDevice(normalized));
+  if (saveDesired || !desired || isLegacyDeviceManifest(desired)) {
+    updates.push({ filePath: desiredPath, value: desiredStateFromDevice(normalized), write: writeJson });
   }
+  await writeDeviceState(updates);
   return normalized;
 }
 
-async function saveLocalReportedDevice(vaultPath, device) {
-  const normalized = normalizeDevice(device, device.device_id);
-  await writeLocalPathState(vaultPath, normalized);
-  return saveReportedDevice(vaultPath, normalized);
+async function writeDeviceState(updates) {
+  const snapshots = await Promise.all(updates.map(async (update) => ({
+    ...update,
+    previous: await readJson(update.filePath, null),
+  })));
+  const attempted = [];
+  try {
+    for (const update of snapshots) {
+      // A private write can fail its permission check after replacing the file.
+      attempted.push(update);
+      await update.write(update.filePath, update.value);
+    }
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const { filePath, previous, write } of attempted.reverse()) {
+      try {
+        if (isDeepStrictEqual(await readJson(filePath, null), previous)) continue;
+        if (previous === null) await rm(filePath, { force: true });
+        else await write(filePath, previous);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length) {
+      throw new AggregateError([error, ...rollbackErrors],
+        `${error.message}\nDevice state rollback also failed: ${rollbackErrors.map((failure) => failure.message).join('; ')}`);
+    }
+    throw error;
+  }
 }
 
 function composeDevice({

@@ -547,6 +547,7 @@ skillsync daemon
 - SkillSync will not silently overwrite an unmanaged local folder.
 - SkillSync refuses to overwrite or remove a locally edited managed copy unless you explicitly discard the edits.
 - Skill projection applies restore their previous state after a failure.
+- Failed target moves or removals restore the previous private paths, device reports, assignments, and managed projections. Fix the reported write error before retrying.
 - Vault checks reject symlinks, malformed JSON, stale registry entries, reserved ownership markers, and common credential formats. Pushes also check unpushed commit additions so removing a credential in a later commit does not silently publish it.
 - Symlinked content outside a configured target is not auto-adopted.
 - Different same-name skills require explicit conflict resolution.
