@@ -2904,15 +2904,12 @@ async function instructionProfileSettingsScreen(config, device) {
   }
   if (choice === 'link') {
     const hasClaude = await deviceHasClaude();
-    const claudeLinked = (agents.paths || []).includes(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
-    const cursorLinked = (agents.paths || []).includes(DEFAULT_CURSOR_RULE_PATH);
-    let suggestedPath = '~/.config/opencode/AGENTS.md';
-    if (await commandExists('agent') && !cursorLinked) {
-      suggestedPath = DEFAULT_CURSOR_RULE_PATH;
-    }
-    if (hasClaude && !claudeLinked) {
-      suggestedPath = DEFAULT_CLAUDE_INSTRUCTIONS_PATH;
-    }
+    const linked = new Set((agents.paths || []).map((candidate) => path.resolve(expandHome(candidate))));
+    const opencode = globalInstructionProviderPaths().find(({ provider }) => provider === 'opencode');
+    const candidates = [opencode.path];
+    if (await commandExists('agent')) candidates.unshift(DEFAULT_CURSOR_RULE_PATH);
+    if (hasClaude) candidates.unshift(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
+    const suggestedPath = candidates.find((candidate) => !linked.has(path.resolve(expandHome(candidate))));
     const targetPath = await input({
       message: 'Additional global instructions path',
       default: suggestedPath,
