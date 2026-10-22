@@ -1,10 +1,11 @@
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
 import { normalizeGlobalInstalled, normalizeInstalled } from './device-assignments.js';
-import { hashSyncedDirectory, ignoredGitPaths } from './git.js';
+import { gitPrivatePath, hashSyncedDirectory, ignoredGitPaths } from './git.js';
 import {
   assertSafePathSegment,
   copyDir,
@@ -123,6 +124,27 @@ export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   };
 }
 
+async function makeImportDirectoryWritable(directory) {
+  try {
+    await access(directory, constants.W_OK);
+    return null;
+  } catch (error) {
+    if (error.code !== 'EACCES') throw error;
+  }
+  const mode = (await stat(directory)).mode & 0o7777;
+  await chmod(directory, mode | 0o200);
+  return mode;
+}
+
+async function removeImportDirectory(directory) {
+  // Only disposable import copies may need their read-only directories unlocked.
+  await makeImportDirectoryWritable(directory);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) await removeImportDirectory(path.join(directory, entry.name));
+  }
+  await removePath(directory);
+}
+
 export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite = false }) {
   const comparison = await compareSkillToVault({ vaultPath, sourcePath, name });
   if (comparison.status === 'different' && !overwrite) {
@@ -137,14 +159,77 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
     }
     return { name: comparison.name, path: comparison.path, status: 'identical' };
   }
-  await copyDir(sourcePath, comparison.path);
-  const registry = await loadRegistry(vaultPath);
-  registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
-  await saveRegistry(vaultPath, registry);
+  const importRoot = await gitPrivatePath(vaultPath, 'imports')
+    || path.join(vaultPath, '.skillsync-local', 'imports');
+  await ensureDir(importRoot);
+  const skillRoot = path.dirname(comparison.path);
+  const separateFilesystem = (await stat(importRoot)).dev !== (await stat(skillRoot)).dev;
+  const staging = await mkdtemp(separateFilesystem
+    ? path.join(skillRoot, '.skillsync-import-')
+    : path.join(importRoot, 'skill-'));
+  const replacement = path.join(staging, 'replacement');
+  const original = path.join(staging, 'original');
+  let backup = comparison.status === 'different' ? original : null;
+  let backupDirectory = null;
+  let preserved = false;
+  let replaced = false;
+  let originalMode = null;
+  let replacementMode = null;
+  try {
+    if (separateFilesystem) await writeFile(path.join(staging, '.gitignore'), '*\n');
+    await copyDir(sourcePath, replacement);
+    await validateSkillFolder(replacement);
+    // Moving a directory between parents requires write access to its root on POSIX.
+    replacementMode = await makeImportDirectoryWritable(replacement);
+    if (backup) {
+      originalMode = await makeImportDirectoryWritable(comparison.path);
+      await rename(comparison.path, original);
+      preserved = true;
+      if (originalMode !== null) await chmod(original, originalMode);
+    }
+    await rename(replacement, comparison.path);
+    replaced = true;
+    if (replacementMode !== null) await chmod(comparison.path, replacementMode);
+    if (backup && separateFilesystem) {
+      backupDirectory = await mkdtemp(path.join(importRoot, 'skill-'));
+      backup = path.join(backupDirectory, 'original');
+      await cp(original, backup, { recursive: true, dereference: false, verbatimSymlinks: true });
+    }
+    const registry = await loadRegistry(vaultPath);
+    registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+    await saveRegistry(vaultPath, registry);
+  } catch (error) {
+    try {
+      if (replaced) {
+        await makeImportDirectoryWritable(comparison.path);
+        await rename(comparison.path, replacement);
+        if (replacementMode !== null) await chmod(replacement, replacementMode);
+      }
+      if (preserved) {
+        await makeImportDirectoryWritable(original);
+        await rename(original, comparison.path);
+      }
+      if (originalMode !== null) await chmod(comparison.path, originalMode);
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError],
+        `Skill import failed: ${error.message}\nRollback failed: ${rollbackError.message}\nRecover skill files from ${staging}`);
+    }
+    try {
+      await removeImportDirectory(staging);
+      if (backupDirectory) await removeImportDirectory(backupDirectory);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError],
+        `Skill import failed: ${error.message}\nThe previous skill is unchanged. Could not remove staging files at ${staging}: ${cleanupError.message}`);
+    }
+    throw error;
+  }
+  // Keep the original intact, including read-only directories, for local recovery.
+  if (!backup || separateFilesystem) await removeImportDirectory(staging);
   return {
     name: comparison.name,
     path: comparison.path,
     status: comparison.status === 'different' ? 'overwritten' : 'added',
+    ...(backup ? { backup } : {}),
   };
 }
 

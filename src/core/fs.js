@@ -65,7 +65,6 @@ export async function writePrivateJson(filePath, value) {
 }
 
 export async function copyDir(source, destination) {
-  await rm(destination, { recursive: true, force: true });
   await ensureDir(path.dirname(destination));
   const sourceRoot = path.resolve(source);
   await cp(source, destination, {

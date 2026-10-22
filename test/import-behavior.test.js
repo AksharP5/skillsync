@@ -31,7 +31,7 @@ async function commitFixture(repo) {
 
 async function fixture(t) {
   const home = await mkdtemp(path.join(tmpdir(), 'skillsync-import-test-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(home, { recursive: true, force: true, maxRetries: 3 }));
   const vault = path.join(home, 'vault');
   const remote = path.join(home, 'vault.git');
   await mkdir(vault);
