@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import {
+  access,
   chmod,
   copyFile,
   cp,
@@ -31,6 +33,40 @@ async function pathInfo(filePath) {
     if (error.code === 'ENOENT') return null;
     throw error;
   });
+}
+
+async function makeDirectoryWritable(directory) {
+  try {
+    await access(directory, constants.W_OK);
+    return null;
+  } catch (error) {
+    if (error.code !== 'EACCES') throw error;
+    const info = await lstat(directory);
+    if (!info.isDirectory()) throw error;
+    const mode = info.mode & 0o7777;
+    await chmod(directory, mode | 0o200);
+    return mode;
+  }
+}
+
+async function makeDirectoriesRemovable(targetPath) {
+  const info = await pathInfo(targetPath);
+  if (!info?.isDirectory()) return;
+  await makeDirectoryWritable(targetPath);
+  for (const entry of await readdir(targetPath, { withFileTypes: true })) {
+    if (entry.isDirectory()) await makeDirectoriesRemovable(path.join(targetPath, entry.name));
+  }
+}
+
+async function removeProjectionPath(targetPath) {
+  try {
+    await removePath(targetPath);
+  } catch (error) {
+    if (!['EACCES', 'EPERM'].includes(error.code)) throw error;
+    // Only backed-up projections and disposable transaction trees may be unlocked.
+    await makeDirectoriesRemovable(targetPath);
+    await removePath(targetPath);
+  }
 }
 
 async function transactionRoot(vaultPath) {
@@ -174,15 +210,17 @@ async function replaceWithCopy(source, destination, marker) {
   try {
     await cp(source, temporary, { recursive: true, force: true, dereference: false });
     if (marker !== undefined) {
+      const mode = await makeDirectoryWritable(temporary);
       await writeFile(
         path.join(temporary, '.skillsync-owned.json'),
         `${JSON.stringify(marker, null, 2)}\n`,
       );
+      if (mode !== null) await chmod(temporary, mode);
     }
-    await removePath(destination);
+    await removeProjectionPath(destination);
     await rename(temporary, destination);
   } finally {
-    await removePath(temporary);
+    await removeProjectionPath(temporary);
   }
 }
 
@@ -192,10 +230,10 @@ async function replaceWithFile(source, destination, mode) {
   try {
     await copyFile(source, temporary);
     await chmod(temporary, mode);
-    await removePath(destination);
+    await removeProjectionPath(destination);
     await rename(temporary, destination);
   } finally {
-    await removePath(temporary);
+    await removeProjectionPath(temporary);
   }
 }
 
@@ -208,16 +246,16 @@ async function replaceWithSymlink(source, destination, explicitLink = null) {
       await realpath(source),
     );
     await symlink(link, temporary, 'dir');
-    await removePath(destination);
+    await removeProjectionPath(destination);
     await rename(temporary, destination);
   } finally {
-    await removePath(temporary);
+    await removeProjectionPath(temporary);
   }
 }
 
 async function applyOperation(operation) {
   if (operation.type === 'remove') {
-    await removePath(operation.destination);
+    await removeProjectionPath(operation.destination);
     return;
   }
   if (operation.type === 'copy') {
@@ -286,7 +324,7 @@ async function restoreBackup(backupPath, manifest, deviceId, allowedRoots) {
   await preflightBackup(backupPath, manifest, deviceId, allowedRoots);
   for (const entry of manifest.entries) {
     if (entry.type === 'missing') {
-      await removePath(entry.destination);
+      await removeProjectionPath(entry.destination);
       continue;
     }
     if (entry.type === 'symlink') {
@@ -334,7 +372,7 @@ async function pruneBackups(root, deviceId) {
     .sort()
     .reverse()
     .slice(BACKUP_LIMIT);
-  for (const name of old) await removePath(path.join(deviceRoot, name));
+  for (const name of old) await removeProjectionPath(path.join(deviceRoot, name));
 }
 
 async function withLock(root, allowedRoots, callback) {
