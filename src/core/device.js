@@ -1049,6 +1049,7 @@ export async function planLinks({
   }
 
   const operations = [];
+  const sourceHashes = new Map();
   for (const group of targetGroups.values()) {
     const targetInfo = await stat(group.targetPath).catch((error) => {
       if (error.code === 'ENOENT') return null;
@@ -1093,9 +1094,13 @@ export async function planLinks({
         throw new Error(`Refusing to overwrite unmanaged target path: ${destination}`);
       }
       // Copy protection covers every deployed file, including Git-ignored local files.
-      const sourceHash = group.mode === 'copy' || info.ownedCopy
-        ? await hashDirectory(source, { includeExecutableBits: true })
-        : registry.skills[skillName].hash;
+      let sourceHash = registry.skills[skillName].hash;
+      if (group.mode === 'copy' || info.ownedCopy) {
+        if (!sourceHashes.has(skillName)) {
+          sourceHashes.set(skillName, await hashDirectory(source, { includeExecutableBits: true }));
+        }
+        sourceHash = sourceHashes.get(skillName);
+      }
       if (group.mode === 'copy') {
         if (info.ownedCopy) {
           const state = await copyState({
