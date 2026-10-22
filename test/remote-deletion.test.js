@@ -301,6 +301,44 @@ for (const retry of [false, true]) {
   });
 }
 
+for (const birthtime of ['ctime', 'zero']) {
+  for (const replace of [false, true]) {
+    test(`unavailable birthtime reported as ${birthtime} ${replace ? 'protects replacement folders' : 'preserves remote deletion remnants'}`, async (t) => {
+      const fixture = await deletionFixture(t);
+      await deleteRemotely(fixture);
+      const original = fs.lstat;
+      const mock = t.mock.method(fs, 'lstat', async (...args) => {
+        const info = await original(...args);
+        if (args[1]?.bigint) info.birthtimeNs = birthtime === 'ctime' ? info.ctimeNs : 0n;
+        return info;
+      });
+      syncBuiltinESMExports();
+      try {
+        if (!replace) {
+          await syncVault(fixture.options);
+          await assertDeletionApplied(fixture, 'root');
+          return;
+        }
+        await failSync(t, fixture.options, 'rename', (source) => source === fixture.skill);
+        const saved = path.join(fixture.root, 'saved-remnant');
+        await fs.rename(fixture.skill, saved);
+        await mkdir(fixture.skill, { recursive: true });
+        await writeFile(path.join(fixture.skill, 'notes.txt'), 'replacement local notes\n');
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await assert.rejects(syncVault(fixture.options), /regular SKILL\.md file: skills\/demo/);
+          assert.equal(await readFile(path.join(fixture.skill, 'notes.txt'), 'utf8'), 'replacement local notes\n');
+          assert.deepEqual(await readFile(path.join(saved, 'cache.bin')), cache);
+        }
+        const root = await gitPrivatePath(fixture.local, 'deleted-skills');
+        for (const backup of await readdir(root)) assert.deepEqual(await readdir(path.join(root, backup)), []);
+      } finally {
+        mock.mock.restore();
+        syncBuiltinESMExports();
+      }
+    });
+  }
+}
+
 test('pending remnant recovery leaves a recreated canonical skill in place', async (t) => {
   const fixture = await deletionFixture(t, { ignore: 'skill' });
   await deleteRemotely(fixture);
@@ -502,6 +540,7 @@ test('malformed pending recovery is rejected before pulling or moving data', asy
     { ...valid, pending: [{ ...entry, dev: 1 }] },
     { ...valid, pending: [{ ...entry, ino: ['2'] }] },
     { ...valid, pending: [{ ...entry, birthtime: '-1' }] },
+    { ...valid, pending: [{ ...entry, birthtime: 0 }] },
     { ...valid, pending: [{ ...entry, name: '../demo' }] },
     { ...valid, candidates: [{ ...entry, name: 'a\\demo' }] },
     { ...valid, pending: [entry, entry] },

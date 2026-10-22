@@ -47,9 +47,12 @@ function parseRemnantRecovery(value) {
   for (const entries of [value.candidates, value.pending]) {
     const names = new Set();
     for (const entry of entries) {
-      if (!object(entry) || ['dev', 'ino', 'birthtime'].some((key) => (
+      if (!object(entry) || ['dev', 'ino'].some((key) => (
         typeof entry[key] !== 'string' || !/^[0-9]+$/.test(entry[key])
-      ))) throw new Error('Invalid remote deletion recovery identity');
+      )) || !(entry.birthtime === null
+        || (typeof entry.birthtime === 'string' && /^[0-9]+$/.test(entry.birthtime)))) {
+        throw new Error('Invalid remote deletion recovery identity');
+      }
       assertSafePathSegment(entry.name, 'Recovery skill name');
       if (names.has(entry.name)) throw new Error('Duplicate remote deletion recovery skill');
       names.add(entry.name);
@@ -58,9 +61,16 @@ function parseRemnantRecovery(value) {
   return value;
 }
 
+function directoryBirthtime(info) {
+  // Some filesystems report zero; libuv's Linux stat fallback reports changing ctime.
+  return info.birthtimeNs === 0n || info.birthtimeNs === info.ctimeNs
+    ? null : String(info.birthtimeNs);
+}
+
 function sameDirectory(info, entry) {
-  return info?.isDirectory() && String(info.dev) === entry.dev && String(info.ino) === entry.ino
-    && String(info.birthtimeNs) === entry.birthtime;
+  if (!info?.isDirectory() || String(info.dev) !== entry.dev || String(info.ino) !== entry.ino) return false;
+  const birthtime = directoryBirthtime(info);
+  return entry.birthtime === null || birthtime === null || birthtime === entry.birthtime;
 }
 
 async function remnantCandidates(vaultPath) {
@@ -72,7 +82,7 @@ async function remnantCandidates(vaultPath) {
     const info = await pathInfo(path.join(root, entry.name));
     if (!info?.isDirectory()) continue;
     candidates.push({
-      name: entry.name, dev: String(info.dev), ino: String(info.ino), birthtime: String(info.birthtimeNs),
+      name: entry.name, dev: String(info.dev), ino: String(info.ino), birthtime: directoryBirthtime(info),
     });
   }
   return candidates;
