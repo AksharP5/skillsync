@@ -92,6 +92,7 @@ export function renderLaunchAgent({
 
 function systemdQuote(value) {
   return `"${String(value)
+    .replaceAll('%', '%%')
     .replaceAll('\\', '\\\\')
     .replaceAll('"', '\\"')}"`;
 }

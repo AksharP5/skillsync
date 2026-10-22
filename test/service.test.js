@@ -107,3 +107,14 @@ test('service definitions execute the stable CLI directly', () => {
   assert.match(unit, /ExecStart="\/home\/user\/\.local\/bin\/skillsync" "daemon"/);
   assert.doesNotMatch(unit, /content-addressed/);
 });
+
+test('systemd preserves literal percent signs in executable, argument, and PATH values', () => {
+  const unit = renderSystemdUserService({
+    command: '/opt/100%ready/skillsync',
+    args: ['/opt/%h/cli.js', 'daemon'],
+    pathValue: '/opt/%Q/bin:/usr/bin:/bin',
+  });
+
+  assert.ok(unit.includes('ExecStart="/opt/100%%ready/skillsync" "/opt/%%h/cli.js" "daemon"'));
+  assert.ok(unit.includes('Environment="PATH=/opt/100%%ready:/opt/%%Q/bin:/usr/bin:/bin:/usr/sbin:/sbin"'));
+});
