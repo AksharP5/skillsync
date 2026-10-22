@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -63,15 +63,61 @@ async function writeReportedDevice(vaultPath, deviceId, {
   }, null, 2)}\n`);
 }
 
-async function writeDesiredDevice(vaultPath, deviceId, installed = {}) {
+async function writeDesiredDevice(vaultPath, deviceId, installed = {}, generation = 1) {
   await mkdir(path.join(vaultPath, 'devices'), { recursive: true });
   await writeFile(path.join(vaultPath, 'devices', `${deviceId}.json`), `${JSON.stringify({
     version: 1,
     device_id: deviceId,
-    generation: 1,
+    generation,
     installed,
     global_installed: [],
   }, null, 2)}\n`);
+}
+
+async function pushRaceFixture(t, duringPush = '') {
+  const root = await tempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const remote = path.join(root, 'remote.git');
+  const local = path.join(root, 'local');
+  const other = path.join(root, 'other');
+  const target = path.join(root, 'target');
+  const options = { vaultPath: local, deviceId: 'test' };
+  const skillPath = path.join('skills', 'demo', 'SKILL.md');
+
+  await git(['init', '--bare', remote]);
+  await git(['clone', remote, local]);
+  await git(['checkout', '-b', 'main'], local);
+  await configureUser(local);
+  await ensureVault(local);
+  await mkdir(path.dirname(path.join(local, skillPath)), { recursive: true });
+  await writeFile(path.join(local, skillPath), '# Version 1\n');
+  await rebuildRegistry(local);
+  await addTarget({ ...options, name: 'codex', targetPath: target, mode: 'copy', autoImport: false });
+  await writeDesiredDevice(local, options.deviceId, { demo: ['codex'] });
+  await syncVault({ ...options, pull: false, pushChanges: false });
+  await commitAllIfChanged(local, 'initial vault');
+  await git(['push', '-u', 'origin', 'main'], local);
+  await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
+  await git(['clone', remote, other]);
+  await configureUser(other);
+  await writeFile(path.join(other, skillPath), '# Version 2\n');
+  await rebuildRegistry(other);
+
+  // Advance the remote after reconciliation, while the first push is in flight.
+  const hook = path.join(root, 'receivepack.sh');
+  await writeFile(hook, `#!/bin/sh
+fixture_root="$(dirname "$0")"
+printf 'push\\n' >> "$fixture_root/push-attempts"
+if [ ! -e "$fixture_root/remote-pushed" ]; then
+  git -C "$fixture_root/other" push >&2 || exit 1
+  touch "$fixture_root/remote-pushed"
+  ${duringPush}
+fi
+exec git-receive-pack "$@"
+`);
+  await git(['config', 'remote.origin.receivepack', `sh '${hook.replaceAll("'", "'\\''")}'`], local);
+  await writeFile(path.join(local, 'notes.txt'), 'local change triggers push\n');
+  return { root, remote, local, other, target, options, skillPath };
 }
 
 test('sync keeps registry hashes stable across clones with different ignored files', async () => {
@@ -215,6 +261,109 @@ test('syncVault pushes existing ahead commits after pulling remote changes', asy
   const { stdout } = await git(['log', '--oneline', '--format=%s'], fresh);
   assert.match(stdout, /local change/);
   assert.match(stdout, /remote change/);
+});
+
+test('syncVault applies pulled content and assignment generations before retrying a push', async (t) => {
+  const { root, remote, local, other, target, options, skillPath } = await pushRaceFixture(t);
+  await rm(path.join(target, 'demo'), { recursive: true });
+  await mkdir(path.join(other, 'skills', 'extra'));
+  await writeFile(path.join(other, 'skills', 'extra', 'SKILL.md'), '# Extra\n');
+  await rebuildRegistry(other);
+  await writeDesiredDevice(other, options.deviceId, { demo: ['codex'], extra: ['codex'] }, 2);
+  await commitAllIfChanged(other, 'update content and assignments');
+
+  const result = await syncVault(options);
+
+  assert.equal(result.pushed, true);
+  assert.equal(result.rebasedBeforePush, true);
+  assert.equal(await readFile(path.join(local, skillPath), 'utf8'), '# Version 2\n');
+  assert.equal(await readFile(path.join(target, 'demo', 'SKILL.md'), 'utf8'), '# Version 2\n');
+  assert.equal(await readFile(path.join(target, 'extra', 'SKILL.md'), 'utf8'), '# Extra\n');
+  assert.deepEqual(result.projectionOperations.map(({ skillName, change }) => ({ skillName, change })), [
+    { skillName: 'demo', change: 'create' },
+    { skillName: 'demo', change: 'replace' },
+    { skillName: 'extra', change: 'create' },
+  ]);
+  const applied = await loadLocalDevice(local, options.deviceId);
+  assert.equal(applied.desired_generation, 2);
+  assert.equal(applied.applied_generation, 2);
+  const reported = JSON.parse((await git(['show', 'main:state/test.json'], remote)).stdout);
+  assert.equal(reported.applied_generation, 2);
+  assert.equal((await git(['status', '--porcelain'], local)).stdout, '');
+  assert.equal((await git(['rev-parse', 'HEAD'], local)).stdout,
+    (await git(['rev-parse', 'refs/heads/main'], remote)).stdout);
+  assert.equal(await readFile(path.join(root, 'push-attempts'), 'utf8'), 'push\npush\n');
+});
+
+test('syncVault validates newly pulled content before applying retry projections', async (t) => {
+  const { root, remote, local, other, target, options } = await pushRaceFixture(t);
+  await writeFile(path.join(other, 'unsafe.txt'), `ghp_${'a'.repeat(25)}\n`);
+  await commitAllIfChanged(other, 'unsafe remote content');
+
+  await assert.rejects(syncVault(options), /Possible GitHub token: unsafe\.txt/);
+
+  assert.equal(await readFile(path.join(target, 'demo', 'SKILL.md'), 'utf8'), '# Version 1\n');
+  assert.equal((await git(['rev-parse', 'refs/heads/main'], remote)).stdout,
+    (await git(['rev-parse', 'HEAD'], other)).stdout);
+  assert.equal(await readFile(path.join(root, 'push-attempts'), 'utf8'), 'push\n');
+  assert.equal((await git(['status', '--porcelain'], local)).stdout, '');
+});
+
+test('syncVault preserves copy edits made while the first push is in flight', async (t) => {
+  const { root, remote, other, target, options } = await pushRaceFixture(t,
+    `printf '# Local edit\\n' > "$fixture_root/target/demo/SKILL.md"`);
+  await commitAllIfChanged(other, 'remote content update');
+
+  await assert.rejects(syncVault(options), /Managed copy has local changes/);
+
+  assert.equal(await readFile(path.join(target, 'demo', 'SKILL.md'), 'utf8'), '# Local edit\n');
+  assert.equal((await git(['rev-parse', 'refs/heads/main'], remote)).stdout,
+    (await git(['rev-parse', 'HEAD'], other)).stdout);
+  assert.equal(await readFile(path.join(root, 'push-attempts'), 'utf8'), 'push\n');
+});
+
+test('syncVault rolls back retry projections when a later reconciliation step fails', async (t) => {
+  const { root, remote, local, other, target, options, skillPath } = await pushRaceFixture(t);
+  await writeDesiredDevice(other, options.deviceId, { demo: ['codex'] }, 2);
+  await mkdir(path.join(other, 'plugins', 'assignments'), { recursive: true });
+  await writeFile(path.join(other, 'plugins', 'assignments', 'test.json'), JSON.stringify({
+    version: 1,
+    device_id: 'another-device',
+    profile: 'shared',
+  }));
+  await commitAllIfChanged(other, 'remote content with invalid plugin assignment');
+
+  await assert.rejects(syncVault(options), /Plugin assignment device does not match its file/);
+
+  assert.equal(await readFile(path.join(local, skillPath), 'utf8'), '# Version 2\n');
+  assert.equal(await readFile(path.join(target, 'demo', 'SKILL.md'), 'utf8'), '# Version 1\n');
+  const device = await loadLocalDevice(local, options.deviceId);
+  assert.equal(device.desired_generation, 2);
+  assert.equal(device.applied_generation, 1);
+  assert.equal((await git(['rev-parse', 'refs/heads/main'], remote)).stdout,
+    (await git(['rev-parse', 'HEAD'], other)).stdout);
+  assert.equal(await readFile(path.join(root, 'push-attempts'), 'utf8'), 'push\n');
+});
+
+test('pushWithPullRebaseRetry stops after a second push rejection', async (t) => {
+  const { root, remote, local, other } = await pushRaceFixture(t);
+  await commitAllIfChanged(other, 'remote content update');
+  await commitAllIfChanged(local, 'local change');
+  let validations = 0;
+
+  await assert.rejects(pushWithPullRebaseRetry(local, {
+    beforePush: async () => {
+      validations += 1;
+      if (validations !== 2) return;
+      await commitFile(other, 'later.txt', 'another remote change\n', 'advance remote again');
+      await git(['push'], other);
+    },
+  }), /\[rejected\]/);
+
+  assert.equal(validations, 2);
+  assert.equal(await readFile(path.join(root, 'push-attempts'), 'utf8'), 'push\npush\n');
+  assert.equal((await git(['rev-parse', 'refs/heads/main'], remote)).stdout,
+    (await git(['rev-parse', 'HEAD'], other)).stdout);
 });
 
 test('sync preserves unresolved autostash conflicts until the user resolves them', async () => {

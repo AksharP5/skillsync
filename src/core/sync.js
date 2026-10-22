@@ -31,19 +31,29 @@ export async function syncVault({
   if (pull && await isGitRepo(vaultPath)) {
     await pullRebase(vaultPath);
   }
-  await ensureVault(vaultPath);
-  await checkVault(vaultPath, { verifyRegistry: false });
-  await refreshChangedRegistryEntries(vaultPath);
-  if (!deviceId) await checkVault(vaultPath);
-  let autoImport = { adopted: [], conflicts: [], replaceUnmanagedPaths: [] };
-  let instructionProviders = { changed: false, conflicts: [], backups: [] };
-  let prunedInstructionProfiles = [];
-  let prunedSkills = [];
-  let plugins = null;
-  let projectionApply = null;
-  if (deviceId) {
+  const result = {
+    autoImported: [],
+    autoImportConflicts: [],
+    instructionProviderConflicts: [],
+    instructionProviderBackups: [],
+    plugins: null,
+    projectionOperations: [],
+    prunedInstructionProfiles: [],
+    prunedSkills: [],
+  };
+  async function reconcileLocalState() {
+    await ensureVault(vaultPath);
+    await checkVault(vaultPath, { verifyRegistry: false });
+    await refreshChangedRegistryEntries(vaultPath);
+    if (!deviceId) {
+      await checkVault(vaultPath);
+      return;
+    }
+    let projectionApply = null;
     try {
-      autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
+      const autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
+      result.autoImported.push(...autoImport.adopted);
+      result.autoImportConflicts.push(...autoImport.conflicts);
       projectionApply = await applyLinks({
         vaultPath,
         deviceId,
@@ -55,16 +65,19 @@ export async function syncVault({
           ]),
         ],
       });
-      instructionProviders = await reconcileGlobalInstructionProviders({ vaultPath, deviceId });
+      const instructionProviders = await reconcileGlobalInstructionProviders({ vaultPath, deviceId });
+      result.instructionProviderConflicts.push(...instructionProviders.conflicts);
+      result.instructionProviderBackups.push(...(instructionProviders.backups || []));
       const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
-      prunedInstructionProfiles = instructions.prunedProfiles || [];
-      plugins = await syncCodexPlugins({ vaultPath, deviceId });
+      result.prunedInstructionProfiles.push(...(instructions.prunedProfiles || []));
+      result.plugins = await syncCodexPlugins({ vaultPath, deviceId });
       await scanTargets({ vaultPath, deviceId });
       if (pull) {
-        prunedSkills = await sweepUnusedSkills({ vaultPath });
+        result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath }));
       }
       await checkVault(vaultPath);
       await markDeviceApplied({ vaultPath, deviceId });
+      result.projectionOperations.push(...projectionApply.operations);
     } catch (error) {
       if (!projectionApply?.backupId) throw error;
       try {
@@ -81,14 +94,20 @@ export async function syncVault({
       throw error;
     }
   }
+  await reconcileLocalState();
   let committed = false;
   let pushed = false;
   let rebasedBeforePush = false;
   if (pushChanges && await isGitRepo(vaultPath)) {
     await checkVault(vaultPath);
-    committed = await commitAllIfChanged(vaultPath, `sync: update skills from ${deviceId || 'device'}`);
+    const commitMessage = `sync: update skills from ${deviceId || 'device'}`;
+    committed = await commitAllIfChanged(vaultPath, commitMessage);
     if (committed || await hasLocalCommitsToPush(vaultPath)) {
       const pushResult = await pushWithPullRebaseRetry(vaultPath, {
+        afterPullRebase: async () => {
+          await reconcileLocalState();
+          committed = await commitAllIfChanged(vaultPath, commitMessage) || committed;
+        },
         beforePush: () => checkVaultForPush(vaultPath),
       });
       pushed = pushResult.pushed;
@@ -99,13 +118,6 @@ export async function syncVault({
     committed,
     pushed,
     rebasedBeforePush,
-    autoImported: autoImport.adopted,
-    autoImportConflicts: autoImport.conflicts,
-    instructionProviderConflicts: instructionProviders.conflicts,
-    instructionProviderBackups: instructionProviders.backups || [],
-    plugins,
-    projectionOperations: projectionApply?.operations || [],
-    prunedInstructionProfiles,
-    prunedSkills,
+    ...result,
   };
 }
