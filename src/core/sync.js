@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, rename } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -61,7 +61,14 @@ async function preserveRemoteDeletionRemnants(vaultPath, previousHead) {
     const backupRoot = await gitPrivatePath(vaultPath, 'deleted-skills');
     await mkdir(backupRoot, { recursive: true, mode: 0o700 });
     const backup = await mkdtemp(path.join(backupRoot, 'skill-'));
-    await rename(skillPath, path.join(backup, name));
+    const destination = path.join(backup, name);
+    try {
+      await rename(skillPath, destination);
+    } catch (error) {
+      if (error.code !== 'EXDEV') throw error;
+      await cp(skillPath, destination, { recursive: true, verbatimSymlinks: true });
+      await rm(skillPath, { recursive: true });
+    }
   }
 }
 

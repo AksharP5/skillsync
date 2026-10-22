@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import fs, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,7 +12,7 @@ import { syncVault } from '../src/core/sync.js';
 
 const cache = Buffer.from([0, 255, 10, 123, 34, 108, 111, 99, 97, 108, 34, 58, 116, 114, 117, 101, 125]);
 
-async function deletionFixture(t, { ignore = 'root', mode = 'symlink' } = {}) {
+async function deletionFixture(t, { ignore = 'root', mode = 'symlink', gitDir } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-remote-deletion-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const remote = path.join(root, 'remote.git');
@@ -22,7 +23,7 @@ async function deletionFixture(t, { ignore = 'root', mode = 'symlink' } = {}) {
   const options = { vaultPath: local, deviceId: 'test' };
 
   await git(['init', '--bare', remote]);
-  await git(['clone', remote, local]);
+  await git(['clone', ...(gitDir ? ['--separate-git-dir', gitDir] : []), remote, local]);
   await git(['checkout', '-b', 'main'], local);
   await configureUser(local);
   await ensureVault(local);
@@ -42,6 +43,46 @@ async function deletionFixture(t, { ignore = 'root', mode = 'symlink' } = {}) {
   await configureUser(other);
   if (ignore !== 'none') await writeFile(path.join(skill, 'cache.bin'), cache);
   return { root, remote, local, other, target, skill, options };
+}
+
+async function crossFilesystemFixture(t) {
+  let metadata;
+  try {
+    if ((await stat('/dev/shm')).dev === (await stat(tmpdir())).dev) {
+      t.skip('requires writable /dev/shm on another filesystem');
+      return null;
+    }
+    metadata = await mkdtemp('/dev/shm/skillsync-remote-deletion-git-');
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EROFS'].includes(error.code)) throw error;
+    t.skip('requires writable /dev/shm on another filesystem');
+    return null;
+  }
+  t.after(() => rm(metadata, { recursive: true, force: true }));
+  return deletionFixture(t, { ignore: 'skill', gitDir: path.join(metadata, 'git') });
+}
+
+async function addRemnantEntries({ root, skill }) {
+  await mkdir(path.join(skill, '.git'));
+  await writeFile(path.join(skill, '.git', 'cache.bin'), cache);
+  await writeFile(path.join(skill, '.DS_Store'), cache);
+  await mkdir(path.join(skill, 'nested', 'empty'), { recursive: true });
+  await writeFile(path.join(skill, 'nested', 'cache.bin'), cache);
+  const external = path.join(root, 'external.bin');
+  await writeFile(external, cache);
+  await symlink(external, path.join(skill, 'external'));
+  await symlink('cache.bin', path.join(skill, 'relative'));
+  await symlink('missing.bin', path.join(skill, 'dangling'));
+}
+
+async function remnantEntries(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  return Object.fromEntries(await Promise.all(entries.map(async (entry) => {
+    const file = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) return [entry.name, { symlink: await readlink(file) }];
+    if (entry.isDirectory()) return [entry.name, await remnantEntries(file)];
+    return [entry.name, await readFile(file)];
+  })));
 }
 
 async function configureUser(repo) {
@@ -125,6 +166,70 @@ for (const ignore of ['root', 'skill']) {
     await assertDeletionApplied(fixture, ignore);
   });
 }
+
+for (const retry of [false, true]) {
+  test(`remote deletion ${retry ? 'during push retry' : 'on pull'} preserves all remnants across filesystems`, async (t) => {
+    const fixture = await crossFilesystemFixture(t);
+    if (!fixture) return;
+    if (!retry) await addRemnantEntries(fixture);
+    const expected = await remnantEntries(fixture.skill);
+    // Tracked files disappear with the remote deletion.
+    delete expected['SKILL.md'];
+    delete expected['.gitignore'];
+    if (retry) await raceDeletion(fixture);
+    else await deleteRemotely(fixture);
+
+    const result = await syncVault(fixture.options);
+
+    assert.equal(result.rebasedBeforePush, retry);
+    const backup = await assertCachePreserved(fixture.local);
+    assert.notEqual((await stat(fixture.local)).dev, (await stat(backup)).dev);
+    assert.deepEqual(await remnantEntries(path.join(backup, 'demo')), expected);
+    if (!retry) assert.deepEqual(await readFile(path.join(fixture.root, 'external.bin')), cache);
+    if (retry) {
+      assert.equal(await readFile(path.join(fixture.root, 'push-attempts'), 'utf8'), 'push\npush\n');
+    }
+    await assertDeletionApplied(fixture, 'skill');
+  });
+}
+
+test('an incomplete cross-filesystem backup leaves every source entry and projection intact', async (t) => {
+  const fixture = await deletionFixture(t, { ignore: 'skill' });
+  await addRemnantEntries(fixture);
+  const expected = await remnantEntries(fixture.skill);
+  delete expected['SKILL.md'];
+  delete expected['.gitignore'];
+  await deleteRemotely(fixture);
+  const realRename = fs.rename;
+  const realCopy = fs.cp;
+  const failure = Object.assign(new Error('Injected incomplete backup'), { code: 'ENOSPC' });
+  let copied = false;
+  const renameMock = t.mock.method(fs, 'rename', async (source, destination) => {
+    if (source === fixture.skill) throw Object.assign(new Error('Cross-device rename'), { code: 'EXDEV' });
+    return realRename(source, destination);
+  });
+  const copyMock = t.mock.method(fs, 'cp', async (source, destination, options) => {
+    if (source !== fixture.skill) return realCopy(source, destination, options);
+    await mkdir(destination);
+    await writeFile(path.join(destination, 'cache.bin'), cache.subarray(0, 3));
+    copied = true;
+    throw failure;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(syncVault(fixture.options), (error) => error === failure);
+  } finally {
+    renameMock.mock.restore();
+    copyMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+
+  assert.equal(copied, true);
+  assert.deepEqual(await remnantEntries(fixture.skill), expected);
+  assert.equal((await lstat(path.join(fixture.target, 'demo'))).isSymbolicLink(), true);
+  assert.equal((await git(['diff', '--cached', '--name-only'], fixture.local)).stdout, '');
+  assert.deepEqual(await readFile(path.join(fixture.root, 'external.bin')), cache);
+});
 
 test('remote deletion still rejects unrelated malformed local folders before projection cleanup', async (t) => {
   const fixture = await deletionFixture(t);
