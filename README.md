@@ -137,6 +137,8 @@ If Codex and OpenCode on that device should use the same profile, link the other
 skillsync instructions link ~/.codex/AGENTS.md
 ```
 
+Settings suggests unlinked provider paths when you link another instructions file. Its OpenCode suggestion follows `XDG_CONFIG_HOME`.
+
 If an editor replaces a managed link with a regular file, automatic sync leaves that file untouched. To preserve a backup and restore the selected profile, run:
 
 ```bash

@@ -28,7 +28,7 @@ import {
   scanTargets,
   setTargetAutoImport,
 } from '../src/core/device.js';
-import { exists } from '../src/core/fs.js';
+import { exists, writeJson } from '../src/core/fs.js';
 import { git, gitPrivatePath } from '../src/core/git.js';
 import {
   assignPluginProfile,
@@ -37,7 +37,7 @@ import {
   savePluginProfile,
   syncCodexPlugins,
 } from '../src/core/plugins.js';
-import { loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
+import { ensureVault, loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -1029,3 +1029,70 @@ test('daemon rejects a non-positive interval instead of entering a tight loop', 
     /Daemon interval must be a positive number of seconds/,
   );
 });
+
+for (const scenario of [
+  { name: 'Claude is already linked', claude: true, cursor: false },
+  { name: 'Cursor is already linked', claude: false, cursor: true },
+  { name: 'every suggested provider is already linked', claude: true, cursor: true, allLinked: true },
+]) {
+  test(`instruction settings suggest another path when ${scenario.name}`, async (t) => {
+    const home = await tempDir();
+    t.after(() => rm(home, { recursive: true, force: true, maxRetries: 3 }));
+    const vault = path.join(home, 'vault');
+    await writeConfig(home, vault);
+    await ensureVault(vault);
+    const configHome = path.join(home, 'custom config');
+    const opencode = path.join(configHome, 'opencode', 'AGENTS.md');
+    const paths = [path.join(home, '.codex', 'AGENTS.md'), path.join(home, '.claude', 'CLAUDE.md'),
+      path.join(home, '.cursor', 'rules', 'skillsync.mdc'), ...(scenario.allLinked ? [opencode] : [])];
+    await writeJson(await gitPrivatePath(vault, 'local', 'devices', 'test-device.json'), {
+      version: 2, device_id: 'test-device', targets: {}, detected: {}, instructions: { paths, auto_paths: [] },
+    });
+    await writeJson(path.join(vault, 'devices', 'test-device.json'), {
+      version: 1, device_id: 'test-device', generation: 0, installed: {}, global_installed: [],
+    });
+    await writeJson(path.join(vault, 'state', 'test-device.json'), {
+      version: 1, device_id: 'test-device', instructions: { version: 1, agents: { applied_profile: 'shared' } },
+    });
+    await writeJson(path.join(vault, 'globals', 'assignments', 'test-device.json'), {
+      version: 1, device_id: 'test-device', profile: 'shared',
+    });
+    await writeFile(path.join(vault, 'globals', 'AGENTS.md'), '# Shared\n');
+    const bin = path.join(home, 'bin');
+    await mkdir(bin);
+    await writeFile(path.join(bin, 'sh'), `#!/bin/sh
+if [ "$2" = 'command -v claude' ]; then [ "$SKILLSYNC_TEST_CLAUDE" = true ]; exit $?; fi
+if [ "$2" = 'command -v agent' ]; then [ "$SKILLSYNC_TEST_CURSOR" = true ]; exit $?; fi
+exec /bin/sh "$@"
+`);
+    await chmod(path.join(bin, 'sh'), 0o755);
+    await writeFile(path.join(home, 'prompts.mjs'), `export async function select({message}) {
+  const actions = {'SkillSync':'settings','Settings':'toggle-instructions','Global AGENTS.md profiles':'link'};
+  if (!actions[message]) throw Error('Unexpected prompt: ' + message);
+  return actions[message];
+}
+export async function input(options) { console.log(JSON.stringify({default:options.default})); throw Error('SKILLSYNC_CAPTURED_DEFAULT'); }
+export async function confirm() { throw Error('Unexpected confirmation'); }
+export async function checkbox() { throw Error('Unexpected checkbox'); }
+`);
+    await writeFile(path.join(home, 'loader.mjs'), `export async function resolve(specifier, context, nextResolve) {
+  if (specifier === '@inquirer/prompts') return {url:new URL('./prompts.mjs',import.meta.url).href,shortCircuit:true};
+  return nextResolve(specifier,context);
+}`);
+    await writeFile(path.join(home, 'preload.mjs'), `import {register} from 'node:module';
+register('./loader.mjs',import.meta.url); process.stdin.isTTY=true;`);
+
+    await assert.rejects(() => execFileAsync(process.execPath, [
+      '--import', path.join(home, 'preload.mjs'), path.resolve('src/cli.js'),
+    ], {
+      env: { ...cliEnv(home), XDG_CONFIG_HOME: configHome, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        SKILLSYNC_TEST_CLAUDE: String(scenario.claude), SKILLSYNC_TEST_CURSOR: String(scenario.cursor) },
+      timeout: 5000,
+    }), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /SKILLSYNC_CAPTURED_DEFAULT/);
+      assert.equal(JSON.parse(error.stdout.trim()).default, scenario.allLinked ? undefined : opencode);
+      return true;
+    });
+  });
+}
