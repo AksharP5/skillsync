@@ -72,11 +72,7 @@ function cursorRuleVaultPath(vaultPath, profile) {
 }
 
 export function isCursorRulePath(targetPath) {
-  const destination = resolvedDestination(targetPath);
-  const rules = path.dirname(destination);
-  return path.basename(destination) === 'skillsync.mdc'
-    && path.basename(rules) === 'rules'
-    && path.basename(path.dirname(rules)) === '.cursor';
+  return path.basename(resolvedDestination(targetPath)) === 'skillsync.mdc';
 }
 
 function projectedInstructionsSource(vaultPath, profile, targetPath) {
