@@ -29,7 +29,7 @@ import {
 } from './transaction.js';
 
 const GLOBAL_INSTALL_TARGET = 'global';
-const LOCAL_PATH_STATE_VERSION = 1;
+const LOCAL_PATH_STATE_VERSION = 2;
 const OWNERSHIP_MARKER = '.skillsync-owned.json';
 
 function isGlobalInstallTarget(target) {
@@ -214,7 +214,7 @@ function normalizeLocalPathState(value, deviceId) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Local device path state must be an object');
   }
-  if (value.version !== LOCAL_PATH_STATE_VERSION) {
+  if (value.version !== 1 && value.version !== LOCAL_PATH_STATE_VERSION) {
     throw new Error(`Unsupported local device path state version: ${value.version}`);
   }
   if (value.device_id !== normalizedDeviceId) {
@@ -230,11 +230,13 @@ function normalizeLocalPathState(value, deviceId) {
   const paths = normalizeInstructionPaths(instructions);
   const automaticPaths = normalizeAutomaticInstructionPaths(instructions)
     .filter((targetPath) => paths.includes(targetPath));
+  const detected = normalizeLocalDetected(value.detected);
   return {
     version: LOCAL_PATH_STATE_VERSION,
     device_id: normalizedDeviceId,
     targets: normalizeLocalTargets(value.targets),
-    detected: normalizeLocalDetected(value.detected),
+    // Older baselines omitted duplicate paths, so establish a fresh baseline before adoption.
+    detected: value.version === 1 ? {} : detected,
     instructions: {
       paths,
       auto_paths: automaticPaths,
@@ -301,6 +303,7 @@ export async function migrateLegacyLocalPathState({
   return writeLocalPathState(vaultPath, {
     ...newDevice(deviceId),
     ...normalized,
+    detected: {},
   });
 }
 

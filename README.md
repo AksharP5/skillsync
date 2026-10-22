@@ -293,6 +293,8 @@ SkillSync first records the skills that already exist when a target is added. It
 
 The baseline tracks each skill's path, including same-name folders and directory aliases. Removing one path does not make another pre-existing path eligible for adoption.
 
+On upgrade from an older baseline or migration from a legacy manifest, the first scan refreshes the baseline without adopting existing folders. Later scans adopt newly created skills as usual. Target settings and instruction paths are preserved.
+
 Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Nested folders and mismatched names remain detected for explicit import.
 
 Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.

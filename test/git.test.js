@@ -741,7 +741,7 @@ test('invalid private local path state fails closed', async () => {
   await initializeLocalPathState({ vaultPath: vault, deviceId });
   const privatePath = await gitPrivatePath(vault, 'local', 'devices', `${deviceId}.json`);
   await writeFile(privatePath, `${JSON.stringify({
-    version: 2,
+    version: 999,
     device_id: deviceId,
     targets: {},
     detected: {},
