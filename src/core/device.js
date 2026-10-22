@@ -1285,7 +1285,7 @@ async function detectTargets({ vaultPath, device }) {
   const detected = {};
   for (const [targetName, targetConfig] of Object.entries(device.targets)) {
     const scanPath = expandHome(targetConfig.scan_path || targetConfig.path);
-    const skills = await findLocalSkills(scanPath);
+    const skills = await findLocalSkills(scanPath, vaultPath);
     detected[targetName] = skills.map((skill) => ({
       ...skill,
       in_vault: Boolean(registry.skills[skill.name]),
@@ -1316,7 +1316,7 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     if (!Array.isArray(previous)) continue;
     const previousKeys = new Set(previous.map(detectedSkillKey));
     const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
-    const skills = await findLocalSkills(scanRoot);
+    const skills = await findLocalSkills(scanRoot, vaultPath);
     const installRoot = path.resolve(expandHome(targetConfig.path));
     const canonicalInstallRoot = await realpath(installRoot).catch(() => installRoot);
 
@@ -1420,9 +1420,10 @@ export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }
   };
 }
 
-async function findLocalSkills(scanPath) {
+async function findLocalSkills(scanPath, vaultPath) {
   const root = path.resolve(scanPath);
   if (!await exists(root)) return [];
+  const vaultSkills = await realpathOrResolve(path.join(vaultPath, 'skills'));
   const ancestors = new Set();
   const skills = [];
 
@@ -1436,8 +1437,17 @@ async function findLocalSkills(scanPath) {
     if (ancestors.has(canonical)) return;
 
     if (await exists(path.join(current, 'SKILL.md'))) {
+      let name;
+      if (path.dirname(canonical) === vaultSkills) {
+        name = path.basename(canonical);
+      } else {
+        const marker = (await lstat(current)).isDirectory()
+          ? await ownedCopyMarker(current, vaultPath)
+          : null;
+        name = marker?.skill || await readSkillName(current);
+      }
       skills.push({
-        name: await readSkillName(current),
+        name,
         path: path.relative(root, current).split(path.sep).join(path.posix.sep) || '.',
       });
       return;
