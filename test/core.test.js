@@ -425,7 +425,7 @@ test('scanTargets records unmanaged local skills from a separate scan path', asy
   assert.deepEqual(device.installed['bog-hyperframes'], ['hermes']);
 });
 
-test('scanTargets deduplicates duplicate local skills by name', async () => {
+test('scanTargets preserves duplicate local paths and deduplicates shared reports by name', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const scanRoot = path.join(root, 'hermes-skills');
@@ -440,6 +440,10 @@ test('scanTargets deduplicates duplicate local skills by name', async () => {
 
   assert.deepEqual(device.detected.hermes.map((skill) => [skill.name, skill.path]), [
     ['bog-hyperframes', 'openclaw-imports/bog-hyperframes'],
+    ['bog-hyperframes', 'personal/bog-hyperframes'],
+  ]);
+  assert.deepEqual((await loadDevice(vault, deviceId)).detected.hermes, [
+    { name: 'bog-hyperframes', in_vault: false },
   ]);
 });
 

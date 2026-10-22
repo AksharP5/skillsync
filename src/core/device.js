@@ -544,10 +544,10 @@ function serializeReportedTargets(targets) {
 function serializeReportedDetected(detected) {
   return Object.fromEntries(Object.entries(detected || {}).map(([targetName, skills]) => [
     targetName,
-    (Array.isArray(skills) ? skills : []).map((skill) => ({
+    [...new Map((Array.isArray(skills) ? skills : []).map((skill) => [skill.name, {
       name: skill.name,
       in_vault: Boolean(skill.in_vault),
-    })),
+    }])).values()],
   ]));
 }
 
@@ -1420,7 +1420,7 @@ export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }
 async function findLocalSkills(scanPath) {
   const root = path.resolve(scanPath);
   if (!await exists(root)) return [];
-  const seen = new Set();
+  const ancestors = new Set();
   const skills = [];
 
   async function walk(current) {
@@ -1430,8 +1430,7 @@ async function findLocalSkills(scanPath) {
     } catch {
       canonical = path.resolve(current);
     }
-    if (seen.has(canonical)) return;
-    seen.add(canonical);
+    if (ancestors.has(canonical)) return;
 
     if (await exists(path.join(current, 'SKILL.md'))) {
       skills.push({
@@ -1441,6 +1440,8 @@ async function findLocalSkills(scanPath) {
       return;
     }
 
+    // Stop cycles without hiding distinct paths to the same skill.
+    ancestors.add(canonical);
     const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
@@ -1449,11 +1450,11 @@ async function findLocalSkills(scanPath) {
         await walk(child);
       }
     }
+    ancestors.delete(canonical);
   }
 
   await walk(root);
-  const sorted = skills.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
-  return sorted.filter((skill, index) => sorted.findIndex((candidate) => candidate.name === skill.name) === index);
+  return skills.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
 }
 
 async function symlinkedDirectory(child, entry) {
