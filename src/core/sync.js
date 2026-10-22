@@ -11,7 +11,7 @@ import {
   sweepUnusedSkills,
 } from './device.js';
 import { checkVault, checkVaultForPush } from './check.js';
-import { assertSafePathSegment } from './fs.js';
+import { assertSafePathSegment, readJson, writePrivateJson } from './fs.js';
 import {
   assertNoGitConflicts,
   commitAllIfChanged,
@@ -84,9 +84,26 @@ export async function syncVault({
   if (deviceId) {
     await migrateLegacyLocalPathState({ vaultPath, deviceId });
   }
+  const recoveryPath = await gitPrivatePath(vaultPath, 'remnant-recovery.json');
+  let recovery = recoveryPath ? await readJson(recoveryPath, null) : null;
+  if (recovery !== null && (typeof recovery !== 'object'
+    || (recovery.previous_head !== null && !/^[a-f0-9]{40,64}$/.test(recovery.previous_head)))) {
+    throw new Error('Invalid remote deletion recovery state');
+  }
+  async function beforePull(previousHead) {
+    if (recovery) return;
+    recovery = { previous_head: previousHead };
+    // Keep the deletion comparison available if a later remnant backup fails.
+    await writePrivateJson(recoveryPath, recovery);
+  }
+  async function afterPull(previousHead) {
+    await preserveRemoteDeletionRemnants(vaultPath, recovery ? recovery.previous_head : previousHead);
+    await rm(recoveryPath, { force: true });
+    recovery = null;
+  }
   if (pull && await isGitRepo(vaultPath)) {
-    const previousHead = await pullRebase(vaultPath);
-    await preserveRemoteDeletionRemnants(vaultPath, previousHead);
+    const previousHead = await pullRebase(vaultPath, { beforePull });
+    await afterPull(previousHead);
   }
   const result = {
     autoImported: [],
@@ -161,8 +178,9 @@ export async function syncVault({
     committed = await commitAllIfChanged(vaultPath, commitMessage);
     if (committed || await hasLocalCommitsToPush(vaultPath)) {
       const pushResult = await pushWithPullRebaseRetry(vaultPath, {
+        beforePullRebase: beforePull,
         afterPullRebase: async (previousHead) => {
-          await preserveRemoteDeletionRemnants(vaultPath, previousHead);
+          await afterPull(previousHead);
           await reconcileLocalState();
           committed = await commitAllIfChanged(vaultPath, commitMessage) || committed;
         },

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import fs, { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -193,7 +193,7 @@ for (const retry of [false, true]) {
   });
 }
 
-test('an incomplete cross-filesystem backup leaves every source entry and projection intact', async (t) => {
+test('an incomplete cross-filesystem backup preserves sources and retries on the next sync', async (t) => {
   const fixture = await deletionFixture(t, { ignore: 'skill' });
   await addRemnantEntries(fixture);
   const expected = await remnantEntries(fixture.skill);
@@ -229,6 +229,103 @@ test('an incomplete cross-filesystem backup leaves every source entry and projec
   assert.equal((await lstat(path.join(fixture.target, 'demo'))).isSymbolicLink(), true);
   assert.equal((await git(['diff', '--cached', '--name-only'], fixture.local)).stdout, '');
   assert.deepEqual(await readFile(path.join(fixture.root, 'external.bin')), cache);
+
+  await syncVault(fixture.options);
+  await assert.rejects(lstat(fixture.skill), { code: 'ENOENT' });
+  await assert.rejects(lstat(path.join(fixture.target, 'demo')), { code: 'ENOENT' });
+  const backupRoot = await gitPrivatePath(fixture.local, 'deleted-skills');
+  const backups = await readdir(backupRoot);
+  const complete = [];
+  for (const backup of backups) {
+    const directory = path.join(backupRoot, backup, 'demo');
+    if ((await readFile(path.join(directory, 'cache.bin'))).equals(cache)) complete.push(directory);
+  }
+  assert.equal(complete.length, 1);
+  assert.deepEqual(await remnantEntries(complete[0]), expected);
+  await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'remnant-recovery.json')), { code: 'ENOENT' });
+});
+
+for (const retry of [false, true]) {
+  test(`failed remnant preservation ${retry ? 'during push retry' : 'after pull'} resumes after permissions are repaired`, {
+    skip: process.platform === 'win32' || !process.getuid || process.getuid() === 0,
+  }, async (t) => {
+    const fixture = await deletionFixture(t, { ignore: 'skill' });
+    if (retry) await raceDeletion(fixture);
+    else await deleteRemotely(fixture);
+    const backupRoot = await gitPrivatePath(fixture.local, 'deleted-skills');
+    const pending = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+    await mkdir(backupRoot, { recursive: true, mode: 0o700 });
+    await chmod(backupRoot, 0o500);
+    try {
+      await assert.rejects(syncVault(fixture.options), { code: 'EACCES' });
+    } finally {
+      await chmod(backupRoot, 0o700);
+    }
+    assert.deepEqual(await readFile(path.join(fixture.skill, 'cache.bin')), cache);
+    assert.equal((await lstat(path.join(fixture.target, 'demo'))).isSymbolicLink(), true);
+
+    await syncVault(fixture.options);
+
+    await assertDeletionApplied(fixture, 'skill');
+    await assert.rejects(lstat(pending), { code: 'ENOENT' });
+  });
+}
+
+test('pending remnant recovery leaves a recreated canonical skill in place', async (t) => {
+  const fixture = await deletionFixture(t, { ignore: 'skill' });
+  await deleteRemotely(fixture);
+  const original = fs.rename;
+  const failure = Object.assign(new Error('Temporary remnant backup failure'), { code: 'EIO' });
+  const mock = t.mock.method(fs, 'rename', async (source, destination) => {
+    if (source === fixture.skill) throw failure;
+    return original(source, destination);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(syncVault(fixture.options), (error) => error === failure);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+  const recreated = path.join(fixture.other, 'skills', 'demo');
+  await mkdir(recreated, { recursive: true });
+  await writeFile(path.join(recreated, 'SKILL.md'), '# Recreated\n');
+  await writeFile(path.join(recreated, '.gitignore'), 'cache.bin\n');
+  await rebuildRegistry(fixture.other);
+  await commitAllIfChanged(fixture.other, 'recreate demo');
+  await git(['push'], fixture.other);
+
+  await syncVault(fixture.options);
+
+  assert.equal(await readFile(path.join(fixture.skill, 'SKILL.md'), 'utf8'), '# Recreated\n');
+  assert.deepEqual(await readFile(path.join(fixture.skill, 'cache.bin')), cache);
+  await assert.rejects(lstat(await gitPrivatePath(fixture.local, 'remnant-recovery.json')), { code: 'ENOENT' });
+});
+
+test('failure to save remnant recovery state stops before pulling the deletion', async (t) => {
+  const fixture = await deletionFixture(t, { ignore: 'skill' });
+  await deleteRemotely(fixture);
+  const before = (await git(['rev-parse', 'HEAD'], fixture.local)).stdout;
+  const recoveryPath = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+  const original = fs.rename;
+  const failure = Object.assign(new Error('Cannot save remnant recovery state'), { code: 'ENOSPC' });
+  const mock = t.mock.method(fs, 'rename', async (source, destination) => {
+    if (destination === recoveryPath) throw failure;
+    return original(source, destination);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(syncVault(fixture.options), (error) => error === failure);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal((await git(['rev-parse', 'HEAD'], fixture.local)).stdout, before);
+  assert.equal(await readFile(path.join(fixture.skill, 'SKILL.md'), 'utf8'), '# Demo\n');
+
+  await syncVault(fixture.options);
+
+  await assertDeletionApplied(fixture, 'skill');
 });
 
 test('remote deletion still rejects unrelated malformed local folders before projection cleanup', async (t) => {
