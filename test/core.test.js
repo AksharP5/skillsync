@@ -1294,7 +1294,7 @@ test('the shared profile projects CLAUDE.md only while the Claude executable is 
   reconciled = await reconcileGlobalInstructionProviders({
     vaultPath: vault,
     deviceId: 'workstation',
-    claudePath: claude,
+    claudePath: path.relative(process.cwd(), claude),
     commandExistsFn: async () => true,
   });
   assert.equal(reconciled.changed, true);
@@ -1304,6 +1304,11 @@ test('the shared profile projects CLAUDE.md only while the Claude executable is 
     path.resolve(path.dirname(claude), await readlink(claude)),
     globalInstructionsVaultPath(vault, 'workstation'),
   );
+  await selectGlobalInstructionsProfile({
+    vaultPath: vault,
+    deviceId: 'workstation',
+    profile: 'workstation',
+  });
   assert.deepEqual(
     (await loadLocalDevice(vault, 'workstation')).instructions.agents.auto_paths,
     [claude],
