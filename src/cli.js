@@ -9,6 +9,7 @@ import {
   addTarget,
   defaultDeviceId,
   inspectTargets,
+  isManagedSkillPath,
   installSkill,
   initializeLocalPathState,
   listDevices,
@@ -457,7 +458,7 @@ async function listSkills() {
     console.log('No skills in vault yet. Add one with: skillsync add <skill-folder>');
     return;
   }
-  const localByName = new Map(localSkillEntries(device, registry).map((skill) => [skill.name, skill]));
+  const localByName = new Map((await localSkillEntries(device, registry, config.repoPath)).map((skill) => [skill.name, skill]));
   for (const name of names) {
     const localSkill = localByName.get(name);
     const targetSummary = localSkill ? localSkillTargetSummary(localSkill) : '';
@@ -466,7 +467,7 @@ async function listSkills() {
   }
 }
 
-function localSkillEntries(device, registry) {
+async function localSkillEntries(device, registry, vaultPath) {
   const byName = new Map();
   const entryFor = (name) => {
     if (!byName.has(name)) {
@@ -499,7 +500,7 @@ function localSkillEntries(device, registry) {
         targetName,
         path: skill.path,
         inVault: Boolean(skill.in_vault) || Boolean(registry.skills[skill.name]),
-        managed: entry.managedTargets.has(targetName),
+        managed: await isManagedSkillPath({ vaultPath, device, targetName, skill }),
       });
     }
   }
@@ -672,7 +673,7 @@ async function installedCommand(rest = []) {
   const registry = await loadRegistry(config.repoPath);
   const deviceId = requestedDeviceId(config, rest);
   const device = await requireKnownDevice(config.repoPath, deviceId);
-  const localSkills = localSkillEntries(device, registry);
+  const localSkills = await localSkillEntries(device, registry, config.repoPath);
   const isLocalDevice = deviceId === config.deviceId;
   const projectionsBySkill = isLocalDevice
     ? projectionDetailsBySkill(await managedProjections({ vaultPath: config.repoPath, deviceId }))
@@ -1999,7 +2000,7 @@ async function skillsScreen(config) {
     console.log('\nNo skills in vault yet. Use Add/import first.\n');
     return;
   }
-  const localByName = new Map(localSkillEntries(device, registry).map((skill) => [skill.name, skill]));
+  const localByName = new Map((await localSkillEntries(device, registry, config.repoPath)).map((skill) => [skill.name, skill]));
   const localVaultNames = new Set([...localByName.values()].filter((skill) => skill.inVault).map((skill) => skill.name));
   const selectionChanges = (selectedNames) => skillSelectionChanges({
     skills: names,
@@ -2070,7 +2071,7 @@ async function installedScreen(config) {
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
-  const localSkills = localSkillEntries(device, registry);
+  const localSkills = await localSkillEntries(device, registry, config.repoPath);
   if (!localSkills.length) {
     await promptWithEscape(select({
       message: `Local skills on ${device.display_name}`,
