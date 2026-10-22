@@ -281,6 +281,8 @@ skillsync import opencode
 skillsync import hermes
 ```
 
+OpenCode setup detection and imports use `$XDG_CONFIG_HOME/opencode/skills` when `XDG_CONFIG_HOME` is an absolute path. Otherwise, they use `~/.config/opencode/skills`. Rerunning setup preserves paths for targets you have already configured.
+
 When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly. Renaming with `--conflict rename --as new-name` preserves the original source and honors `--target` and `--global` for the renamed skill.
 
 ## Automatic skill adoption
