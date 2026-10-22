@@ -160,16 +160,25 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
   let backupDirectory = null;
   let preserved = false;
   let replaced = false;
+  let originalMode = null;
+  let replacementMode;
   try {
     if (separateFilesystem) await writeFile(path.join(staging, '.gitignore'), '*\n');
     await copyDir(sourcePath, replacement);
     await validateSkillFolder(replacement);
+    replacementMode = (await stat(replacement)).mode & 0o7777;
+    // Moving a directory between parents requires write access to its root on POSIX.
+    await chmod(replacement, replacementMode | 0o200);
     if (backup) {
+      originalMode = (await stat(comparison.path)).mode & 0o7777;
+      await chmod(comparison.path, originalMode | 0o200);
       await rename(comparison.path, original);
       preserved = true;
+      await chmod(original, originalMode);
     }
     await rename(replacement, comparison.path);
     replaced = true;
+    await chmod(comparison.path, replacementMode);
     if (backup && separateFilesystem) {
       backupDirectory = await mkdtemp(path.join(importRoot, 'skill-'));
       backup = path.join(backupDirectory, 'original');
@@ -180,8 +189,16 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
     await saveRegistry(vaultPath, registry);
   } catch (error) {
     try {
-      if (replaced) await rename(comparison.path, replacement);
-      if (preserved) await rename(original, comparison.path);
+      if (replaced) {
+        await chmod(comparison.path, replacementMode | 0o200);
+        await rename(comparison.path, replacement);
+        await chmod(replacement, replacementMode);
+      }
+      if (preserved) {
+        await chmod(original, originalMode | 0o200);
+        await rename(original, comparison.path);
+      }
+      if (originalMode !== null) await chmod(comparison.path, originalMode);
     } catch (rollbackError) {
       throw new AggregateError([error, rollbackError],
         `Skill import failed: ${error.message}\nRollback failed: ${rollbackError.message}\nRecover skill files from ${staging}`);

@@ -156,3 +156,39 @@ for (const failure of ['registry', 'backup']) {
     assert.deepEqual(await readdir(await gitPrivatePath(vaultPath, 'imports')), []);
   });
 }
+
+for (const kind of ['plain', 'git', 'separate']) {
+  test(`read-only skill roots retain their modes through import, overwrite, and rollback in a ${kind} vault`, permissionsRequired, async (t) => {
+    const options = kind === 'separate' ? await separateGitFixture(t) : await fixture(t);
+    if (!options) return;
+    const { vaultPath, sourcePath, replacement } = options;
+    if (kind === 'git') await git(['init', vaultPath]);
+    await chmod(sourcePath, 0o555);
+    await chmod(replacement, 0o555);
+    const initial = await addSkillToVault({ vaultPath, sourcePath, name: 'demo' });
+    assert.equal((await stat(initial.path)).mode & 0o777, 0o555);
+
+    const result = await addSkillToVault({ vaultPath, sourcePath: replacement, name: 'demo', overwrite: true });
+    assert.equal(await readFile(path.join(result.path, 'SKILL.md'), 'utf8'), '# Replacement\n');
+    assert.equal((await stat(result.path)).mode & 0o777, 0o555);
+    assert.equal((await stat(result.backup)).mode & 0o777, 0o555);
+    assert.equal(await readFile(path.join(result.backup, 'notes.md'), 'utf8'), '# User notes\n');
+    assert.equal((await stat(sourcePath)).mode & 0o777, 0o555);
+    assert.equal((await stat(replacement)).mode & 0o777, 0o555);
+
+    await writeFile(path.join(replacement, 'SKILL.md'), '# Another replacement\n');
+    const registryPath = path.join(vaultPath, 'registry.json');
+    const registry = await readFile(registryPath, 'utf8');
+    await chmod(registryPath, 0o000);
+    try {
+      await assert.rejects(addSkillToVault({ vaultPath, sourcePath: replacement, name: 'demo', overwrite: true }),
+        { code: 'EACCES' });
+    } finally {
+      await chmod(registryPath, 0o600);
+    }
+    assert.equal(await readFile(path.join(result.path, 'SKILL.md'), 'utf8'), '# Replacement\n');
+    assert.equal((await stat(result.path)).mode & 0o777, 0o555);
+    assert.equal(await readFile(registryPath, 'utf8'), registry);
+    assert.equal((await checkVault(vaultPath)).skills, 1);
+  });
+}
