@@ -3,6 +3,12 @@ import { hostname } from 'node:os';
 import path from 'node:path';
 
 import {
+  GLOBAL_INSTALL_TARGET,
+  isGlobalInstallTarget,
+  normalizeGlobalInstalled,
+  normalizeInstalled,
+} from './device-assignments.js';
+import {
   assertSafePathSegment,
   exists,
   expandHome,
@@ -28,13 +34,8 @@ import {
   rollbackLatestFilesystemBackup,
 } from './transaction.js';
 
-const GLOBAL_INSTALL_TARGET = 'global';
 const LOCAL_PATH_STATE_VERSION = 2;
 const OWNERSHIP_MARKER = '.skillsync-owned.json';
-
-function isGlobalInstallTarget(target) {
-  return target === GLOBAL_INSTALL_TARGET || target === '@global';
-}
 
 export function defaultDeviceId() {
   return slugifySkillName(hostname()) || 'device';
@@ -488,27 +489,6 @@ function nonNegativeInteger(value) {
 
 function bumpDesiredGeneration(device) {
   device.desired_generation = nonNegativeInteger(device.desired_generation) + 1;
-}
-
-function normalizeInstalled(installed) {
-  if (!installed || typeof installed !== 'object') return {};
-  return Object.fromEntries(Object.entries(installed)
-    .map(([skillName, targets]) => [
-      skillName,
-      [...new Set((Array.isArray(targets) ? targets : []).filter((target) => !isGlobalInstallTarget(target)))].sort(),
-    ])
-    .filter(([, targets]) => targets.length));
-}
-
-function normalizeGlobalInstalled(device) {
-  const names = new Set(Array.isArray(device?.global_installed) ? device.global_installed : []);
-  if (Array.isArray(device?.globalInstalled)) {
-    for (const name of device.globalInstalled) names.add(name);
-  }
-  for (const [skillName, targets] of Object.entries(device?.installed || {})) {
-    if (Array.isArray(targets) && targets.some(isGlobalInstallTarget)) names.add(skillName);
-  }
-  return [...names].sort();
 }
 
 function markGlobalInstalled(device, skillName, installed) {
