@@ -1405,6 +1405,22 @@ export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
   return device;
 }
 
+export async function isManagedSkillPath({ vaultPath, device, targetName, skill }) {
+  const target = device.targets[targetName];
+  // Shared device reports omit private filesystem paths.
+  if (!target?.path) return Boolean(device.installed[skill.name]?.includes(targetName));
+  const scanRoot = expandHome(target.scan_path || target.path);
+  const detectedPath = path.resolve(scanRoot, skill.path || '.');
+  if (path.basename(detectedPath) !== skill.name) return false;
+  const [detectedParent, targetRoot] = await Promise.all([
+    realpathOrResolve(path.dirname(detectedPath)),
+    realpathOrResolve(expandHome(target.path)),
+  ]);
+  if (detectedParent !== targetRoot) return false;
+  const info = await projectionInfo(detectedPath, vaultPath);
+  return info.ownedSymlink || info.ownedCopy;
+}
+
 export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }) {
   const device = await loadLocalDevice(vaultPath, deviceId, { ensure: false });
   const detected = await detectTargets({ vaultPath, device });
@@ -1417,7 +1433,7 @@ export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }
         target: targetName,
         path: skill.path,
         in_vault: skill.in_vault,
-        managed: Boolean(device.installed[skill.name]?.includes(targetName)),
+        managed: await isManagedSkillPath({ vaultPath, device, targetName, skill }),
         new: !previous.has(detectedSkillKey(skill)),
       });
     }
