@@ -57,6 +57,21 @@ async function fixture(t) {
   };
 }
 
+test('OpenCode import uses the configured XDG directory instead of the default folder', async (t) => {
+  const { home, vault, cli } = await fixture(t);
+  const configHome = path.join(home, 'custom config');
+  await makeSkill(path.join(configHome, 'opencode', 'skills'), 'example', '# Configured source');
+  const defaultSource = await makeSkill(path.join(home, '.config', 'opencode', 'skills'),
+    'example', '# Default source');
+
+  await cli(['import', 'opencode'], { XDG_CONFIG_HOME: configHome });
+
+  assert.equal(await readFile(path.join(vault, 'skills', 'example', 'SKILL.md'), 'utf8'),
+    '---\nname: example\n---\n# Configured source\n');
+  assert.equal(await readFile(path.join(defaultSource, 'SKILL.md'), 'utf8'),
+    '---\nname: example\n---\n# Default source\n');
+});
+
 for (const localExists of [true, false]) {
   test(`add uses ${localExists ? 'an existing relative local folder' : 'GitHub shorthand when no local folder exists'}`, async (t) => {
     const { home, vault, cli } = await fixture(t);

@@ -152,6 +152,27 @@ test('setup detects the Grok Bot target when its agent-data directory exists', a
   assert.equal(device.targets.grok.path, '~/agent-data/workflows');
 });
 
+test('setup detects OpenCode skills under a custom XDG config directory', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, '.skillsync', 'repo');
+  const remote = path.join(home, 'vault.git');
+  const configHome = path.join(home, 'custom config');
+  const skills = path.join(configHome, 'opencode', 'skills');
+  await git(['init', '--bare', remote]);
+  await mkdir(skills, { recursive: true });
+
+  await execFileAsync(process.execPath, [
+    path.resolve('src/cli.js'), 'setup', '--repo', 'test/skills', '--path', vault, '--yes',
+  ], {
+    env: { ...await setupEnv(home, `file://${remote}`), XDG_CONFIG_HOME: configHome },
+  });
+
+  const config = JSON.parse(await readFile(path.join(home, '.config', 'skillsync', 'config.json')));
+  const device = await loadLocalDevice(vault, config.deviceId);
+  assert.equal(device.targets.opencode?.path, skills);
+});
+
 for (const command of ['setup', 'connect']) {
   test(`${command} keeps a relative vault path anchored when commands run elsewhere`, async (t) => {
     const home = await realpath(await tempDir());

@@ -37,12 +37,23 @@ test('resolves supported local agent import sources', () => {
     label: 'Codex',
     root: '~/.codex/skills',
   });
-  assert.deepEqual(importSourceForAgent('opencode'), {
+  assert.deepEqual(importSourceForAgent('opencode', {}), {
     name: 'opencode',
     label: 'OpenCode',
     root: '~/.config/opencode/skills',
   });
   assert.throws(() => importSourceForAgent('cursor'), /Usage: skillsync import hermes\|codex\|opencode/);
+});
+
+test('OpenCode import follows absolute XDG config paths and ignores invalid overrides', () => {
+  const configHome = path.resolve('custom config');
+  assert.equal(importSourceForAgent('OpenCode', { XDG_CONFIG_HOME: configHome }).root,
+    path.join(configHome, 'opencode', 'skills'));
+  for (const value of ['', 'relative/config']) {
+    assert.equal(importSourceForAgent('opencode', { XDG_CONFIG_HOME: value }).root,
+      '~/.config/opencode/skills');
+  }
+  assert.equal(importSourceForAgent('codex', { XDG_CONFIG_HOME: configHome }).root, '~/.codex/skills');
 });
 
 test('detects remote skill sources and parses refs', () => {

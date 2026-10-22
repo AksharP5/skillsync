@@ -374,7 +374,7 @@ async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
     { name: 'hermes', path: '~/.hermes/skills/personal', scanPath: '~/.hermes/skills' },
     { name: 'claude', path: '~/.claude/skills' },
     { name: 'codex', path: '~/.codex/skills' },
-    { name: 'opencode', path: '~/.config/opencode/skills' },
+    { name: 'opencode', path: importSourceForAgent('opencode').root },
     { name: 'grok', path: '~/agent-data/workflows' },
   ];
   const detected = [];

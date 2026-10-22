@@ -17,10 +17,13 @@ export function supportedImportSources() {
   return Object.keys(IMPORT_SOURCES);
 }
 
-export function importSourceForAgent(source) {
+export function importSourceForAgent(source, env = process.env) {
   const normalized = source?.toLowerCase();
   const importSource = IMPORT_SOURCES[normalized];
   if (!importSource) throw new Error(`Usage: skillsync import ${supportedImportSources().join('|')}`);
+  if (normalized === 'opencode' && env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME)) {
+    return { ...importSource, root: path.join(env.XDG_CONFIG_HOME, 'opencode', 'skills') };
+  }
   return { ...importSource };
 }
 
