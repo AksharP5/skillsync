@@ -436,6 +436,8 @@ When a remote deletion leaves local cache files in a skill folder, sync moves th
 
 If preserving those files fails, repair the reported storage or permission error and run sync again. Sync records each pull's starting Git revision privately and saves the identities of pending remnant folders before moving them. Retries retain unfinished backups across later pulls without moving a new folder created at a completed backup's old name.
 
+If the filesystem cannot prove a folder's identity after an interrupted backup, sync keeps the recovery state and reports the affected folder. Move that folder outside the vault to preserve its contents, then run sync again. This can occur on filesystems that do not provide stable creation times.
+
 Sync stops if Git leaves unresolved conflicts, including conflicts while restoring local edits after a pull. Resolve and stage the affected files before retrying. `--no-pull` does not bypass this check.
 
 Preview local skill projection changes without pulling or writing:

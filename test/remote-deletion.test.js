@@ -307,9 +307,13 @@ for (const birthtime of ['ctime', 'zero']) {
       const fixture = await deletionFixture(t);
       await deleteRemotely(fixture);
       const original = fs.lstat;
+      let reusedInode = null;
       const mock = t.mock.method(fs, 'lstat', async (...args) => {
         const info = await original(...args);
-        if (args[1]?.bigint) info.birthtimeNs = birthtime === 'ctime' ? info.ctimeNs : 0n;
+        if (args[1]?.bigint) {
+          if (args[0] === fixture.skill && reusedInode !== null) info.ino = reusedInode;
+          info.birthtimeNs = birthtime === 'ctime' ? info.ctimeNs : 0n;
+        }
         return info;
       });
       syncBuiltinESMExports();
@@ -320,14 +324,19 @@ for (const birthtime of ['ctime', 'zero']) {
           return;
         }
         await failSync(t, fixture.options, 'rename', (source) => source === fixture.skill);
+        const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+        const recovery = await readFile(checkpoint, 'utf8');
+        const previousInode = (await original(fixture.skill, { bigint: true })).ino;
         const saved = path.join(fixture.root, 'saved-remnant');
         await fs.rename(fixture.skill, saved);
         await mkdir(fixture.skill, { recursive: true });
         await writeFile(path.join(fixture.skill, 'notes.txt'), 'replacement local notes\n');
+        reusedInode = previousInode;
         for (let attempt = 0; attempt < 2; attempt++) {
-          await assert.rejects(syncVault(fixture.options), /regular SKILL\.md file: skills\/demo/);
+          await assert.rejects(syncVault(fixture.options), /Cannot safely resume remote deletion recovery/);
           assert.equal(await readFile(path.join(fixture.skill, 'notes.txt'), 'utf8'), 'replacement local notes\n');
           assert.deepEqual(await readFile(path.join(saved, 'cache.bin')), cache);
+          assert.equal(await readFile(checkpoint, 'utf8'), recovery);
         }
         const root = await gitPrivatePath(fixture.local, 'deleted-skills');
         for (const backup of await readdir(root)) assert.deepEqual(await readdir(path.join(root, backup)), []);
@@ -338,6 +347,72 @@ for (const birthtime of ['ctime', 'zero']) {
     });
   }
 }
+
+for (const transition of [false, true]) {
+  test(`interrupted recovery with unavailable creation time keeps evidence after ${transition ? 'checkpoint' : 'backup'} failure`, async (t) => {
+    const fixture = await deletionFixture(t);
+    await deleteRemotely(fixture);
+    const original = fs.lstat;
+    const mock = t.mock.method(fs, 'lstat', async (...args) => {
+      const info = await original(...args);
+      if (args[1]?.bigint) info.birthtimeNs = info.ctimeNs;
+      return info;
+    });
+    syncBuiltinESMExports();
+    try {
+      const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
+      let writes = 0;
+      await failSync(t, fixture.options, 'rename', (source, destination) => transition
+        ? destination === checkpoint && ++writes === 2
+        : source === fixture.skill);
+      const recovery = await readFile(checkpoint, 'utf8');
+      const head = (await git(['rev-parse', 'HEAD'], fixture.local)).stdout;
+      await writeFile(path.join(fixture.other, 'notes.txt'), 'later remote change\n');
+      await commitAllIfChanged(fixture.other, 'later remote change');
+      await git(['push'], fixture.other);
+      await assert.rejects(syncVault(fixture.options), /Move this folder outside the vault/);
+      assert.equal(await readFile(checkpoint, 'utf8'), recovery);
+      assert.equal((await git(['rev-parse', 'HEAD'], fixture.local)).stdout, head);
+      assert.deepEqual(await readFile(path.join(fixture.skill, 'cache.bin')), cache);
+      const saved = path.join(fixture.root, 'saved-remnant');
+      await fs.rename(fixture.skill, saved);
+      await syncVault(fixture.options);
+      await syncVault(fixture.options);
+      assert.deepEqual(await readFile(path.join(saved, 'cache.bin')), cache);
+      await assert.rejects(lstat(checkpoint), { code: 'ENOENT' });
+      await assert.rejects(lstat(path.join(fixture.target, 'demo')), { code: 'ENOENT' });
+    } finally {
+      mock.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+}
+
+test('recovery keeps a known creation time when current ctime equals it', async (t) => {
+  const fixture = await deletionFixture(t);
+  await deleteRemotely(fixture);
+  const original = fs.lstat;
+  let ctime = 2n;
+  const mock = t.mock.method(fs, 'lstat', async (...args) => {
+    const info = await original(...args);
+    if (args[1]?.bigint) {
+      info.birthtimeNs = 1n;
+      info.ctimeNs = ctime;
+    }
+    return info;
+  });
+  syncBuiltinESMExports();
+  try {
+    const backupRoot = await gitPrivatePath(fixture.local, 'deleted-skills');
+    await failSync(t, fixture.options, 'mkdir', (directory) => directory === backupRoot);
+    ctime = 1n;
+    await syncVault(fixture.options);
+    await assertDeletionApplied(fixture, 'root');
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
 
 test('pending remnant recovery leaves a recreated canonical skill in place', async (t) => {
   const fixture = await deletionFixture(t, { ignore: 'skill' });
@@ -531,7 +606,7 @@ test('malformed pending recovery is rejected before pulling or moving data', asy
   await deleteRemotely(fixture);
   const before = (await git(['rev-parse', 'HEAD'], fixture.local)).stdout.trim();
   const checkpoint = await gitPrivatePath(fixture.local, 'remnant-recovery.json');
-  const entry = { name: 'demo', dev: '1', ino: '2', birthtime: '3' };
+  const entry = { name: 'demo', dev: '1', ino: '2', birthtime: '3', observed_birthtime: '3' };
   const valid = { previous_head: before, candidates: [], pending: [] };
   const invalid = [
     null, [], 'state', {}, { ...valid, previous_head: [before] },

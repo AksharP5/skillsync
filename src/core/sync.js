@@ -47,7 +47,7 @@ function parseRemnantRecovery(value) {
   for (const entries of [value.candidates, value.pending]) {
     const names = new Set();
     for (const entry of entries) {
-      if (!object(entry) || ['dev', 'ino'].some((key) => (
+      if (!object(entry) || ['dev', 'ino', 'observed_birthtime'].some((key) => (
         typeof entry[key] !== 'string' || !/^[0-9]+$/.test(entry[key])
       )) || !(entry.birthtime === null
         || (typeof entry.birthtime === 'string' && /^[0-9]+$/.test(entry.birthtime)))) {
@@ -67,10 +67,24 @@ function directoryBirthtime(info) {
     ? null : String(info.birthtimeNs);
 }
 
-function sameDirectory(info, entry) {
+function directoryIdentity(name, info) {
+  return {
+    name, dev: String(info.dev), ino: String(info.ino),
+    birthtime: directoryBirthtime(info), observed_birthtime: String(info.birthtimeNs),
+  };
+}
+
+function sameDirectory(info, entry, { resuming = false } = {}) {
   if (!info?.isDirectory() || String(info.dev) !== entry.dev || String(info.ino) !== entry.ino) return false;
   const birthtime = directoryBirthtime(info);
-  return entry.birthtime === null || birthtime === null || birthtime === entry.birthtime;
+  if (entry.birthtime !== null && String(info.birthtimeNs) === entry.birthtime) return true;
+  if (entry.birthtime !== null && birthtime !== null) return false;
+  if (!resuming) return entry.birthtime === null;
+  // An unchanged birthtime across Git's directory mutation establishes that it is stable.
+  if (entry.birthtime === null && birthtime !== null && birthtime === entry.observed_birthtime) return true;
+  throw new Error(`Cannot safely resume remote deletion recovery for skills/${entry.name}: `
+    + 'filesystem creation time is unavailable. Move this folder outside the vault to preserve '
+    + 'its contents, then run sync again. Recovery state has been retained.');
 }
 
 async function remnantCandidates(vaultPath) {
@@ -81,9 +95,7 @@ async function remnantCandidates(vaultPath) {
     if (!entry.isDirectory()) continue;
     const info = await pathInfo(path.join(root, entry.name));
     if (!info?.isDirectory()) continue;
-    candidates.push({
-      name: entry.name, dev: String(info.dev), ino: String(info.ino), birthtime: directoryBirthtime(info),
-    });
+    candidates.push(directoryIdentity(entry.name, info));
   }
   return candidates;
 }
@@ -98,8 +110,15 @@ async function remnantInfo(vaultPath, name) {
   return tracked ? null : info;
 }
 
-async function pendingRemoteDeletionRemnants(vaultPath, recovery) {
-  const pending = new Map(recovery.pending.map((entry) => [entry.name, entry]));
+async function pendingRemoteDeletionRemnants(vaultPath, recovery, { resuming = false } = {}) {
+  const pending = new Map();
+  for (const entry of recovery.pending) {
+    const info = await remnantInfo(vaultPath, entry.name);
+    if (!sameDirectory(info, entry, { resuming })) continue;
+    pending.set(entry.name, {
+      ...directoryIdentity(entry.name, info), birthtime: entry.birthtime ?? directoryBirthtime(info),
+    });
+  }
   if (!recovery.previous_head) return [...pending.values()];
   const { stdout: upstream } = await git(['rev-parse', '@{u}'], vaultPath);
   // Local commits are not evidence of remote deletion. Compare upstream to the shared base.
@@ -122,7 +141,9 @@ async function pendingRemoteDeletionRemnants(vaultPath, recovery) {
     ], vaultPath);
     if (!original) continue;
     const info = await remnantInfo(vaultPath, name);
-    if (sameDirectory(info, candidate)) pending.set(name, candidate);
+    if (sameDirectory(info, candidate, { resuming })) {
+      pending.set(name, { ...directoryIdentity(name, info), birthtime: candidate.birthtime ?? directoryBirthtime(info) });
+    }
   }
   return [...pending.values()];
 }
@@ -167,7 +188,7 @@ export async function syncVault({
   }) : null;
   async function beforePull(previousHead) {
     // Freeze unfinished work before another pull can change its deletion evidence.
-    const pending = recovery ? await pendingRemoteDeletionRemnants(vaultPath, recovery) : [];
+    const pending = recovery ? await pendingRemoteDeletionRemnants(vaultPath, recovery, { resuming: true }) : [];
     // A failed post-pull state write must not authorize a replacement directory on retry.
     const candidates = previousHead ? await remnantCandidates(vaultPath) : [];
     const next = { previous_head: previousHead, candidates, pending };
