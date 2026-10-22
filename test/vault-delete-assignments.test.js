@@ -18,6 +18,15 @@ for (const targetAssigned of [false, true]) {
     }
     await rebuildRegistry(vaultPath);
     const desiredPath = path.join(vaultPath, 'devices', 'legacy.json');
+    const instructions = {
+      version: 1,
+      agents: {
+        enabled: true,
+        profile: 'shared',
+        paths: ['/reported/codex/AGENTS.md', '/reported/opencode/AGENTS.md'],
+        auto_paths: ['/reported/opencode/AGENTS.md'],
+      },
+    };
     await writeFile(desiredPath, JSON.stringify({
       desired_generation: 7,
       applied_generation: 6,
@@ -28,7 +37,18 @@ for (const targetAssigned of [false, true]) {
         retained: ['codex', '@global'],
       },
       globalInstalled: ['deleted', 'retained'],
+      instructions,
     }));
+    const selectionPath = path.join(vaultPath, 'globals', 'assignments', 'legacy.json');
+    const selection = JSON.stringify({ version: 1, device_id: 'legacy', profile: 'selected' });
+    if (targetAssigned) {
+      await mkdir(path.dirname(selectionPath), { recursive: true });
+      await writeFile(selectionPath, selection);
+    }
+    const instructionsBefore = (await loadDevice(vaultPath, 'legacy')).instructions;
+    assert.equal(instructionsBefore.agents.profile, targetAssigned ? 'selected' : 'shared');
+    assert.equal(instructionsBefore.agents.applied_profile, 'shared');
+    assert.deepEqual(instructionsBefore.agents.paths, instructions.agents.paths);
     const existingStatePath = path.join(vaultPath, 'state', 'existing.json');
     const existingState = JSON.stringify({ device_id: 'existing', applied_generation: 3, detected: {} });
     await writeFile(existingStatePath, existingState);
@@ -62,6 +82,10 @@ for (const targetAssigned of [false, true]) {
     assert.equal(migrated.applied_generation, 6);
     assert.equal(migrated.targets.codex.auto_import, false);
     assert.deepEqual(migrated.detected, { codex: [{ name: 'retained', in_vault: true }] });
+    assert.deepEqual(migrated.instructions, instructionsBefore);
+    const reported = JSON.parse(await readFile(path.join(vaultPath, 'state', 'legacy.json'), 'utf8'));
+    assert.deepEqual(reported.instructions, instructions);
+    if (targetAssigned) assert.equal(await readFile(selectionPath, 'utf8'), selection);
     assert.equal(await readFile(existingStatePath, 'utf8'), existingState);
     assert.equal(await readFile(untouchedPath, 'utf8'), untouched);
     assert.deepEqual(Object.keys((await loadRegistry(vaultPath)).skills), ['retained']);

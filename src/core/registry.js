@@ -230,6 +230,7 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
       'applied_generation',
       'targets',
       'detected',
+      'instructions',
     ].some((key) => Object.hasOwn(device, key))) {
       const targets = Object.fromEntries(Object.entries(device.targets || {}).map(([name, target]) => [
         name,
@@ -249,6 +250,7 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
           : 0,
         targets,
         detected: device.detected && typeof device.detected === 'object' ? device.detected : {},
+        instructions: device.instructions || {},
       });
     }
     const desiredGeneration = Number(device.generation ?? device.desired_generation);
