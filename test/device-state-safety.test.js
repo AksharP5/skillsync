@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -20,6 +20,20 @@ async function tempVault(t) {
   const vaultPath = path.join(root, 'vault');
   await ensureVault(vaultPath);
   return { root, vaultPath };
+}
+
+for (const name of ['global', '@global']) {
+  test(`target creation rejects reserved name ${name} before writing device state`, async (t) => {
+    const { root, vaultPath } = await tempVault(t);
+    const before = await readdir(vaultPath, { recursive: true });
+
+    await assert.rejects(
+      () => addTarget({ vaultPath, deviceId: 'workstation', name, targetPath: path.join(root, 'target') }),
+      /Target name is reserved for device-global installs/,
+    );
+
+    assert.deepEqual(await readdir(vaultPath, { recursive: true }), before);
+  });
 }
 
 for (const field of ['installed', 'global_installed']) {

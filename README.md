@@ -340,6 +340,8 @@ On a Grok Bot computer, setup detects `~/agent-data/workflows`. You can also add
 skillsync target add grok ~/agent-data/workflows
 ```
 
+Target names `global` and `@global` are reserved for device-global installs. If an existing target uses either name, remove it and add the same folder under a different name before assigning skills to it.
+
 If a different skill with the same name is already in the vault, SkillSync leaves both copies untouched and reports the conflict.
 
 Inspect local targets without adopting, applying, committing, or pushing anything:

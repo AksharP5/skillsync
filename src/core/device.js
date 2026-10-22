@@ -664,6 +664,7 @@ export async function addTarget({
   autoImport,
 }) {
   assertSafePathSegment(name, 'Target name');
+  if (isGlobalInstallTarget(name)) throw new Error(`Target name is reserved for device-global installs: ${name}`);
   if (!targetPath) throw new Error('Target path is required');
   if (!['symlink', 'copy'].includes(mode)) throw new Error(`Unsupported target mode: ${mode}`);
   await initializeLocalPathState({ vaultPath, deviceId });
