@@ -133,7 +133,7 @@ export function isPushRejectedBecauseRemoteHasWork(error) {
   );
 }
 
-export async function pushWithPullRebaseRetry(repoPath, { beforePush } = {}) {
+export async function pushWithPullRebaseRetry(repoPath, { beforePush, afterPullRebase } = {}) {
   if (!await isGitRepo(repoPath)) return { pushed: false, rebased: false };
   try {
     if (beforePush) await beforePush();
@@ -142,6 +142,7 @@ export async function pushWithPullRebaseRetry(repoPath, { beforePush } = {}) {
   } catch (error) {
     if (!isPushRejectedBecauseRemoteHasWork(error)) throw error;
     await pullRebase(repoPath);
+    if (afterPullRebase) await afterPullRebase();
     if (beforePush) await beforePush();
     await push(repoPath);
     return { pushed: true, rebased: true };
