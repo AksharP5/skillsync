@@ -10,15 +10,16 @@ import { addSkillToVault, buildRegistry, loadRegistry } from '../src/core/regist
 
 const permissionsRequired = { skip: !process.getuid || process.getuid() === 0 };
 
+async function cleanup(directory) {
+  await chmod(directory, 0o700);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) await cleanup(path.join(directory, entry.name));
+  }
+  await rm(directory, { recursive: true, force: true });
+}
+
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-vault-import-'));
-  async function cleanup(directory) {
-    await chmod(directory, 0o700);
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (entry.isDirectory()) await cleanup(path.join(directory, entry.name));
-    }
-    await rm(directory, { recursive: true, force: true });
-  }
   t.after(() => cleanup(root));
   const vaultPath = path.join(root, 'vault');
   const sourcePath = path.join(root, 'source');
@@ -90,3 +91,68 @@ test('failed registry access during overwrite restores the original skill and re
   assert.equal(await readFile(registryPath, 'utf8'), registry);
   assert.equal((await checkVault(vaultPath)).skills, 1);
 });
+
+async function separateGitFixture(t, { existing = false } = {}) {
+  const options = await fixture(t);
+  const sharedMemory = await stat('/dev/shm').catch(() => null);
+  if (!sharedMemory || sharedMemory.dev === (await stat(options.root)).dev) {
+    t.skip('requires a writable /dev/shm on another filesystem');
+    return null;
+  }
+  const metadata = await mkdtemp('/dev/shm/skillsync-import-git-');
+  t.after(() => cleanup(metadata));
+  if (existing) await addSkillToVault({ ...options, name: 'demo' });
+  await git(['init', '--separate-git-dir', path.join(metadata, 'git'), options.vaultPath]);
+  return options;
+}
+
+test('imports and overwrites work with Git metadata on another filesystem', async (t) => {
+  const options = await separateGitFixture(t);
+  if (!options) return;
+  const { vaultPath, sourcePath, replacement } = options;
+  const initial = await addSkillToVault({ vaultPath, sourcePath, name: 'demo' });
+  assert.equal(initial.status, 'added');
+  const result = await addSkillToVault({ vaultPath, sourcePath: replacement, name: 'demo', overwrite: true });
+
+  assert.equal(result.status, 'overwritten');
+  assert.equal(await readFile(path.join(result.path, 'SKILL.md'), 'utf8'), '# Replacement\n');
+  assert.equal(await readFile(path.join(result.backup, 'SKILL.md'), 'utf8'), '# Original\n');
+  assert.equal(await readFile(path.join(result.backup, 'assets', 'data.txt'), 'utf8'), 'original asset');
+  assert.equal((await stat(path.join(result.backup, 'assets'))).mode & 0o777, 0o555);
+  assert.ok(result.backup.startsWith(`${await gitPrivatePath(vaultPath, 'imports')}${path.sep}`));
+  assert.deepEqual(await readdir(path.join(vaultPath, 'skills')), ['demo']);
+  assert.equal((await checkVault(vaultPath)).skills, 1);
+  await git(['add', '-A'], vaultPath);
+  const { stdout } = await git(['ls-files'], vaultPath);
+  assert.deepEqual(stdout.trim().split('\n'), ['registry.json', 'skills/demo/SKILL.md', 'vault.json']);
+});
+
+for (const failure of ['registry', 'backup']) {
+  test(`cross-filesystem overwrite rolls back after ${failure} failure`, permissionsRequired, async (t) => {
+    const options = await separateGitFixture(t, { existing: true });
+    if (!options) return;
+    const { vaultPath, replacement } = options;
+    const skillPath = path.join(vaultPath, 'skills', 'demo');
+    const registryPath = path.join(vaultPath, 'registry.json');
+    const registry = await readFile(registryPath, 'utf8');
+    const importRoot = await gitPrivatePath(vaultPath, 'imports');
+    await mkdir(importRoot, { recursive: true });
+    const blocked = failure === 'registry' ? registryPath : importRoot;
+    await chmod(blocked, failure === 'registry' ? 0o000 : 0o500);
+    try {
+      await assert.rejects(
+        addSkillToVault({ vaultPath, sourcePath: replacement, name: 'demo', overwrite: true }),
+        { code: 'EACCES' },
+      );
+    } finally {
+      await chmod(blocked, failure === 'registry' ? 0o600 : 0o700);
+    }
+
+    assert.equal(await readFile(path.join(skillPath, 'SKILL.md'), 'utf8'), '# Original\n');
+    assert.equal(await readFile(path.join(skillPath, 'assets', 'data.txt'), 'utf8'), 'original asset');
+    assert.equal((await stat(path.join(skillPath, 'assets'))).mode & 0o777, 0o555);
+    assert.equal(await readFile(registryPath, 'utf8'), registry);
+    assert.deepEqual(await readdir(path.join(vaultPath, 'skills')), ['demo']);
+    assert.deepEqual(await readdir(await gitPrivatePath(vaultPath, 'imports')), []);
+  });
+}
