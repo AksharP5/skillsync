@@ -1,10 +1,10 @@
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
 import { normalizeGlobalInstalled, normalizeInstalled } from './device-assignments.js';
-import { hashSyncedDirectory, ignoredGitPaths } from './git.js';
+import { gitPrivatePath, hashSyncedDirectory, ignoredGitPaths } from './git.js';
 import {
   assertSafePathSegment,
   copyDir,
@@ -137,14 +137,47 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
     }
     return { name: comparison.name, path: comparison.path, status: 'identical' };
   }
-  await copyDir(sourcePath, comparison.path);
-  const registry = await loadRegistry(vaultPath);
-  registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
-  await saveRegistry(vaultPath, registry);
+  const importRoot = await gitPrivatePath(vaultPath, 'imports')
+    || path.join(vaultPath, '.skillsync-local', 'imports');
+  await ensureDir(importRoot);
+  const staging = await mkdtemp(path.join(importRoot, 'skill-'));
+  const replacement = path.join(staging, 'replacement');
+  const backup = comparison.status === 'different' ? path.join(staging, 'original') : null;
+  let preserved = false;
+  let replaced = false;
+  try {
+    await copyDir(sourcePath, replacement);
+    await validateSkillFolder(replacement);
+    if (backup) {
+      await rename(comparison.path, backup);
+      preserved = true;
+    }
+    await rename(replacement, comparison.path);
+    replaced = true;
+    const registry = await loadRegistry(vaultPath);
+    registry.skills[comparison.name] = await registryEntryForSkill(vaultPath, comparison.name);
+    await saveRegistry(vaultPath, registry);
+  } catch (error) {
+    try {
+      if (replaced) await rename(comparison.path, replacement);
+      if (preserved) await rename(backup, comparison.path);
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError],
+        `Skill import failed: ${error.message}\nRollback failed: ${rollbackError.message}\nRecover skill files from ${staging}`);
+    }
+    await removePath(staging).catch((cleanupError) => {
+      throw new AggregateError([error, cleanupError],
+        `Skill import failed: ${error.message}\nThe previous skill is unchanged. Could not remove staging files at ${staging}: ${cleanupError.message}`);
+    });
+    throw error;
+  }
+  // Keep the original intact, including read-only directories, for local recovery.
+  if (!backup) await removePath(staging);
   return {
     name: comparison.name,
     path: comparison.path,
     status: comparison.status === 'different' ? 'overwritten' : 'added',
+    ...(backup ? { backup } : {}),
   };
 }
 

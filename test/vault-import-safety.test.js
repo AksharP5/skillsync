@@ -1,0 +1,92 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { checkVault } from '../src/core/check.js';
+import { git, gitPrivatePath } from '../src/core/git.js';
+import { addSkillToVault, buildRegistry, loadRegistry } from '../src/core/registry.js';
+
+const permissionsRequired = { skip: !process.getuid || process.getuid() === 0 };
+
+async function fixture(t) {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-vault-import-'));
+  async function cleanup(directory) {
+    await chmod(directory, 0o700);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) await cleanup(path.join(directory, entry.name));
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+  t.after(() => cleanup(root));
+  const vaultPath = path.join(root, 'vault');
+  const sourcePath = path.join(root, 'source');
+  const replacement = path.join(root, 'replacement');
+  await mkdir(path.join(sourcePath, 'assets'), { recursive: true });
+  await writeFile(path.join(sourcePath, 'SKILL.md'), '# Original\n');
+  await writeFile(path.join(sourcePath, 'notes.md'), '# User notes\n');
+  await writeFile(path.join(sourcePath, 'assets', 'data.txt'), 'original asset');
+  await chmod(path.join(sourcePath, 'assets'), 0o555);
+  await mkdir(replacement);
+  await writeFile(path.join(replacement, 'SKILL.md'), '# Replacement\n');
+  return { root, vaultPath, sourcePath, replacement };
+}
+
+for (const gitBacked of [false, true]) {
+  test(`overwriting a read-only skill preserves a private backup in a ${gitBacked ? 'Git-backed' : 'plain'} vault`, permissionsRequired, async (t) => {
+    const { vaultPath, sourcePath, replacement } = await fixture(t);
+    if (gitBacked) await git(['init', vaultPath]);
+    const options = { vaultPath, sourcePath, name: 'demo' };
+    const initial = await addSkillToVault(options);
+    const originalRegistry = await loadRegistry(vaultPath);
+    assert.equal((await stat(path.join(initial.path, 'assets'))).mode & 0o777, 0o555);
+    await writeFile(path.join(replacement, 'run.sh'), '#!/bin/sh\nexit 0\n');
+    await chmod(path.join(replacement, 'run.sh'), 0o755);
+    await mkdir(path.join(replacement, '.git'));
+    await writeFile(path.join(replacement, '.git', 'HEAD'), 'ignored metadata');
+    await writeFile(path.join(replacement, '.DS_Store'), 'ignored metadata');
+
+    const result = await addSkillToVault({ ...options, sourcePath: replacement, overwrite: true });
+
+    assert.equal(result.status, 'overwritten');
+    assert.equal(await readFile(path.join(result.path, 'SKILL.md'), 'utf8'), '# Replacement\n');
+    assert.equal((await stat(path.join(result.path, 'run.sh'))).mode & 0o777, 0o755);
+    assert.deepEqual((await readdir(result.path)).sort(), ['SKILL.md', 'run.sh']);
+    const backupRoot = gitBacked
+      ? await gitPrivatePath(vaultPath, 'imports')
+      : path.join(vaultPath, '.skillsync-local', 'imports');
+    assert.ok(result.backup.startsWith(`${backupRoot}${path.sep}`));
+    assert.equal(await readFile(path.join(result.backup, 'SKILL.md'), 'utf8'), '# Original\n');
+    assert.equal(await readFile(path.join(result.backup, 'notes.md'), 'utf8'), '# User notes\n');
+    assert.equal(await readFile(path.join(result.backup, 'assets', 'data.txt'), 'utf8'), 'original asset');
+    assert.equal((await stat(path.join(result.backup, 'assets'))).mode & 0o777, 0o555);
+    assert.notEqual((await loadRegistry(vaultPath)).skills.demo.hash, originalRegistry.skills.demo.hash);
+    assert.deepEqual(Object.keys((await buildRegistry(vaultPath)).skills), ['demo']);
+    assert.equal((await checkVault(vaultPath)).skills, 1);
+  });
+}
+
+test('failed registry access during overwrite restores the original skill and registry', permissionsRequired, async (t) => {
+  const { vaultPath, sourcePath, replacement } = await fixture(t);
+  const options = { vaultPath, sourcePath, name: 'demo' };
+  const initial = await addSkillToVault(options);
+  const registryPath = path.join(vaultPath, 'registry.json');
+  const registry = await readFile(registryPath, 'utf8');
+  await chmod(registryPath, 0o000);
+  try {
+    await assert.rejects(
+      addSkillToVault({ ...options, sourcePath: replacement, overwrite: true }),
+      { code: 'EACCES' },
+    );
+  } finally {
+    await chmod(registryPath, 0o600);
+  }
+
+  assert.equal(await readFile(path.join(initial.path, 'SKILL.md'), 'utf8'), '# Original\n');
+  assert.equal(await readFile(path.join(initial.path, 'notes.md'), 'utf8'), '# User notes\n');
+  assert.equal(await readFile(path.join(initial.path, 'assets', 'data.txt'), 'utf8'), 'original asset');
+  assert.equal((await stat(path.join(initial.path, 'assets'))).mode & 0o777, 0o555);
+  assert.equal(await readFile(registryPath, 'utf8'), registry);
+  assert.equal((await checkVault(vaultPath)).skills, 1);
+});

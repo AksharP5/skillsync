@@ -542,6 +542,7 @@ skillsync daemon
 - Vault checks reject symlinks, malformed JSON, stale registry entries, reserved ownership markers, and common credential formats. Pushes also check unpushed commit additions so removing a credential in a later commit does not silently publish it.
 - Symlinked content outside a configured target is not auto-adopted.
 - Different same-name skills require explicit conflict resolution.
+- Vault imports stage and validate the replacement before moving the existing skill. Failed replacements restore the original. Explicit overwrites keep the original under Git's private `skillsync/imports/` directory, or `.skillsync-local/imports/` in a plain vault. These local backups are not indexed as skills or synced to other devices.
 - Plugin sync is additive and never copies connector credentials.
 - Vault deletion is explicit unless you enable the last-assignment deletion policy.
 - Your skills and device configuration stay in the private GitHub vault you control.
