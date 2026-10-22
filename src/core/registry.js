@@ -1,4 +1,5 @@
-import { chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -123,9 +124,21 @@ export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   };
 }
 
+async function makeImportDirectoryWritable(directory) {
+  try {
+    await access(directory, constants.W_OK);
+    return null;
+  } catch (error) {
+    if (error.code !== 'EACCES') throw error;
+  }
+  const mode = (await stat(directory)).mode & 0o7777;
+  await chmod(directory, mode | 0o200);
+  return mode;
+}
+
 async function removeImportDirectory(directory) {
   // Only disposable import copies may need their read-only directories unlocked.
-  await chmod(directory, 0o700);
+  await makeImportDirectoryWritable(directory);
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) await removeImportDirectory(path.join(directory, entry.name));
   }
@@ -161,24 +174,22 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
   let preserved = false;
   let replaced = false;
   let originalMode = null;
-  let replacementMode;
+  let replacementMode = null;
   try {
     if (separateFilesystem) await writeFile(path.join(staging, '.gitignore'), '*\n');
     await copyDir(sourcePath, replacement);
     await validateSkillFolder(replacement);
-    replacementMode = (await stat(replacement)).mode & 0o7777;
     // Moving a directory between parents requires write access to its root on POSIX.
-    await chmod(replacement, replacementMode | 0o200);
+    replacementMode = await makeImportDirectoryWritable(replacement);
     if (backup) {
-      originalMode = (await stat(comparison.path)).mode & 0o7777;
-      await chmod(comparison.path, originalMode | 0o200);
+      originalMode = await makeImportDirectoryWritable(comparison.path);
       await rename(comparison.path, original);
       preserved = true;
-      await chmod(original, originalMode);
+      if (originalMode !== null) await chmod(original, originalMode);
     }
     await rename(replacement, comparison.path);
     replaced = true;
-    await chmod(comparison.path, replacementMode);
+    if (replacementMode !== null) await chmod(comparison.path, replacementMode);
     if (backup && separateFilesystem) {
       backupDirectory = await mkdtemp(path.join(importRoot, 'skill-'));
       backup = path.join(backupDirectory, 'original');
@@ -190,12 +201,12 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
   } catch (error) {
     try {
       if (replaced) {
-        await chmod(comparison.path, replacementMode | 0o200);
+        await makeImportDirectoryWritable(comparison.path);
         await rename(comparison.path, replacement);
-        await chmod(replacement, replacementMode);
+        if (replacementMode !== null) await chmod(replacement, replacementMode);
       }
       if (preserved) {
-        await chmod(original, originalMode | 0o200);
+        await makeImportDirectoryWritable(original);
         await rename(original, comparison.path);
       }
       if (originalMode !== null) await chmod(comparison.path, originalMode);

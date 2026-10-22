@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import fs, { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -190,5 +191,37 @@ for (const kind of ['plain', 'git', 'separate']) {
     assert.equal((await stat(result.path)).mode & 0o777, 0o555);
     assert.equal(await readFile(registryPath, 'utf8'), registry);
     assert.equal((await checkVault(vaultPath)).skills, 1);
+  });
+}
+
+for (const separate of [false, true]) {
+  test(`overwriting a writable shared skill does not require chmod ownership ${separate ? 'across filesystems' : 'in a Git vault'}`, async (t) => {
+    const options = separate ? await separateGitFixture(t) : await fixture(t);
+    if (!options) return;
+    const { vaultPath, sourcePath, replacement } = options;
+    if (!separate) await git(['init', vaultPath]);
+    const initial = await addSkillToVault({ vaultPath, sourcePath, name: 'demo' });
+    await chmod(initial.path, 0o775);
+    const original = await stat(initial.path);
+    const realChmod = fs.chmod;
+    const mocked = t.mock.method(fs, 'chmod', async (directory, mode) => {
+      const info = await stat(directory);
+      if (info.dev === original.dev && info.ino === original.ino) {
+        throw Object.assign(new Error('Shared directory is owned by another user'), { code: 'EPERM' });
+      }
+      return realChmod(directory, mode);
+    });
+    syncBuiltinESMExports();
+    try {
+      const result = await addSkillToVault({ vaultPath, sourcePath: replacement, name: 'demo', overwrite: true });
+      assert.equal(result.status, 'overwritten');
+      assert.equal(await readFile(path.join(result.path, 'SKILL.md'), 'utf8'), '# Replacement\n');
+      assert.equal(await readFile(path.join(result.backup, 'notes.md'), 'utf8'), '# User notes\n');
+      assert.equal((await stat(result.backup)).mode & 0o777, 0o775);
+      assert.equal((await checkVault(vaultPath)).skills, 1);
+    } finally {
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 }
