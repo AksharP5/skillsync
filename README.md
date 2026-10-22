@@ -402,6 +402,8 @@ Delete it from the vault and every device:
 skillsync delete my-skill
 ```
 
+Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
+
 By default, unused skills remain in the vault. To clean them up automatically during full syncs:
 
 ```bash

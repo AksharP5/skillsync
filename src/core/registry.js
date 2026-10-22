@@ -3,6 +3,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
+import { normalizeGlobalInstalled, normalizeInstalled } from './device-assignments.js';
 import { hashSyncedDirectory, ignoredGitPaths } from './git.js';
 import {
   assertSafePathSegment,
@@ -216,10 +217,11 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
     if (!file.endsWith('.json')) continue;
     const filePath = path.join(devicesDir, file);
     const device = await readJson(filePath, null);
-    const changed = Boolean(device?.installed?.[skillName]) || (Array.isArray(device?.global_installed) && device.global_installed.includes(skillName));
+    const installed = normalizeInstalled(device?.installed);
+    const globalInstalled = normalizeGlobalInstalled(device);
+    const changed = Object.hasOwn(installed, skillName) || globalInstalled.includes(skillName);
     if (!changed) continue;
-    delete device.installed?.[skillName];
-    if (Array.isArray(device.global_installed)) device.global_installed = device.global_installed.filter((name) => name !== skillName);
+    delete installed[skillName];
     const deviceId = assertSafePathSegment(file.slice(0, -'.json'.length), 'Device ID');
     const statePath = path.join(vaultPath, 'state', file);
     if (!await exists(statePath) && device && [
@@ -256,8 +258,8 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
       generation: Number.isInteger(desiredGeneration) && desiredGeneration >= 0
         ? desiredGeneration + 1
         : 1,
-      installed: device.installed && typeof device.installed === 'object' ? device.installed : {},
-      global_installed: Array.isArray(device.global_installed) ? device.global_installed : [],
+      installed,
+      global_installed: globalInstalled.filter((name) => name !== skillName),
     });
   }
 }
