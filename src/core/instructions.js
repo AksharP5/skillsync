@@ -470,13 +470,13 @@ export async function selectGlobalInstructionsProfile({
   const selected = await requireProfile(vaultPath, profile);
   await initializeLocalPathState({ vaultPath, deviceId });
   const device = await loadLocalDevice(vaultPath, deviceId);
-  const paths = [...new Set(
+  const paths = [...new Set((
     targetPaths?.length
       ? targetPaths
       : device.instructions.agents?.paths?.length
         ? device.instructions.agents.paths
-        : [DEFAULT_GLOBAL_INSTRUCTIONS_PATH],
-  )];
+        : [DEFAULT_GLOBAL_INSTRUCTIONS_PATH]
+  ).map(resolvedDestination))];
   const destinations = new Set(await Promise.all(paths.map(canonicalDestination)));
   if (destinations.has(await canonicalDestination(selected.source))
     || destinations.has(await canonicalDestination(cursorRuleVaultPath(vaultPath, selected.profile)))) {
@@ -504,6 +504,7 @@ export async function selectGlobalInstructionsProfile({
     vaultPath,
     deviceId,
     targetPaths: paths,
+    automaticPaths: (device.instructions.agents?.auto_paths || []).map(resolvedDestination),
     appliedProfile: device.instructions.agents?.applied_profile,
   });
   await applyGlobalInstructions({ vaultPath, deviceId });
@@ -615,14 +616,14 @@ export async function removeGlobalInstructionsPath({
 }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
   const agents = device.instructions.agents;
-  if (!agents?.paths?.includes(targetPath)) {
+  const destination = resolvedDestination(targetPath);
+  if (!agents?.paths?.some((candidate) => resolvedDestination(candidate) === destination)) {
     throw new Error(`Global instructions path is not linked: ${targetPath}`);
   }
-  if (agents.paths.length === 1) {
+  const paths = agents.paths.filter((candidate) => resolvedDestination(candidate) !== destination);
+  if (!paths.length) {
     throw new Error('Cannot unlink the only global instructions path; disable the profile instead');
   }
-  const paths = agents.paths.filter((candidate) => candidate !== targetPath);
-  const destination = resolvedDestination(targetPath);
   const remainingDestinations = new Set(await Promise.all(paths.map(canonicalDestination)));
   const stillLinked = remainingDestinations.has(await canonicalDestination(targetPath));
   const applied = agents?.applied_profile;

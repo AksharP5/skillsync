@@ -202,6 +202,38 @@ test('relative target and scan paths stay anchored when syncing and scanning els
   assert.deepEqual(JSON.parse(stdout).skills.map((skill) => skill.name), ['original-only']);
 });
 
+test('relative instruction paths stay anchored through sync, unlink, and disable', async (t) => {
+  const home = await realpath(await tempDir());
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, '.skillsync', 'repo');
+  const original = path.join(home, 'original');
+  const elsewhere = path.join(home, 'elsewhere');
+  await mkdir(original);
+  await mkdir(elsewhere);
+  await writeConfig(home, vault);
+  await writeFile(path.join(original, 'AGENTS.md'), '# Local instructions\n');
+  const cliPath = path.resolve('src/cli.js');
+  const cli = (args, cwd) => execFileAsync(process.execPath, [cliPath, ...args], {
+    cwd,
+    env: cliEnv(home),
+  });
+
+  await cli(['instructions', 'import', '--name', 'workstation', '--from', './AGENTS.md',
+    '--to', './codex/AGENTS.md,./opencode/AGENTS.md'], original);
+  await cli(['sync', '--no-pull'], elsewhere);
+
+  assert.equal(await exists(path.join(elsewhere, 'codex', 'AGENTS.md')), false);
+  assert.equal(await exists(path.join(elsewhere, 'opencode', 'AGENTS.md')), false);
+  await cli(['instructions', 'unlink', './opencode/AGENTS.md'], original);
+  await cli(['instructions', 'disable'], elsewhere);
+
+  for (const provider of ['codex', 'opencode']) {
+    const destination = path.join(original, provider, 'AGENTS.md');
+    assert.equal((await lstat(destination)).isFile(), true);
+    assert.equal(await readFile(destination, 'utf8'), '# Local instructions\n');
+  }
+});
+
 test('rerunning setup preserves configured targets and their installed skills', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
