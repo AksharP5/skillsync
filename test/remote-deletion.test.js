@@ -23,7 +23,7 @@ async function deletionFixture(t, { ignore = 'root', mode = 'symlink', gitDir } 
   const options = { vaultPath: local, deviceId: 'test' };
 
   await git(['init', '--bare', remote]);
-  await git(['clone', ...(gitDir ? ['--separate-git-dir', gitDir] : []), remote, local]);
+  await git(['clone', '--no-local', ...(gitDir ? ['--separate-git-dir', gitDir] : []), remote, local]);
   await git(['checkout', '-b', 'main'], local);
   await configureUser(local);
   await ensureVault(local);
@@ -39,7 +39,7 @@ async function deletionFixture(t, { ignore = 'root', mode = 'symlink', gitDir } 
   await git(['commit', '-m', 'initial skill'], local);
   await git(['push', '-u', 'origin', 'main'], local);
   await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
-  await git(['clone', remote, other]);
+  await git(['clone', '--no-local', remote, other]);
   await configureUser(other);
   if (ignore !== 'none') await writeFile(path.join(skill, 'cache.bin'), cache);
   return { root, remote, local, other, target, skill, options };
