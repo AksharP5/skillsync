@@ -544,7 +544,10 @@ for (const transitionFailure of [false, true]) {
       await assert.rejects(syncVault(fixture.options), /regular SKILL\.md file: skills\/local-deleted/);
       assert.equal(await readFile(path.join(unrelated, 'notes.txt'), 'utf8'), 'unmanaged local notes\n');
     }
-    assert.deepEqual(await preservedSkills(fixture.local), [['demo', { 'cache.bin': cache }]]);
+    assert.deepEqual(await preservedSkills(fixture.local), [
+      ['demo', { 'cache.bin': cache }],
+      ['local-deleted', { 'SKILL.md': Buffer.from('# local-deleted\n') }],
+    ]);
   });
 }
 

@@ -412,6 +412,10 @@ skillsync delete my-skill
 
 Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
 
+Explicit deletion and automatic cleanup support imported read-only directories, including the skill root. They retain the complete skill with its original permissions under Git's private `skillsync/deleted-skills/` directory, or `.skillsync-local/deleted-skills/` in a plain vault. These backups stay on this device, are not indexed as skills, and are not automatically pruned. With Git metadata on another filesystem, deletion stages beside the skill and copies the backup into Git metadata before updating assignments and the registry.
+
+If a metadata write fails, deletion restores the skill and leaves its registry entry intact. Assignments already cleared remain cleared. Repair the reported error and retry deletion to finish.
+
 By default, unused skills remain in the vault. To clean them up automatically during full syncs:
 
 ```bash
