@@ -410,7 +410,7 @@ Delete it from the vault and every device:
 skillsync delete my-skill
 ```
 
-Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
+After confirmation, deletion pulls the vault before removing the skill and its assignments, including assignments pushed by other devices since this checkout last synced. If the pull fails, deletion stops before removing the skill or changing assignments. Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
 
 Explicit deletion and automatic cleanup support imported read-only directories, including the skill root. They retain the complete skill with its original permissions under Git's private `skillsync/deleted-skills/` directory, or `.skillsync-local/deleted-skills/` in a plain vault. These backups stay on this device, are not indexed as skills, and are not automatically pruned. With Git metadata on another filesystem, deletion stages beside the skill and copies the backup into Git metadata before updating assignments and the registry.
 
