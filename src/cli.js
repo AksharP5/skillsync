@@ -1502,9 +1502,20 @@ async function addRemoteSkills(source, rest, config) {
 async function importSkills(rest) {
   const importSource = importSourceForAgent(rest[0]);
   const config = await configured();
-  const found = await discoverSkillFolders(expandHome(importSource.root));
+  const device = await loadLocalDevice(config.repoPath, config.deviceId);
+  const found = [];
+  for (const skill of await discoverSkillFolders(expandHome(importSource.root))) {
+    const managed = await Promise.all(Object.keys(device.targets).map((targetName) => isManagedSkillPath({
+      vaultPath: config.repoPath,
+      device,
+      targetName,
+      // Projections keep their vault folder name when frontmatter retains the original name.
+      skill: { name: path.basename(skill.path), path: skill.path },
+    })));
+    if (!managed.includes(true)) found.push(skill);
+  }
   if (!found.length) {
-    console.log(`No ${importSource.label} skills found under ${importSource.root}`);
+    console.log(`No unmanaged ${importSource.label} skills found under ${importSource.root}`);
     return;
   }
   const selected = process.stdin.isTTY

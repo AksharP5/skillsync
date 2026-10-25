@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { addTarget, loadDevice } from '../src/core/device.js';
+import { addTarget, applyLinks, installSkill, loadDevice } from '../src/core/device.js';
 import { git } from '../src/core/git.js';
-import { rebuildRegistry } from '../src/core/registry.js';
+import { addSkillToVault, rebuildRegistry } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
 const cliPath = path.resolve('src/cli.js');
@@ -55,6 +55,122 @@ async function fixture(t) {
       env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), ...env },
     }),
   };
+}
+
+async function managedImportFixture(t, { mode = 'copy', alias = false } = {}) {
+  const context = await fixture(t);
+  const { home, vault } = context;
+  const target = path.join(home, '.codex', 'skills');
+  const targetPath = alias ? path.join(home, 'actual-skills') : target;
+  await mkdir(targetPath, { recursive: true });
+  if (alias) {
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(targetPath, target, 'dir');
+  }
+  const options = { vaultPath: vault, deviceId: 'test-device' };
+  const sourcePath = await makeSkill(home, alias ? 'original' : 'a-managed', '# Managed');
+  await addSkillToVault({ vaultPath: vault, sourcePath, name: 'a-managed' });
+  await addTarget({
+    ...options, name: 'codex', targetPath, mode, autoImport: false,
+    scanPath: alias ? path.dirname(target) : undefined,
+  });
+  await installSkill({ ...options, skillName: 'a-managed', targets: ['codex'] });
+  await applyLinks(options);
+  return { ...context, target, managed: path.join(target, 'a-managed') };
+}
+
+for (const mode of ['copy', 'symlink']) {
+  test(`agent import skips owned ${mode} projections and imports new standalone skills`, async (t) => {
+    const { home, vault, target, managed, cli } = await managedImportFixture(t, { mode });
+    const original = await readFile(path.join(managed, 'SKILL.md'), 'utf8');
+    const projection = mode === 'copy'
+      ? await readFile(path.join(managed, '.skillsync-owned.json'), 'utf8')
+      : await readlink(managed);
+    await makeSkill(target, 'z-new', '# New standalone skill');
+
+    const { stdout } = await cli(['import', 'codex']);
+
+    assert.equal(stdout, 'z-new: added to vault and linked locally\n');
+    assert.deepEqual(await readdir(path.join(vault, 'skills')), ['a-managed', 'z-new']);
+    assert.deepEqual((await loadDevice(vault, 'test-device')).installed, {
+      'a-managed': ['codex'], 'z-new': ['codex'],
+    });
+    assert.equal(await readFile(path.join(managed, 'SKILL.md'), 'utf8'), original);
+    assert.equal(mode === 'copy'
+      ? await readFile(path.join(managed, '.skillsync-owned.json'), 'utf8')
+      : await readlink(managed), projection);
+    assert.equal(await readFile(path.join(vault, 'skills', 'z-new', 'SKILL.md'), 'utf8'),
+      '---\nname: z-new\n---\n# New standalone skill\n');
+
+    const before = await git(['rev-parse', 'HEAD'], vault);
+    const repeated = await cli(['import', 'codex']);
+    assert.equal(repeated.stdout, 'No unmanaged Codex skills found under ~/.codex/skills\n');
+    assert.deepEqual(await git(['rev-parse', 'HEAD'], vault), before);
+    assert.equal((await lstat(path.join(home, '.codex', 'skills', 'z-new'))).isSymbolicLink(), mode === 'symlink');
+  });
+}
+
+test('interactive import omits renamed owned copies through a target directory alias', async (t) => {
+  const { home, vault, target, managed, cli } = await managedImportFixture(t, { alias: true });
+  const marker = await readFile(path.join(managed, '.skillsync-owned.json'), 'utf8');
+  await makeSkill(target, 'z-new', '# New standalone skill');
+  await writeFile(path.join(home, 'prompts.mjs'), `import assert from 'node:assert/strict';
+export async function checkbox({choices}) {
+  assert.deepEqual(choices.map(({value}) => value.name), ['z-new']);
+  return choices.map(({value}) => value);
+}
+export async function confirm() { throw Error('Unexpected confirm'); }
+export async function input() { throw Error('Unexpected input'); }
+export async function select() { throw Error('Unexpected select'); }
+`);
+  await writeFile(path.join(home, 'loader.mjs'), `export async function resolve(specifier, context, nextResolve) {
+  if (specifier === '@inquirer/prompts') return {url: new URL('./prompts.mjs', import.meta.url).href, shortCircuit: true};
+  return nextResolve(specifier, context);
+}`);
+  const preload = path.join(home, 'preload.mjs');
+  await writeFile(preload, `import {register} from 'node:module';
+register('./loader.mjs', import.meta.url); process.stdin.isTTY = true;`);
+
+  await cli(['import', 'codex'], { NODE_OPTIONS: `--import=${preload}` });
+
+  assert.deepEqual(await readdir(path.join(vault, 'skills')), ['a-managed', 'z-new']);
+  assert.equal(await readFile(path.join(managed, '.skillsync-owned.json'), 'utf8'), marker);
+  assert.match(await readFile(path.join(managed, 'SKILL.md'), 'utf8'), /name: original/);
+});
+
+for (const kind of ['foreign', 'mismatched', 'malformed', 'symlinked', 'outside-target']) {
+  test(`agent import rejects an unmanaged skill with a ${kind} ownership marker`, async (t) => {
+    const { home, vault, cli } = await fixture(t);
+    const target = path.join(home, '.codex', 'skills');
+    const source = await makeSkill(target, 'example', '# Standalone');
+    await addTarget({
+      vaultPath: vault, deviceId: 'test-device', name: 'codex',
+      targetPath: kind === 'outside-target' ? path.join(home, 'other-target') : target,
+      mode: 'copy', autoImport: false,
+    });
+    const marker = JSON.stringify({
+      skill: kind === 'mismatched' ? 'another-skill' : 'example',
+      vault: kind === 'foreign' ? path.join(home, 'another-vault') : vault,
+    });
+    const markerPath = path.join(source, '.skillsync-owned.json');
+    if (kind === 'symlinked') {
+      const external = path.join(home, 'marker.json');
+      await writeFile(external, marker);
+      await symlink(external, markerPath);
+    } else {
+      await writeFile(markerPath, kind === 'malformed' ? '{' : marker);
+    }
+
+    await assert.rejects(cli(['import', 'codex']), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, kind === 'symlinked' ? /Symlinks are not allowed/ : /Reserved file name/);
+      return true;
+    });
+    assert.deepEqual(await readdir(path.join(vault, 'skills')), []);
+    assert.equal(await readFile(markerPath, 'utf8'), kind === 'malformed' ? '{' : marker);
+    assert.equal(await readFile(path.join(source, 'SKILL.md'), 'utf8'),
+      '---\nname: example\n---\n# Standalone\n');
+  });
 }
 
 test('OpenCode import uses the configured XDG directory instead of the default folder', async (t) => {
