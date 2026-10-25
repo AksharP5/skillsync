@@ -2465,6 +2465,10 @@ async function applyMatrixDraft({ config, changes }) {
     if (!device) {
       throw new Error(`${change.displayName} was removed while the matrix editor was open. Reopen the editor and try again.`);
     }
+    const currentTargets = skillAssignmentTargets(device, change.skillName);
+    if (JSON.stringify(currentTargets) !== JSON.stringify(change.before)) {
+      throw new Error(`${change.skillName} on ${change.displayName} changed while the matrix editor was open. Reopen the editor to review its current assignments and try again.`);
+    }
     for (const target of change.after) {
       if (target !== 'global' && !device.targets[target]) {
         throw new Error(`${target} is no longer configured on ${change.displayName}. Reopen the editor and choose its current destinations.`);
