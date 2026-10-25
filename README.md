@@ -458,6 +458,8 @@ Copies created by older versions refresh once to record executable permissions w
 
 Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
 
+New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
+
 Restore the most recent successful local projection apply in an emergency:
 
 ```bash
