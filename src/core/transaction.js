@@ -162,7 +162,7 @@ async function captureEntry(destination, backupPath, index) {
   const stored = path.join(backupPath, relative);
   await ensureDir(path.dirname(stored));
   if (info.isDirectory()) {
-    await cp(destination, stored, { recursive: true, force: true, dereference: false });
+    await cp(destination, stored, { recursive: true, force: true, dereference: false, verbatimSymlinks: true });
     return { ...entry, type: 'directory', stored };
   }
   if (info.isFile()) {
@@ -208,7 +208,7 @@ async function replaceWithCopy(source, destination, marker) {
   await ensureDir(path.dirname(destination));
   const temporary = await stagePath(destination);
   try {
-    await cp(source, temporary, { recursive: true, force: true, dereference: false });
+    await cp(source, temporary, { recursive: true, force: true, dereference: false, verbatimSymlinks: true });
     if (marker !== undefined) {
       const mode = await makeDirectoryWritable(temporary);
       await writeFile(
