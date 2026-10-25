@@ -414,6 +414,11 @@ async function commitInitialVault(repoPath) {
   await git(['add', 'README.md', 'registry.json', 'vault.json', 'skills', 'devices'], repoPath).catch(() => {});
   const committed = await commitAllIfChanged(repoPath, 'chore: initialize skills vault');
   if (committed) {
+    const hasUpstream = await git(['rev-parse', '--verify', '--quiet', '@{u}'], repoPath)
+      .then(() => true)
+      .catch(() => false);
+    // Let syncVault reconcile remote changes before pushing an established vault.
+    if (hasUpstream) return;
     await checkVaultForPush(repoPath);
     try {
       await push(repoPath);
