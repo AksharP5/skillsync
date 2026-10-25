@@ -129,6 +129,8 @@ No device wins because it installed SkillSync first. You choose which local file
 
 Codex and OpenCode use `AGENTS.md`. When the Claude Code executable is installed on a device, SkillSync also links that device’s `CLAUDE.md` to the same selected profile. Devices without Claude Code do not get a `CLAUDE.md`, even if an old Claude skill target remains configured. A differing unmanaged `CLAUDE.md` is preserved for explicit resolution.
 
+While Claude Code is installed and a profile is selected, `~/.claude/CLAUDE.md` is automatically managed and cannot be unlinked individually, including when it was linked manually. To stop global instructions sync on this device and leave standalone local copies at every linked path, run `skillsync instructions disable`. Other global paths can still be unlinked individually while another path remains linked.
+
 Import the version already used by a device:
 
 ```bash

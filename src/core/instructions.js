@@ -200,6 +200,13 @@ export async function deviceHasClaude({
   return commandExistsFn('claude');
 }
 
+export async function unlinkableGlobalInstructionsPaths(paths) {
+  const claude = resolvedDestination(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
+  if (!paths.some((targetPath) => resolvedDestination(targetPath) === claude)
+    || !await deviceHasClaude()) return paths;
+  return paths.filter((targetPath) => resolvedDestination(targetPath) !== claude);
+}
+
 export async function discoverGlobalInstructions({
   vaultPath,
   configuredPaths = [],
@@ -626,6 +633,10 @@ export async function removeGlobalInstructionsPath({
   const destination = resolvedDestination(targetPath);
   if (!agents?.paths?.some((candidate) => resolvedDestination(candidate) === destination)) {
     throw new Error(`Global instructions path is not linked: ${targetPath}`);
+  }
+  if (agents.profile && !(await unlinkableGlobalInstructionsPaths(agents.paths))
+    .some((candidate) => resolvedDestination(candidate) === destination)) {
+    throw new Error('Claude instructions are automatically managed while Claude Code is installed. Use skillsync instructions disable to leave standalone local copies.');
   }
   const paths = agents.paths.filter((candidate) => resolvedDestination(candidate) !== destination);
   if (!paths.length) {

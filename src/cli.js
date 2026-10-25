@@ -64,6 +64,7 @@ import {
   listGlobalInstructionProfiles,
   removeGlobalInstructionsPath,
   selectGlobalInstructionsProfile,
+  unlinkableGlobalInstructionsPaths,
 } from './core/instructions.js';
 import {
   addSkillToVault,
@@ -2863,6 +2864,9 @@ async function settingsScreen(config) {
 async function instructionProfileSettingsScreen(config, device) {
   const profiles = await listGlobalInstructionProfiles(config.repoPath);
   const agents = device.instructions.agents;
+  const unlinkablePaths = agents?.profile && (agents.paths || []).length > 1
+    ? await unlinkableGlobalInstructionsPaths(agents.paths)
+    : [];
   const choices = profiles.map((profile) => ({
     name: `${profile.id}${agents?.profile === profile.id ? ' (current)' : ''}`,
     value: `use:${profile.id}`,
@@ -2877,7 +2881,7 @@ async function instructionProfileSettingsScreen(config, device) {
       { name: 'Fork the current profile', value: 'fork' },
       { name: 'Link another global instructions path', value: 'link' },
     );
-    if ((agents.paths || []).length > 1) {
+    if (unlinkablePaths.length) {
       choices.push({ name: 'Unlink a global instructions path', value: 'unlink' });
     }
     choices.push({ name: 'Disable and leave standalone local copies', value: 'disable' });
@@ -2931,7 +2935,7 @@ async function instructionProfileSettingsScreen(config, device) {
   if (choice === 'unlink') {
     const targetPath = await select({
       message: 'Path to leave as a standalone copy',
-      choices: agents.paths.map((candidate) => ({
+      choices: unlinkablePaths.map((candidate) => ({
         name: candidate,
         value: candidate,
       })),
