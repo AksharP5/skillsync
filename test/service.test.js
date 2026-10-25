@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -70,6 +70,41 @@ test('daemonInvocation prefers the stable skillsync executable on PATH', async (
 test('daemonInvocation falls back to node plus the current CLI source', async () => {
   const invocation = await daemonInvocation({
     pathValue: '',
+    execPath: '/usr/bin/node',
+    cliPath: '/checkout/src/cli.js',
+  });
+
+  assert.deepEqual(invocation, {
+    command: '/usr/bin/node',
+    args: ['/checkout/src/cli.js', 'daemon'],
+  });
+});
+
+test('daemonInvocation skips PATH directories and accepts executable symlinks', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-service-directory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const first = path.join(root, 'first');
+  const second = path.join(root, 'second');
+  await mkdir(path.join(first, 'skillsync'), { recursive: true });
+  await mkdir(second);
+  const executable = path.join(root, 'installed-cli');
+  await writeFile(executable, '#!/bin/sh\n');
+  await chmod(executable, 0o755);
+  const shim = path.join(second, 'skillsync');
+  await symlink(executable, shim);
+
+  const invocation = await daemonInvocation({ pathValue: [first, second].join(path.delimiter) });
+
+  assert.deepEqual(invocation, { command: shim, args: ['daemon'] });
+});
+
+test('daemonInvocation falls back when the only PATH match is a directory', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-service-directory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'skillsync'));
+
+  const invocation = await daemonInvocation({
+    pathValue: root,
     execPath: '/usr/bin/node',
     cliPath: '/checkout/src/cli.js',
   });
