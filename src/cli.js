@@ -1598,7 +1598,8 @@ async function deleteSkill(rest) {
   } else if (!yes) {
     throw new Error('Refusing to delete without --yes in non-interactive mode');
   }
-  const config = await configured();
+  const config = await configured({ initialize: false });
+  await syncVault({ vaultPath: config.repoPath, pushChanges: false });
   await deleteSkillFromVault({ vaultPath: config.repoPath, skillName });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(`Deleted ${skillName} from the vault.`);

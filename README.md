@@ -408,7 +408,7 @@ Delete it from the vault and every device:
 skillsync delete my-skill
 ```
 
-Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
+After confirmation, deletion pulls the vault before removing the skill and its assignments, including assignments pushed by other devices since this checkout last synced. If the pull fails, deletion stops before removing the skill or changing assignments. Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
 
 By default, unused skills remain in the vault. To clean them up automatically during full syncs:
 
