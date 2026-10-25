@@ -109,7 +109,12 @@ function deviceChunks(devices, skillWidth, maxWidth) {
       current = [];
       width = skillWidth + 3;
     }
-    current.push({ device, width: columnWidth });
+    current.push({
+      device,
+      width: columnWidth,
+      assigned: assignedSkillNames(device),
+      detected: detectedSkillNames(device),
+    });
     width += nextWidth;
   }
   if (current.length) chunks.push(current);
@@ -127,8 +132,9 @@ export function renderSkillDeviceMatrix({ skills, devices, maxWidth = 120 }) {
   const sections = chunks.map((columns) => {
     const header = `${pad('Skill', skillWidth)} | ${columns.map(({ device, width }) => pad(device.device_id, width)).join(' | ')}`;
     const separator = `${'-'.repeat(skillWidth)}-+-${columns.map(({ width }) => '-'.repeat(width)).join('-+-')}`;
-    const rows = names.map((name) => `${pad(name, skillWidth)} | ${columns.map(({ device, width }) => {
-      return skillDeviceMarker(device, name).padEnd(width);
+    const rows = names.map((name) => `${pad(name, skillWidth)} | ${columns.map(({ width, assigned, detected }) => {
+      const marker = assigned.has(name) ? '✓' : detected.has(name) ? '○' : '·';
+      return marker.padEnd(width);
     }).join(' | ')}`);
     return [header, separator, ...rows].join('\n');
   });
