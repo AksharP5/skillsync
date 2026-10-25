@@ -133,11 +133,12 @@ for (const interactive of [false, true]) {
   });
 }
 
-test('setup detects the Grok Bot target when its agent-data directory exists', async () => {
+test('setup initializes an empty remote and detects the Grok Bot target', async (t) => {
   const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
   const vault = path.join(home, '.skillsync', 'repo');
   const remote = path.join(home, 'vault.git');
-  await git(['init', '--bare', remote]);
+  await git(['init', '--bare', '--initial-branch=main', remote]);
   await mkdir(path.join(home, 'agent-data'));
 
   await execFileAsync(process.execPath, [
@@ -150,6 +151,11 @@ test('setup detects the Grok Bot target when its agent-data directory exists', a
   const config = JSON.parse(await readFile(path.join(home, '.config', 'skillsync', 'config.json')));
   const device = await loadLocalDevice(vault, config.deviceId);
   assert.equal(device.targets.grok.path, '~/agent-data/workflows');
+  const { stdout: upstream } = await git(['rev-parse', '--abbrev-ref', '@{u}'], vault);
+  const { stdout: localHead } = await git(['rev-parse', 'HEAD'], vault);
+  const { stdout: remoteHead } = await git(['rev-parse', 'refs/heads/main'], remote);
+  assert.equal(upstream.trim(), 'origin/main');
+  assert.equal(localHead, remoteHead);
 });
 
 test('setup detects OpenCode skills under a custom XDG config directory', async (t) => {
@@ -289,6 +295,58 @@ test('rerunning setup preserves configured targets and their installed skills', 
   assert.deepEqual(device.targets.codex, { path: targetPath, scan_path: scanPath, mode: 'copy', auto_import: false });
   assert.equal((await lstat(path.join(targetPath, 'installed-skill'))).isDirectory(), true);
   assert.equal(await exists(path.join(home, '.codex', 'skills', 'installed-skill')), false);
+});
+
+test('rerunning setup reconciles another device commit before publishing a new target', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, 'vault');
+  const remote = path.join(home, 'vault.git');
+  const other = path.join(home, 'other');
+  await git(['init', '--bare', '--initial-branch=main', remote]);
+  const env = await setupEnv(home, `file://${remote}`);
+  const args = [path.resolve('src/cli.js'), 'setup', '--repo', 'test/skills', '--path', vault, '--yes'];
+  await execFileAsync(process.execPath, args, { env });
+
+  await git(['clone', '--branch', 'main', remote, other]);
+  await writeFile(path.join(other, 'remote-note.txt'), 'Change from another device\n');
+  await git(['add', 'remote-note.txt'], other);
+  await git(['commit', '-m', 'add remote note'], other, { env });
+  await git(['push'], other);
+  await mkdir(path.join(home, '.codex'));
+
+  // Keep the GitHub identity check while routing Git transfers to the local fixture.
+  const repoUrl = 'https://github.com/test/skills';
+  await git(['remote', 'set-url', 'origin', repoUrl], vault);
+  await git(['remote', 'set-url', '--push', 'origin', remote], vault);
+  const { stdout: gitPath } = await execFileAsync('sh', ['-c', 'command -v git']);
+  const gitShim = path.join(home, 'bin', 'git');
+  await writeFile(gitShim, `#!/bin/sh
+if [ "$1" = "pull" ]; then
+  exec "$SKILLSYNC_TEST_GIT" -c "url.file://$SKILLSYNC_TEST_REMOTE.insteadOf=${repoUrl}" "$@"
+fi
+exec "$SKILLSYNC_TEST_GIT" "$@"
+`);
+  await chmod(gitShim, 0o755);
+  const { stdout } = await execFileAsync(process.execPath, args, {
+    env: {
+      ...env,
+      SKILLSYNC_TEST_REPO_VIEW: JSON.stringify({ isPrivate: true, url: repoUrl }),
+      SKILLSYNC_TEST_GIT: gitPath.trim(),
+      SKILLSYNC_TEST_REMOTE: remote,
+    },
+  });
+
+  assert.match(stdout, /SkillSync setup complete/);
+  assert.equal(await readFile(path.join(vault, 'remote-note.txt'), 'utf8'), 'Change from another device\n');
+  const device = await loadLocalDevice(vault, defaultDeviceId());
+  assert.equal(device.targets.codex.path, '~/.codex/skills');
+  const { stdout: localHead } = await git(['rev-parse', 'HEAD'], vault);
+  const { stdout: remoteHead } = await git(['rev-parse', 'refs/heads/main'], remote);
+  assert.equal(localHead, remoteHead);
+  const { stdout: reported } = await git(['show', `main:state/${device.device_id}.json`], remote);
+  assert.equal(JSON.parse(reported).targets.codex.auto_adopt, true);
+  assert.equal((await git(['status', '--porcelain'], vault)).stdout, '');
 });
 
 test('changing a target or scan path baselines existing skills before auto-adopting new ones', async () => {
