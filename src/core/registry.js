@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { access, chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, lstat, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -124,7 +124,7 @@ export async function compareSkillToVault({ vaultPath, sourcePath, name }) {
   };
 }
 
-async function makeImportDirectoryWritable(directory) {
+async function makeDirectoryWritable(directory) {
   try {
     await access(directory, constants.W_OK);
     return null;
@@ -136,11 +136,11 @@ async function makeImportDirectoryWritable(directory) {
   return mode;
 }
 
-async function removeImportDirectory(directory) {
-  // Only disposable import copies may need their read-only directories unlocked.
-  await makeImportDirectoryWritable(directory);
+async function removeDisposableDirectory(directory) {
+  // Only disposable copies may have their read-only directories unlocked recursively.
+  await makeDirectoryWritable(directory);
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isDirectory()) await removeImportDirectory(path.join(directory, entry.name));
+    if (entry.isDirectory()) await removeDisposableDirectory(path.join(directory, entry.name));
   }
   await removePath(directory);
 }
@@ -180,9 +180,9 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
     await copyDir(sourcePath, replacement);
     await validateSkillFolder(replacement);
     // Moving a directory between parents requires write access to its root on POSIX.
-    replacementMode = await makeImportDirectoryWritable(replacement);
+    replacementMode = await makeDirectoryWritable(replacement);
     if (backup) {
-      originalMode = await makeImportDirectoryWritable(comparison.path);
+      originalMode = await makeDirectoryWritable(comparison.path);
       await rename(comparison.path, original);
       preserved = true;
       if (originalMode !== null) await chmod(original, originalMode);
@@ -201,12 +201,12 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
   } catch (error) {
     try {
       if (replaced) {
-        await makeImportDirectoryWritable(comparison.path);
+        await makeDirectoryWritable(comparison.path);
         await rename(comparison.path, replacement);
         if (replacementMode !== null) await chmod(replacement, replacementMode);
       }
       if (preserved) {
-        await makeImportDirectoryWritable(original);
+        await makeDirectoryWritable(original);
         await rename(original, comparison.path);
       }
       if (originalMode !== null) await chmod(comparison.path, originalMode);
@@ -215,8 +215,8 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
         `Skill import failed: ${error.message}\nRollback failed: ${rollbackError.message}\nRecover skill files from ${staging}`);
     }
     try {
-      await removeImportDirectory(staging);
-      if (backupDirectory) await removeImportDirectory(backupDirectory);
+      await removeDisposableDirectory(staging);
+      if (backupDirectory) await removeDisposableDirectory(backupDirectory);
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError],
         `Skill import failed: ${error.message}\nThe previous skill is unchanged. Could not remove staging files at ${staging}: ${cleanupError.message}`);
@@ -224,7 +224,7 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
     throw error;
   }
   // Keep the original intact, including read-only directories, for local recovery.
-  if (!backup || separateFilesystem) await removeImportDirectory(staging);
+  if (!backup || separateFilesystem) await removeDisposableDirectory(staging);
   return {
     name: comparison.name,
     path: comparison.path,
@@ -290,14 +290,71 @@ export async function refreshChangedRegistryEntries(vaultPath) {
 export async function deleteSkillFromVault({ vaultPath, skillName }) {
   assertSafePathSegment(skillName, 'Skill name');
   await ensureVault(vaultPath);
-  await removePath(path.join(vaultPath, 'skills', skillName));
   const registry = await loadRegistry(vaultPath);
-  delete registry.skills[skillName];
-  await saveRegistry(vaultPath, registry);
+  const skillPath = path.join(vaultPath, 'skills', skillName);
+  const skill = await lstat(skillPath).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  let staging = null;
+  let backupDirectory = null;
+  let original = null;
+  let originalMode = null;
+  let preserved = false;
+  try {
+    if (skill) {
+      const backupRoot = await gitPrivatePath(vaultPath, 'deleted-skills')
+        || path.join(vaultPath, '.skillsync-local', 'deleted-skills');
+      await ensureDir(backupRoot);
+      const skillRoot = path.dirname(skillPath);
+      const separateFilesystem = (await stat(backupRoot)).dev !== (await stat(skillRoot)).dev;
+      staging = await mkdtemp(separateFilesystem
+        ? path.join(skillRoot, '.skillsync-delete-')
+        : path.join(backupRoot, 'skill-'));
+      original = path.join(staging, skillName);
+      if (separateFilesystem) await writeFile(path.join(staging, '.gitignore'), '*\n');
+      if (skill.isDirectory()) originalMode = await makeDirectoryWritable(skillPath);
+      await rename(skillPath, original);
+      preserved = true;
+      if (originalMode !== null) await chmod(original, originalMode);
+      if (separateFilesystem) {
+        backupDirectory = await mkdtemp(path.join(backupRoot, 'skill-'));
+        await cp(original, path.join(backupDirectory, skillName), {
+          recursive: true, dereference: false, verbatimSymlinks: true,
+        });
+      }
+    }
+    await removeSkillAssignments(vaultPath, skillName);
+    delete registry.skills[skillName];
+    await saveRegistry(vaultPath, registry);
+  } catch (error) {
+    try {
+      if (preserved) {
+        if (skill.isDirectory()) await makeDirectoryWritable(original);
+        await rename(original, skillPath);
+      }
+      if (originalMode !== null) await chmod(skillPath, originalMode);
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError],
+        `Skill deletion failed: ${error.message}\nRollback failed: ${rollbackError.message}\nRecover skill files from ${staging}`);
+    }
+    try {
+      if (staging) await removeDisposableDirectory(staging);
+      if (backupDirectory) await removeDisposableDirectory(backupDirectory);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError],
+        `Skill deletion failed: ${error.message}\nThe skill was restored. Could not remove staging files: ${cleanupError.message}`);
+    }
+    throw error;
+  }
+  // The private original is retained. Only the extra same-filesystem staging copy is disposable.
+  if (backupDirectory) await removeDisposableDirectory(staging);
+}
 
+async function removeSkillAssignments(vaultPath, skillName) {
   const devicesDir = path.join(vaultPath, 'devices');
   await mkdir(devicesDir, { recursive: true });
-  const devices = await readdir(devicesDir).catch(() => []);
+  const devices = await readdir(devicesDir);
   for (const file of devices) {
     if (!file.endsWith('.json')) continue;
     const filePath = path.join(devicesDir, file);
