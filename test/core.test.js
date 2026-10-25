@@ -1555,6 +1555,28 @@ test('skill matrix distinguishes assigned, detected, and absent skills', () => {
   assert.match(output, /Pending sync: devbox/);
 });
 
+test('matrix refreshes assignments and detections across wrapped device columns', () => {
+  const device = {
+    device_id: 'first-device',
+    installed: { example: ['codex'] },
+    global_installed: [],
+    detected: { codex: [{ name: 'example' }] },
+  };
+  const other = { device_id: 'second-device', global_installed: ['example'] };
+  const render = () => renderSkillDeviceMatrix({
+    skills: ['example-with-a-long-name', 'example'],
+    devices: [other, device],
+    maxWidth: 40,
+  });
+
+  assert.match(render(), /example\s+\| ✓[\s\S]*Skill\s+\| second-device[\s\S]*example\s+\| ✓/);
+  delete device.installed.example;
+  other.global_installed = [];
+  assert.match(render(), /example\s+\| ○[\s\S]*Skill\s+\| second-device[\s\S]*example\s+\| ·/);
+  device.detected.codex = [];
+  assert.match(render(), /example\s+\| ·/);
+});
+
 test('editable matrix stages exact device assignment changes without mutating the initial state', () => {
   const initial = [
     {

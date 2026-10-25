@@ -2051,9 +2051,6 @@ async function skillsScreen(config) {
     if (!targets.length) return;
   }
 
-  for (const skillName of toInstall) {
-    await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
-  }
   const localToRemove = toUninstall.map((name) => localByName.get(name)).filter(Boolean);
   if (localToRemove.some(hasUnmanagedDetectedTargets)) {
     const confirmed = await confirm({
@@ -2061,6 +2058,9 @@ async function skillsScreen(config) {
       default: false,
     });
     if (!confirmed) return;
+  }
+  for (const skillName of toInstall) {
+    await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
   }
   for (const skill of localToRemove) {
     await uninstallLocalSkill({ config, device, skill });
