@@ -987,7 +987,10 @@ async function instructionsCommand(rest = []) {
         const capability = (device.instructions.version || 0) >= 1
           ? ''
           : ' (upgrade and sync required before remote assignment)';
-        console.log(`- ${device.device_id}: off${capability}`);
+        const suffix = agents?.applied_profile
+          ? ` (pending disable; applied: ${agents.applied_profile})`
+          : capability;
+        console.log(`- ${device.device_id}: off${suffix}`);
         continue;
       }
       let state = agents.profile === agents.applied_profile
@@ -1220,8 +1223,12 @@ async function instructionsCommand(rest = []) {
         profile: null,
       }).then(() => ({ disabled: true, destinations: [] }));
     await syncInstructionChanges(config);
+    if (targetDeviceId !== config.deviceId) {
+      console.log(`Queued global AGENTS.md disable for ${targetDeviceId}; it will apply on that device's next sync.`);
+      return;
+    }
     console.log(result.disabled
-      ? `Global AGENTS.md sync disabled for ${targetDeviceId}.${targetDeviceId === config.deviceId ? ' Standalone local copies remain.' : ''}`
+      ? `Global AGENTS.md sync disabled for ${targetDeviceId}. Standalone local copies remain.`
       : `Global AGENTS.md sync was not configured on ${targetDeviceId}.`);
     return;
   }
