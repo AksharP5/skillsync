@@ -107,6 +107,8 @@ skillsync matrix --edit
 
 Choose a skill, check or uncheck the devices that should have it, and select destinations for newly enabled devices. You can stage multiple rows before applying them all in one sync commit. The same editor is available under **Skill matrix → Edit by skill** in the interactive UI.
 
+Before applying, the editor syncs and checks that each staged cell still has its original assignments. If a staged cell changed while the editor was open, no staged changes are written. Reopen the editor to review the current assignments and stage your changes again. Changes to other cells do not block the batch.
+
 Remote changes apply automatically when those devices next sync. If a skill is removed from every device and `delete-unassigned-skills` is enabled, SkillSync waits until every device reports the local copy gone and then removes it from the vault.
 
 ## Sync global instructions
