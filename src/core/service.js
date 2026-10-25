@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { setTimeout as wait } from 'node:timers/promises';
 import path from 'node:path';
@@ -19,6 +19,7 @@ export async function findExecutable(command, pathValue = process.env.PATH) {
   for (const directory of splitPath(pathValue)) {
     const candidate = path.join(directory, command);
     try {
+      if (!(await stat(candidate)).isFile()) continue;
       await access(candidate, constants.X_OK);
       return candidate;
     } catch {

@@ -63,6 +63,8 @@ skillsync service install
 
 On Linux, the service unit goes in `$XDG_CONFIG_HOME/systemd/user` when `XDG_CONFIG_HOME` is an absolute path, or `~/.config/systemd/user` otherwise.
 
+The service uses an executable `skillsync` from PATH, skipping same-named directories. If none is available, it uses the current Node executable and CLI file.
+
 Repeat the install, existing-vault setup, and service steps on each device.
 
 SkillSync stores local configuration in `~/.config/skillsync/config.json`. Read errors, malformed configuration, and broken symlinks in the config path are reported instead of silently switching vaults. Repair the file or symlink before retrying; an absent config file still uses the default vault at `~/.skillsync/repo`.
