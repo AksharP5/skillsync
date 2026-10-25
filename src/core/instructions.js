@@ -409,7 +409,7 @@ async function createOwnedInstructionsSymlink(source, destination) {
   await symlink(relative, destination, 'file');
 }
 
-async function writeStandaloneInstructions(destination, content) {
+async function writeInstructionsFile(destination, content) {
   await ensureDir(path.dirname(destination));
   const temporary = path.join(
     path.dirname(destination),
@@ -502,7 +502,7 @@ export async function selectGlobalInstructionsProfile({
   }
   const backups = await preserveUnmanagedDestinations(vaultPath, paths);
   for (const { destination, content } of removed) {
-    await writeStandaloneInstructions(destination, content);
+    await writeInstructionsFile(destination, content);
   }
   await setGlobalInstructionsProfile({
     vaultPath,
@@ -558,8 +558,7 @@ export async function importGlobalInstructionsProfile({
   }
   const selectedPath = globalInstructionsVaultPath(vaultPath, selected);
   if (!(await pathInfo(selectedPath))) {
-    await ensureDir(path.dirname(selectedPath));
-    await writeFile(selectedPath, content);
+    await writeInstructionsFile(selectedPath, content);
   }
   const paths = targetPaths?.length ? targetPaths : [sourcePath];
   const result = await selectGlobalInstructionsProfile({
@@ -589,8 +588,7 @@ export async function forkGlobalInstructionsProfile({
   if (await pathInfo(destination)) {
     throw new Error(`Instruction profile already exists: ${next}`);
   }
-  await ensureDir(path.dirname(destination));
-  await writeFile(destination, await readFile(source));
+  await writeInstructionsFile(destination, await readFile(source));
   return selectGlobalInstructionsProfile({
     vaultPath,
     deviceId,
@@ -640,7 +638,7 @@ export async function removeGlobalInstructionsPath({
   if (!stillLinked && applied && owned === applied) {
     await requireProfile(vaultPath, applied);
     const content = await projectedInstructionsContent(vaultPath, applied, targetPath);
-    await writeStandaloneInstructions(destination, content);
+    await writeInstructionsFile(destination, content);
   } else if (!stillLinked && owned) {
     throw new Error(`Refusing to unlink a different global instructions profile: ${destination}`);
   }
@@ -690,7 +688,7 @@ export async function applyGlobalInstructions({
       const owned = await ownedProfileAt(destination, vaultPath);
       if (!owned) continue;
       const content = await projectedInstructionsContent(vaultPath, owned, targetPath);
-      await writeStandaloneInstructions(destination, content);
+      await writeInstructionsFile(destination, content);
     }
     await configureGlobalInstructions({
       vaultPath,

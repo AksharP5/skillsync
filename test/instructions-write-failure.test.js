@@ -8,11 +8,58 @@ import path from 'node:path';
 import { loadLocalDevice } from '../src/core/device.js';
 import {
   disableGlobalInstructions,
+  forkGlobalInstructionsProfile,
   globalInstructionsVaultPath,
   importGlobalInstructionsProfile,
   removeGlobalInstructionsPath,
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
+
+for (const action of ['import', 'fork']) {
+  test(`failed profile ${action} leaves no partial profile and succeeds on retry`, async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillsync-profile-write-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
+    const source = path.join(root, 'AGENTS.md');
+    const content = '# Complete instructions\n';
+    await writeFile(source, content);
+    if (action === 'fork') {
+      await importGlobalInstructionsProfile({ ...options, profile: 'original', sourcePath: source });
+    }
+    const destination = globalInstructionsVaultPath(options.vaultPath, 'new-profile');
+    const operation = () => action === 'import'
+      ? importGlobalInstructionsProfile({ ...options, profile: 'new-profile', sourcePath: source })
+      : forkGlobalInstructionsProfile({ ...options, profile: 'new-profile' });
+    const originalWrite = fs.writeFile;
+    let injected = false;
+    const mock = t.mock.method(fs, 'writeFile', async (file, data, ...args) => {
+      if (!injected && path.dirname(file) === path.dirname(destination)) {
+        injected = true;
+        await originalWrite(file, Buffer.from(data).subarray(0, 7), ...args);
+        throw Object.assign(new Error('Simulated full profile filesystem'), { code: 'ENOSPC' });
+      }
+      return originalWrite(file, data, ...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(operation, { code: 'ENOSPC' });
+    } finally {
+      mock.mock.restore();
+      syncBuiltinESMExports();
+    }
+    assert.equal(injected, true);
+    assert.equal(await readFile(source, 'utf8'), content);
+    await assert.rejects(() => lstat(destination), { code: 'ENOENT' });
+    assert.deepEqual(await readdir(path.dirname(destination)), action === 'fork' ? ['original.md'] : []);
+
+    await operation();
+
+    assert.equal(await readFile(destination, 'utf8'), content);
+    assert.equal(await readFile(source, 'utf8'), content);
+    const device = await loadLocalDevice(options.vaultPath, options.deviceId);
+    assert.equal(device.instructions.agents.applied_profile, 'new-profile');
+  });
+}
 
 for (const transition of ['disable', 'unlink', 'replace']) {
   test(`failed standalone write during ${transition} preserves instructions and retries safely`, async (t) => {
