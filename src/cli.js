@@ -296,9 +296,19 @@ async function ensureVaultCheckout(repo, repoPath) {
   }
 }
 
-async function deviceIdForCheckout(repoPath) {
+async function identityForCheckout(repoPath) {
   const config = await loadConfig();
-  return path.resolve(config.repoPath) === repoPath ? config.deviceId : defaultDeviceId();
+  const configuredPath = path.resolve(config.repoPath);
+  const [configuredLocation, selectedLocation] = await Promise.all(
+    [configuredPath, repoPath].map((directory) => realpath(directory).catch((error) => {
+      if (error.code === 'ENOENT') return directory;
+      throw error;
+    })),
+  );
+  // Copy ownership markers include the saved vault path.
+  return configuredLocation === selectedLocation
+    ? { repoPath: configuredPath, deviceId: config.deviceId }
+    : { repoPath, deviceId: defaultDeviceId() };
 }
 
 async function setup(rest) {
@@ -312,8 +322,8 @@ async function setup(rest) {
   }
 
   const repoArg = flagValue(rest, '--repo');
-  const repoPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
-  const deviceId = await deviceIdForCheckout(repoPath);
+  const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
+  const { repoPath, deviceId } = await identityForCheckout(selectedPath);
   let repo = repoArg;
   if (!repo) {
     const { stdout: ownerOut } = await gh(['api', 'user', '--jq', '.login']);
@@ -364,8 +374,8 @@ async function connect(rest) {
   const repoArg = rest[0];
   if (!repoArg) throw new Error('Usage: skillsync connect <github-repo-or-url>');
   const repo = await resolveRepoCloneUrl(repoArg);
-  const repoPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
-  const deviceId = await deviceIdForCheckout(repoPath);
+  const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
+  const { repoPath, deviceId } = await identityForCheckout(selectedPath);
   await mkdir(path.dirname(repoPath), { recursive: true });
   await ensureVaultCheckout(repo, repoPath);
   await ensureVault(repoPath);

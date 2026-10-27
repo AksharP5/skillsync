@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -80,11 +80,17 @@ esac
 }
 
 for (const command of ['setup', 'connect']) {
-  for (const sameCheckout of [true, false]) {
-    test(`${command} ${sameCheckout ? 'preserves the configured device identity' : 'uses the hostname default for a different checkout'}`, async (t) => {
+  for (const selection of ['configured', 'alias', 'different']) {
+    const sameCheckout = selection !== 'different';
+    const behavior = selection === 'alias'
+      ? 'preserves identity and copy ownership through a directory alias'
+      : sameCheckout ? 'preserves the configured device identity' : 'uses the hostname default for a different checkout';
+    test(`${command} ${behavior}`, async (t) => {
       const { root, vaultPath, targetPath, deviceId, configPath, cli } = await fixture(t);
       const original = await loadLocalDevice(vaultPath, deviceId);
-      const selected = sameCheckout ? './vault' : path.join(root, 'new-vault');
+      const alias = path.join(root, 'vault-alias');
+      if (selection === 'alias') await symlink(vaultPath, alias, 'dir');
+      const selected = selection === 'alias' ? alias : sameCheckout ? './vault' : path.join(root, 'new-vault');
       const args = command === 'setup'
         ? ['setup', '--repo', 'test/skills', '--path', selected, '--yes']
         : ['connect', 'test/skills', '--path', selected];
@@ -93,6 +99,7 @@ for (const command of ['setup', 'connect']) {
 
       const config = JSON.parse(await readFile(configPath, 'utf8'));
       assert.equal(config.deviceId, sameCheckout ? deviceId : defaultDeviceId());
+      assert.equal(config.repoPath, sameCheckout ? vaultPath : selected);
       const current = await loadLocalDevice(config.repoPath, config.deviceId);
       assert.deepEqual(current.targets, sameCheckout ? original.targets : {});
       assert.deepEqual(current.installed, sameCheckout ? original.installed : {});
@@ -100,6 +107,7 @@ for (const command of ['setup', 'connect']) {
       if (sameCheckout) {
         const { stdout } = await cli(['installed']);
         assert.match(stdout, /demo/);
+        assert.match(stdout, /copy from/);
         assert.doesNotMatch(stdout, /No skills are recorded/);
       }
     });
