@@ -57,7 +57,7 @@ export function run(command, args, options = {}) {
 
 export async function commandExists(command) {
   try {
-    await run('sh', ['-lc', `command -v ${command}`]);
+    await run('sh', ['-c', `command -v ${command}`]);
     return true;
   } catch {
     return false;
