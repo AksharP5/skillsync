@@ -408,6 +408,8 @@ Malformed device assignments or inventories stop sync with an error naming the s
 
 Run `skillsync groups` to regenerate pack manifests and group pages from `groups.json`. Packs removed from the configuration, or left without available skills, disappear from the generated outputs. Cleanup preserves unmanaged files and edited group pages.
 
+`skillsync pack list` reads existing pack manifests without initializing or changing the vault. Run `skillsync groups` to apply changes from `groups.json` before listing or installing updated packs.
+
 ## Remove skills
 
 Remove a skill from one device:
