@@ -21,7 +21,7 @@ import {
   selectGlobalInstructionsProfile,
 } from '../src/core/instructions.js';
 import { exists } from '../src/core/fs.js';
-import { commitAllIfChanged, git, gitPrivatePath, pushWithPullRebaseRetry, run } from '../src/core/git.js';
+import { commitAllIfChanged, git, gitPrivatePath, hashSyncedDirectory, ignoredGitPaths, pushWithPullRebaseRetry, run } from '../src/core/git.js';
 import { addSkillToVault, ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
 import { checkVault } from '../src/core/check.js';
@@ -157,6 +157,39 @@ test('sync keeps registry hashes stable across clones with different ignored fil
   await unlink(path.join(skill, 'fixtures', 'transcript.json'));
   await syncVault({ vaultPath: vault, pull: false, pushChanges: false });
   assert.equal((await loadRegistry(vault)).skills.captions.hash, JSON.parse(before).skills.captions.hash);
+});
+
+test('synced hashes scope ignored files to normalized directories and retain tracked files', async (t) => {
+  const root = await tempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const vault = path.join(root, 'vault with spaces');
+  await git(['init', vault]);
+  await writeFile(path.join(vault, '.gitignore'), '*.cache\n');
+  const skillPaths = ['skills/demo', 'skills/demo-more'];
+  for (const directory of skillPaths) {
+    await mkdir(path.join(vault, directory, 'nested'), { recursive: true });
+    await writeFile(path.join(vault, directory, 'SKILL.md'), '# Example\n');
+    await writeFile(path.join(vault, directory, 'nested', 'generated.cache'), 'original local content\n');
+    await writeFile(path.join(vault, directory, 'tracked.cache'), 'original tracked content\n');
+  }
+  await writeFile(path.join(vault, 'root.cache'), 'root local content\n');
+  await git(['add', '-f', ...skillPaths.map(directory => `${directory}/tracked.cache`)], vault);
+  const ignored = await ignoredGitPaths(vault);
+  const directories = ['.', 'skills/./demo', 'skills/demo/../demo-more'];
+  const hashes = await Promise.all(directories.map(directory => hashSyncedDirectory(vault, directory, ignored)));
+
+  for (const directory of skillPaths) {
+    await writeFile(path.join(vault, directory, 'nested', 'generated.cache'), 'changed local content\n');
+  }
+  await writeFile(path.join(vault, 'root.cache'), 'changed root local content\n');
+  assert.deepEqual(await Promise.all(directories.map(directory => hashSyncedDirectory(vault, directory))), hashes);
+
+  for (const [index, directory] of skillPaths.entries()) {
+    await writeFile(path.join(vault, directory, 'tracked.cache'), 'changed tracked content\n');
+    assert.notEqual(await hashSyncedDirectory(vault, directories[index + 1]), hashes[index + 1]);
+    assert.notEqual(await hashSyncedDirectory(vault, '.'), hashes[0]);
+    await writeFile(path.join(vault, directory, 'tracked.cache'), 'original tracked content\n');
+  }
 });
 
 test('copy projections retain drift protection when the vault contains ignored files', async () => {
