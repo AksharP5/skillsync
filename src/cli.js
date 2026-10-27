@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
-import { lstat, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
@@ -590,15 +590,17 @@ async function loadPack(config, packName) {
 }
 
 async function listPacks(config) {
-  await generateGroups({ vaultPath: config.repoPath, write: true });
   const packsDir = path.join(config.repoPath, 'packs');
-  const entries = await import('node:fs/promises').then(({ readdir }) => readdir(packsDir).catch(() => []));
+  const entries = await readdir(packsDir).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
   return entries.filter((name) => name.endsWith('.json')).sort();
 }
 
 async function packCommand(rest) {
   const sub = rest[0] || 'list';
-  const config = await configured();
+  const config = await configured({ initialize: sub !== 'list' });
   if (sub === 'list') {
     const packs = await listPacks(config);
     for (const file of packs) {
