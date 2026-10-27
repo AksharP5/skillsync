@@ -539,7 +539,7 @@ test('uninstall rejects invalid destination options without changing vault or pr
       assert.equal((await git(['status', '--porcelain'], vault)).stdout, '');
       for (const deviceId of ['local', 'remote']) {
         for (const target of ['codex', 'claude']) {
-          assert.equal(await realpath(path.join(home, deviceId, target, 'demo')), path.join(vault, 'skills', 'demo'));
+          assert.equal(await realpath(path.join(home, deviceId, target, 'demo')), await realpath(path.join(vault, 'skills', 'demo')));
         }
       }
     });
@@ -571,7 +571,7 @@ for (const { args, deviceId = 'local', targets, global = true } of [
       assert.ok(device.desired_generation > device.applied_generation);
     }
     for (const target of ['codex', 'claude']) {
-      assert.equal(await realpath(path.join(home, 'remote', target, 'demo')), path.join(vault, 'skills', 'demo'));
+      assert.equal(await realpath(path.join(home, 'remote', target, 'demo')), await realpath(path.join(vault, 'skills', 'demo')));
     }
     assert.ok((await loadRegistry(vault)).skills.demo);
   });
