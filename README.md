@@ -55,6 +55,8 @@ Setup detects Codex, Claude Code, OpenCode, Hermes, and Grok Bot folders. Rerunn
 skillsync target add my-agent ~/.config/my-agent/skills
 ```
 
+Repeating `setup` or `connect` for the configured checkout path preserves its saved device ID, including after a hostname change. A different checkout uses an ID derived from the current hostname.
+
 Then install the background service:
 
 ```bash

@@ -296,6 +296,11 @@ async function ensureVaultCheckout(repo, repoPath) {
   }
 }
 
+async function deviceIdForCheckout(repoPath) {
+  const config = await loadConfig();
+  return path.resolve(config.repoPath) === repoPath ? config.deviceId : defaultDeviceId();
+}
+
 async function setup(rest) {
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
   if (!await commandExists('git')) throw new Error('git is required');
@@ -308,6 +313,7 @@ async function setup(rest) {
 
   const repoArg = flagValue(rest, '--repo');
   const repoPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
+  const deviceId = await deviceIdForCheckout(repoPath);
   let repo = repoArg;
   if (!repo) {
     const { stdout: ownerOut } = await gh(['api', 'user', '--jq', '.login']);
@@ -342,7 +348,6 @@ async function setup(rest) {
   await ensureVaultCheckout(repo, repoPath);
 
   await ensureVault(repoPath);
-  const deviceId = defaultDeviceId();
   await initializeLocalPathState({ vaultPath: repoPath, deviceId });
   await saveConfig({ version: 1, repo, repoPath, deviceId });
   await maybeAddDetectedTargets(repoPath, deviceId, yes);
@@ -360,10 +365,10 @@ async function connect(rest) {
   if (!repoArg) throw new Error('Usage: skillsync connect <github-repo-or-url>');
   const repo = await resolveRepoCloneUrl(repoArg);
   const repoPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
+  const deviceId = await deviceIdForCheckout(repoPath);
   await mkdir(path.dirname(repoPath), { recursive: true });
   await ensureVaultCheckout(repo, repoPath);
   await ensureVault(repoPath);
-  const deviceId = defaultDeviceId();
   await initializeLocalPathState({ vaultPath: repoPath, deviceId });
   await saveConfig({ version: 1, repo, repoPath, deviceId });
   await rebuildRegistry(repoPath);
