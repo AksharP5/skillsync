@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
+import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
 import {
   chmod,
@@ -1072,6 +1075,75 @@ test('explicit OpenCode import manages that file before linking an existing Code
   assert.match(status.stdout, /codex: ~\/\.codex\/AGENTS\.md \(profile macbook\)/);
   assert.ok(status.stdout.includes(`opencode: ${opencode} (profile macbook)`));
 });
+
+for (const repairConfig of [false, true]) {
+  test(`daemon follows saved vault and device changes${repairConfig ? ' after a configuration error' : ''}`, { timeout: 60000 }, async (t) => {
+    const home = await tempDir();
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const first = path.join(home, 'first');
+    const second = path.join(home, 'second');
+    await writeConfig(home, first);
+    await makeSkill(path.join(first, 'skills'), 'demo');
+    await rebuildRegistry(first);
+    await addTarget({ vaultPath: first, deviceId: 'test-device', name: 'codex', targetPath: path.join(home, 'first-target'), autoImport: false });
+    await installSkill({ vaultPath: first, deviceId: 'test-device', skillName: 'demo', targets: ['codex'] });
+    await git(['add', '-A'], first);
+    await git(['commit', '-m', 'first device'], first);
+    await git(['push'], first);
+    await git(['clone', '--branch', 'main', path.join(home, '.skillsync', 'test-remote.git'), second]);
+    await git(['config', 'user.email', 'test@example.invalid'], second);
+    await git(['config', 'user.name', 'SkillSync Test'], second);
+    const nextTarget = path.join(home, 'second-target');
+    await addTarget({ vaultPath: second, deviceId: 'next-device', name: 'codex', targetPath: nextTarget, autoImport: false });
+    await installSkill({ vaultPath: second, deviceId: 'next-device', skillName: 'demo', targets: ['codex'] });
+    await git(['add', '-A'], second);
+    await git(['commit', '-m', 'second device'], second);
+    await git(['push'], second);
+    const configPath = path.join(home, '.config', 'skillsync', 'config.json');
+    const nextConfig = { version: 1, repoPath: second, deviceId: 'next-device' };
+    const child = spawn(process.execPath, [path.resolve('src/cli.js'), 'daemon', '--interval', '0.2'], {
+      env: cliEnv(home), timeout: 45000, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const closed = once(child, 'close');
+    const output = new PassThrough();
+    child.stdout.pipe(output, { end: false });
+    child.stderr.pipe(output, { end: false });
+    child.on('close', () => output.end());
+    let phase = 'initial';
+    let successes = 0;
+    let verified = false;
+    const lines = [];
+    try {
+      for await (const line of createInterface({ input: output })) {
+        lines.push(line);
+        if (phase === 'invalid' && line.includes('Cannot read SkillSync config')) {
+          await writeJson(configPath, nextConfig);
+          phase = 'changed';
+          successes = 0;
+          continue;
+        }
+        if (!line.endsWith('] synced')) continue;
+        if (phase === 'initial') {
+          assert.equal(await readFile(path.join(home, 'first-target', 'demo', 'SKILL.md'), 'utf8'), '# Skill\n');
+          if (repairConfig) await writeFile(configPath, '{');
+          else await writeJson(configPath, nextConfig);
+          phase = repairConfig ? 'invalid' : 'changed';
+          continue;
+        }
+        successes += 1;
+        if (successes < 3) continue;
+        assert.equal(phase, 'changed', 'invalid configuration must prevent successful syncs until repaired');
+        assert.equal(await readFile(path.join(nextTarget, 'demo', 'SKILL.md'), 'utf8'), '# Skill\n');
+        verified = true;
+        break;
+      }
+      assert.ok(verified, lines.join('\n'));
+    } finally {
+      child.kill('SIGTERM');
+      await closed;
+    }
+  });
+}
 
 test('daemon rejects a non-positive interval instead of entering a tight loop', async () => {
   await assert.rejects(

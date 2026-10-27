@@ -1959,10 +1959,11 @@ async function daemon(rest) {
     throw new Error('Daemon interval must be a positive number of seconds');
   }
   const interval = intervalSeconds * 1000;
-  const config = await configured();
-  console.log(`SkillSync daemon started for ${config.repoPath}; interval ${interval / 1000}s`);
+  const initialConfig = await configured();
+  console.log(`SkillSync daemon started for ${initialConfig.repoPath}; interval ${interval / 1000}s`);
   while (true) {
     try {
+      const config = await configured();
       const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId });
       for (const adopted of result.autoImported || []) {
         console.log(`[${new Date().toISOString()}] auto-adopted ${adopted.name} from ${adopted.target}`);
