@@ -489,6 +489,94 @@ test('uninstall --device defers cleanup until the remote device reports the remo
   assert.ok((await loadRegistry(vault)).skills['temporary-skill']);
 });
 
+async function uninstallFixture(t) {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, 'vault');
+  await writeConfig(home, vault, 'local');
+  await makeSkill(path.join(vault, 'skills'), 'demo');
+  await rebuildRegistry(vault);
+  for (const deviceId of ['local', 'remote']) {
+    for (const name of ['codex', 'claude']) {
+      await addTarget({ vaultPath: vault, deviceId, name, targetPath: path.join(home, deviceId, name), autoImport: false });
+    }
+    await installSkill({ vaultPath: vault, deviceId, skillName: 'demo', targets: ['codex', 'claude', 'global'] });
+    await applyLinks({ vaultPath: vault, deviceId });
+  }
+  await git(['add', '-A'], vault);
+  await git(['commit', '-m', 'seed assignments'], vault);
+  await git(['push'], vault);
+  const cli = (...args) => execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'uninstall', 'demo', ...args], {
+    env: cliEnv(home),
+    timeout: 15000,
+  });
+  return { home, vault, cli };
+}
+
+test('uninstall rejects invalid destination options without changing vault or projections', async (t) => {
+  const { home, vault, cli } = await uninstallFixture(t);
+  const before = await Promise.all(['local', 'remote'].map((deviceId) => loadLocalDevice(vault, deviceId)));
+  const head = await git(['rev-parse', 'HEAD'], vault);
+  const cases = [];
+  for (const flag of ['--device', '-d', '--target', '-t']) {
+    for (const values of [[], [''], ['   '], ['--global']]) cases.push([flag, ...values]);
+  }
+  for (const flag of ['--target', '-t']) {
+    cases.push([flag, ' , , '], ['--global', flag, ' , , '], ['--device', 'remote', flag, ' , , ']);
+  }
+  cases.push(['--device', 'remote', '-d', ''], ['--target', 'codex', '-t', '']);
+
+  for (const args of cases) {
+    await t.test(JSON.stringify(args), async () => {
+      await assert.rejects(cli(...args), (error) => {
+        assert.equal(error.code, 1);
+        assert.match(error.stderr, /(?:Missing value|Expected at least one target) for (?:--device|-d|--target|-t)/);
+        assert.doesNotMatch(error.stdout, /Removed/);
+        return true;
+      });
+      assert.deepEqual(await Promise.all(['local', 'remote'].map((deviceId) => loadLocalDevice(vault, deviceId))), before);
+      assert.deepEqual(await git(['rev-parse', 'HEAD'], vault), head);
+      assert.equal((await git(['status', '--porcelain'], vault)).stdout, '');
+      for (const deviceId of ['local', 'remote']) {
+        for (const target of ['codex', 'claude']) {
+          assert.equal(await realpath(path.join(home, deviceId, target, 'demo')), await realpath(path.join(vault, 'skills', 'demo')));
+        }
+      }
+    });
+  }
+});
+
+for (const { args, deviceId = 'local', targets, global = true } of [
+  { args: [], targets: [], global: false },
+  { args: ['--device', 'local', '--target', 'codex'], targets: ['claude'] },
+  { args: ['-d', 'local', '-t', ' codex, claude, codex '], targets: [] },
+  { args: ['--global'], targets: ['claude', 'codex'], global: false },
+  { args: ['-d', 'remote', '-t', 'codex'], deviceId: 'remote', targets: ['claude'] },
+]) {
+  test(`uninstall preserves valid destination behavior ${JSON.stringify(args)}`, async (t) => {
+    const { home, vault, cli } = await uninstallFixture(t);
+    const remoteBefore = await loadLocalDevice(vault, 'remote');
+    await cli(...args);
+    const device = await loadLocalDevice(vault, deviceId);
+    assert.deepEqual(device.installed, targets.length ? { demo: targets } : {});
+    assert.deepEqual(device.global_installed, global ? ['demo'] : []);
+    const local = await loadLocalDevice(vault, 'local');
+    for (const target of ['codex', 'claude']) {
+      assert.equal(await exists(path.join(home, 'local', target, 'demo')), (local.installed.demo || []).includes(target));
+    }
+    if (deviceId === 'remote') {
+      assert.deepEqual(local.installed, { demo: ['claude', 'codex'] });
+      assert.deepEqual(local.global_installed, ['demo']);
+      assert.equal(device.applied_generation, remoteBefore.applied_generation);
+      assert.ok(device.desired_generation > device.applied_generation);
+    }
+    for (const target of ['codex', 'claude']) {
+      assert.equal(await realpath(path.join(home, 'remote', target, 'demo')), await realpath(path.join(vault, 'skills', 'demo')));
+    }
+    assert.ok((await loadRegistry(vault)).skills.demo);
+  });
+}
+
 test('scan reports new skills without changing local or vault state', async () => {
   const home = await tempDir();
   const vault = path.join(home, '.skillsync', 'repo');
