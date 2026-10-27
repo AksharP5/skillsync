@@ -85,8 +85,10 @@ export async function ignoredGitPaths(repoPath) {
 export async function hashSyncedDirectory(repoPath, relativePath, ignoredPaths) {
   const directory = path.resolve(repoPath, relativePath);
   const ignored = ignoredPaths ?? await ignoredGitPaths(repoPath);
+  const relativeDirectory = path.relative(repoPath, directory).split(path.sep).join(path.posix.sep);
+  const prefix = relativeDirectory ? `${relativeDirectory}/` : '';
   return hashDirectory(directory, {
-    exclude: ignored.map((file) => path.relative(directory, path.resolve(repoPath, file))),
+    exclude: ignored.filter((file) => file.startsWith(prefix)).map((file) => file.slice(prefix.length)),
   });
 }
 
