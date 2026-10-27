@@ -1242,6 +1242,7 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
   for (const [skillName, targets] of Object.entries(device.installed || {})) {
     assertSafePathSegment(skillName, 'Skill name');
     const registryEntry = registry.skills[skillName];
+    let sourceHash;
     for (const targetName of Array.isArray(targets) ? targets : []) {
       const targetConfig = device.targets?.[targetName];
       const source = registryEntry ? path.join(vaultPath, 'skills', skillName) : null;
@@ -1263,7 +1264,7 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
           if (!info.ownedCopy) {
             status = 'unmanaged';
           } else {
-            const sourceHash = await hashDirectory(source, { includeExecutableBits: true });
+            sourceHash ??= await hashDirectory(source, { includeExecutableBits: true });
             const state = await copyState({
               destination,
               marker: info.copyMarker,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { addTarget, applyLinks, installSkill } from '../src/core/device.js';
+import { addTarget, applyLinks, installSkill, managedProjections } from '../src/core/device.js';
 import { git } from '../src/core/git.js';
 import { rebuildRegistry } from '../src/core/registry.js';
 
@@ -56,4 +56,21 @@ test('local drift in a later copy target blocks all replacements', async t => {
   assert.equal(await readFile(path.join(copies[1], 'SKILL.md'), 'utf8'), '# Local edits\n');
   assert.equal((await applyLinks({ ...options, discardLocalChanges: true })).operations.length, 2);
   for (const copy of copies) assert.equal(await readFile(path.join(copy, 'SKILL.md'), 'utf8'), '# Updated source\n');
+});
+
+test('installed-copy diagnostics refresh source content and permissions while checking each copy for drift', async t => {
+  const { options, source, copies } = await createCopies(t);
+  assert.deepEqual((await managedProjections(options)).map(copy => copy.status), ['ok', 'ok']);
+
+  await writeFile(path.join(source, 'notes.local'), 'Updated local asset\n');
+  assert.deepEqual((await managedProjections(options)).map(copy => copy.status), ['outdated', 'outdated']);
+  await applyLinks(options);
+
+  await chmod(path.join(source, 'run.sh'), 0o755);
+  assert.deepEqual((await managedProjections(options)).map(copy => copy.status), ['outdated', 'outdated']);
+  await writeFile(path.join(copies[1], 'notes.local'), 'Independent local edit\n');
+  assert.deepEqual((await managedProjections(options)).map(copy => copy.status), ['outdated', 'drifted']);
+
+  await applyLinks({ ...options, discardLocalChanges: true });
+  assert.deepEqual((await managedProjections(options)).map(copy => copy.status), ['ok', 'ok']);
 });
