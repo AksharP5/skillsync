@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -92,6 +92,28 @@ test('selectDiscoveredSkills filters by requested skill names', async () => {
     { name: 'example-skill', path: vibe, relative: 'example-skill' },
   ]);
   assert.throws(() => selectDiscoveredSkills(skills, ['missing']), /Skill not found/);
+});
+
+test('source discovery treats a missing agent directory as empty', async (t) => {
+  const root = await tempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.deepEqual(await discoverSkillFolders(path.join(root, 'not-installed')), []);
+});
+
+test('source discovery rejects unreadable containers instead of returning partial results', {
+  skip: !process.getuid || process.getuid() === 0,
+}, async (t) => {
+  const root = await tempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await makeSkill(root, 'readable');
+  const restricted = path.join(root, 'restricted');
+  await makeSkill(restricted, 'hidden');
+  await chmod(restricted, 0o111);
+  try {
+    await assert.rejects(discoverSkillFolders(root), { code: 'EACCES', path: restricted });
+  } finally {
+    await chmod(restricted, 0o700);
+  }
 });
 
 test('discovery preserves frontmatter names and nested folder defaults', async (t) => {

@@ -79,7 +79,10 @@ export async function discoverSkillFolders(root, { fullDepth = false } = {}) {
       if (!fullDepth) return;
     }
 
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    const entries = await readdir(dir, { withFileTypes: true }).catch((error) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       await walk(path.join(dir, entry.name), relative === '.' ? entry.name : path.posix.join(relative, entry.name));
