@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -78,6 +78,33 @@ async function managedImportFixture(t, { mode = 'copy', alias = false } = {}) {
   await applyLinks(options);
   return { ...context, target, managed: path.join(target, 'a-managed') };
 }
+
+test('agent import reports unreadable containers before importing any skills', {
+  skip: !process.getuid || process.getuid() === 0,
+}, async (t) => {
+  const { home, vault, cli } = await fixture(t);
+  const source = path.join(home, '.codex', 'skills');
+  await makeSkill(source, 'readable', '# Readable');
+  const restricted = path.join(source, 'restricted');
+  await makeSkill(restricted, 'hidden', '# Hidden');
+  await chmod(restricted, 0o111);
+  try {
+    await assert.rejects(cli(['import', 'codex']), (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /EACCES/);
+      assert.ok(error.stderr.includes(restricted));
+      assert.doesNotMatch(error.stdout, /added to vault/);
+      return true;
+    });
+  } finally {
+    await chmod(restricted, 0o700);
+  }
+  assert.deepEqual(await readdir(path.join(vault, 'skills')), []);
+  assert.equal(await readFile(path.join(source, 'readable', 'SKILL.md'), 'utf8'),
+    '---\nname: readable\n---\n# Readable\n');
+  assert.equal(await readFile(path.join(restricted, 'hidden', 'SKILL.md'), 'utf8'),
+    '---\nname: hidden\n---\n# Hidden\n');
+});
 
 for (const mode of ['copy', 'symlink']) {
   test(`agent import skips owned ${mode} projections and imports new standalone skills`, async (t) => {
