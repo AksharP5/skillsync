@@ -179,7 +179,9 @@ async function main() {
 function flagValue(rest, flag, fallback = undefined) {
   const index = rest.indexOf(flag);
   if (index === -1) return fallback;
-  return rest[index + 1] ?? fallback;
+  const value = rest[index + 1];
+  if (!value?.trim() || value.startsWith('-')) throw new Error(`Missing value for ${flag}`);
+  return value;
 }
 
 function flagList(rest, flags) {
@@ -670,7 +672,7 @@ async function requireKnownDevice(vaultPath, deviceId) {
 }
 
 function requestedDeviceId(config, rest) {
-  return flagValue(rest, '--device') || flagValue(rest, '-d') || config.deviceId;
+  return flagValue(rest, '--device', flagValue(rest, '-d', config.deviceId));
 }
 
 async function pullBeforeRemoteEdit(config, deviceId) {
@@ -1603,15 +1605,17 @@ async function install(rest) {
 async function uninstall(rest) {
   const skillName = rest[0];
   if (!skillName) throw new Error('Usage: skillsync uninstall <skill> [--device id] [--target target]');
-  const config = await configured();
+  const config = await loadConfig();
   const deviceId = requestedDeviceId(config, rest);
+  const targets = parseTargets(rest);
+  await configured({ config });
   await pullBeforeRemoteEdit(config, deviceId);
   await requireKnownDevice(config.repoPath, deviceId);
   await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId,
     skillName,
-    targets: parseTargets(rest),
+    targets,
   });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(deviceId === config.deviceId
@@ -1642,8 +1646,14 @@ async function deleteSkill(rest) {
 function parseTargets(rest) {
   const targets = [];
   if (hasFlag(rest, '--global') || hasFlag(rest, '-g')) targets.push('global');
-  const raw = flagValue(rest, '--target') || flagValue(rest, '-t');
-  if (raw) targets.push(...raw.split(',').map((item) => item.trim()).filter(Boolean));
+  const [longTargets, shortTargets] = ['--target', '-t'].map((flag) => {
+    const raw = flagValue(rest, flag);
+    if (raw === undefined) return [];
+    const names = raw.split(',').map((item) => item.trim()).filter(Boolean);
+    if (!names.length) throw new Error(`Expected at least one target for ${flag}`);
+    return names;
+  });
+  targets.push(...(longTargets.length ? longTargets : shortTargets));
   return targets.length ? [...new Set(targets)] : undefined;
 }
 
