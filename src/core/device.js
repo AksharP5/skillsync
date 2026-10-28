@@ -991,20 +991,24 @@ function presentSkillNames(devices) {
   return present;
 }
 
-export async function listUnusedSkills(vaultPath) {
+export async function listUnusedSkills(vaultPath, { deviceId, detected } = {}) {
   const registry = await loadRegistry(vaultPath);
-  const present = presentSkillNames(await listDevices(vaultPath));
+  const devices = await listDevices(vaultPath);
+  const inventory = detected === undefined ? devices : devices.map((device) => (
+    device.device_id === deviceId ? { ...device, detected } : device
+  ));
+  const present = presentSkillNames(inventory);
   return Object.keys(registry.skills)
     .filter((skillName) => !present.has(skillName))
     .sort();
 }
 
-export async function sweepUnusedSkills({ vaultPath, requirePolicy = true }) {
+export async function sweepUnusedSkills({ vaultPath, requirePolicy = true, deviceId, detected }) {
   if (requirePolicy) {
     const config = await loadVaultConfig(vaultPath);
     if (!config.policies.delete_unassigned_skills) return [];
   }
-  const unused = await listUnusedSkills(vaultPath);
+  const unused = await listUnusedSkills(vaultPath, { deviceId, detected });
   for (const skillName of unused) {
     await deleteSkillFromVault({ vaultPath, skillName });
   }
@@ -1252,9 +1256,10 @@ export async function rollbackLinks({
   });
 }
 
-export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId() }) {
+export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId(), detected }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
-  if (device.applied_generation === device.desired_generation) return device;
+  if (detected === undefined && device.applied_generation === device.desired_generation) return device;
+  if (detected !== undefined) device.detected = detected;
   device.applied_generation = device.desired_generation;
   await saveLocalReportedDevice(vaultPath, device);
   return device;
@@ -1432,11 +1437,11 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
   return false;
 }
 
-export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
+export async function scanTargets({ vaultPath, deviceId = defaultDeviceId(), save = true }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
   const detected = await detectTargets({ vaultPath, device });
   device.detected = detected;
-  await saveLocalReportedDevice(vaultPath, device);
+  if (save) await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
