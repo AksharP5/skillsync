@@ -1,4 +1,5 @@
-import { lstat, mkdir, readlink, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, mkdir, readlink, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -715,6 +716,15 @@ export async function addTarget({
   if (JSON.stringify(previousTarget) !== JSON.stringify(nextTarget)) {
     if (previousTarget
       && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
+      const plan = await planLinks({
+        vaultPath,
+        deviceId,
+        device: { ...device, targets: { ...device.targets, [name]: nextTarget } },
+        readOnly: true,
+      });
+      if (plan.operations.some((operation) => operation.targetNames.includes(name))) {
+        await requireWritableTargetRoot(nextTarget.path);
+      }
       cleanup = await removeOwnedTargetProjections({ vaultPath, device, name });
     }
     if (previousTarget?.path !== nextTarget.path || previousTarget?.scan_path !== nextTarget.scan_path) {
@@ -728,6 +738,21 @@ export async function addTarget({
     await rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error });
   }
   return device;
+}
+
+async function requireWritableTargetRoot(targetPath) {
+  let directory = path.resolve(expandHome(targetPath));
+  while (true) {
+    const info = await lstat(directory).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (info) {
+      await access(directory, constants.W_OK | constants.X_OK);
+      return;
+    }
+    directory = path.dirname(directory);
+  }
 }
 
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
@@ -1002,9 +1027,10 @@ export async function planLinks({
   discardLocalChanges = false,
   readOnly = false,
   replaceUnmanagedPaths = [],
+  device: providedDevice,
   registry: providedRegistry,
 }) {
-  const device = await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
+  const device = providedDevice || await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
   const registry = providedRegistry || await loadRegistry(vaultPath);
   const approvedReplacements = new Set(await Promise.all(
     replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
@@ -1338,12 +1364,15 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
     const skills = await findLocalSkills(scanRoot, vaultPath);
     const installRoot = path.resolve(expandHome(targetConfig.path));
+    const canonicalScanRoot = await realpath(scanRoot).catch(() => scanRoot);
     const canonicalInstallRoot = await realpath(installRoot).catch(() => installRoot);
 
     for (const skill of skills) {
       if (previousKeys.has(detectedSkillKey(skill))) continue;
-      const sourcePath = path.resolve(scanRoot, skill.path || '.');
-      if (sourcePath !== path.join(installRoot, skill.name)) continue;
+      const scannedPath = path.resolve(scanRoot, skill.path || '.');
+      const physicalScanPath = path.resolve(canonicalScanRoot, skill.path || '.');
+      const sourcePath = path.join(installRoot, skill.name);
+      if (scannedPath !== sourcePath && physicalScanPath !== path.join(canonicalInstallRoot, skill.name)) continue;
       const canonicalSource = await realpath(sourcePath).catch(() => null);
       if (!canonicalSource || !pathInside(canonicalSource, canonicalInstallRoot)) continue;
       if (await hasSymlinkBelowRoot(sourcePath, installRoot)) continue;
