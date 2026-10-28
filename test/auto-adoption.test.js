@@ -53,6 +53,28 @@ for (const mode of ['symlink', 'copy']) {
       assert.match(await readFile(path.join(outside, 'SKILL.md'), 'utf8'), /name: external/);
     });
   }
+
+  test(`adding another scan alias preserves the ${mode} baseline for an aliased target`, async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillsync-baseline-alias-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
+    const scanPath = path.join(root, 'agent');
+    const physical = path.join(root, 'physical');
+    const targetPath = path.join(scanPath, 'personal');
+    await makeSkill(path.join(physical, 'existing'), 'existing');
+    await mkdir(scanPath);
+    await symlink(physical, targetPath, 'dir');
+    await addTarget({ ...options, name: 'codex', targetPath, scanPath, mode });
+    await scanTargets(options);
+    await symlink(physical, path.join(scanPath, 'new-alias'), 'dir');
+    const syncOptions = { ...options, pull: false, pushChanges: false };
+
+    assert.deepEqual((await syncVault(syncOptions)).autoImported, []);
+    assert.equal((await loadRegistry(options.vaultPath)).skills.existing, undefined);
+    assert.equal((await lstat(path.join(physical, 'existing'))).isSymbolicLink(), false);
+    await makeSkill(path.join(physical, 'new-skill'), 'new-skill');
+    assert.deepEqual((await syncVault(syncOptions)).autoImported.map(({ name }) => name), ['new-skill']);
+  });
 }
 
 for (const legacyManifest of [false, true]) {
