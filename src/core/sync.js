@@ -249,12 +249,12 @@ export async function syncVault({
       const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
       result.prunedInstructionProfiles.push(...(instructions.prunedProfiles || []));
       result.plugins = await syncCodexPlugins({ vaultPath, deviceId });
-      await scanTargets({ vaultPath, deviceId });
+      const scanned = await scanTargets({ vaultPath, deviceId, save: false });
       if (pull) {
-        result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath }));
+        result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath, deviceId, detected: scanned.detected }));
       }
       await checkVault(vaultPath);
-      await markDeviceApplied({ vaultPath, deviceId });
+      await markDeviceApplied({ vaultPath, deviceId, detected: scanned.detected });
       result.projectionOperations.push(...projectionApply.operations);
     } catch (error) {
       if (!projectionApply?.backupId) throw error;

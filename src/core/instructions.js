@@ -265,13 +265,20 @@ export async function reconcileGlobalInstructionProviders({
       };
     }
     const backup = info && !owned ? await backupPath(destination) : null;
-    await configureGlobalInstructions({
-      vaultPath,
-      deviceId,
-      targetPaths: [...paths, claudePath],
-      automaticPaths: [...automaticPaths, claudePath],
-      appliedProfile: agents.applied_profile,
-    });
+    try {
+      if (!info || backup) {
+        await createOwnedInstructionsSymlink(source, destination);
+      }
+      await configureGlobalInstructions({
+        vaultPath,
+        deviceId,
+        targetPaths: [...paths, claudePath],
+        automaticPaths: [...automaticPaths, claudePath],
+        appliedProfile: agents.applied_profile,
+      });
+    } catch (error) {
+      await restoreInstructionBackups(backup ? [{ destination, backup }] : [], error);
+    }
     return {
       changed: true,
       claudeEnabled: true,
@@ -441,13 +448,37 @@ async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
     unmanaged.set(await canonicalDestination(destination), destination);
   }
   const backups = [];
-  for (const destination of unmanaged.values()) {
-    backups.push({
-      destination,
-      backup: await backupPath(destination),
-    });
+  try {
+    for (const destination of unmanaged.values()) {
+      backups.push({
+        destination,
+        backup: await backupPath(destination),
+      });
+    }
+  } catch (error) {
+    await restoreInstructionBackups(backups, error);
   }
   return backups;
+}
+
+async function restoreInstructionBackups(backups, error, { onlyMissing = false } = {}) {
+  const rollbackErrors = [];
+  for (const { destination, backup } of [...backups].reverse()) {
+    try {
+      if (onlyMissing && await pathInfo(destination)) continue;
+      await rename(backup, destination);
+    } catch (rollbackError) {
+      rollbackErrors.push(new Error(
+        `Could not restore ${destination}; backup retained at ${backup}: ${rollbackError.message}`,
+        { cause: rollbackError },
+      ));
+    }
+  }
+  if (rollbackErrors.length) {
+    throw new AggregateError([error, ...rollbackErrors],
+      `${error.message}\nInstruction backup rollback also failed: ${rollbackErrors.map((failure) => failure.message).join('; ')}`);
+  }
+  throw error;
 }
 
 async function requireProfile(vaultPath, profile) {
@@ -507,22 +538,26 @@ export async function selectGlobalInstructionsProfile({
     removed.push({ destination, content: await projectedInstructionsContent(vaultPath, owned, targetPath) });
   }
   const backups = await preserveUnmanagedDestinations(vaultPath, paths);
-  for (const { destination, content } of removed) {
-    await writeInstructionsFile(destination, content);
+  try {
+    for (const { destination, content } of removed) {
+      await writeInstructionsFile(destination, content);
+    }
+    await setGlobalInstructionsProfile({
+      vaultPath,
+      deviceId,
+      profile: selected.profile,
+    });
+    await configureGlobalInstructions({
+      vaultPath,
+      deviceId,
+      targetPaths: paths,
+      automaticPaths: (device.instructions.agents?.auto_paths || []).map(resolvedDestination),
+      appliedProfile: device.instructions.agents?.applied_profile,
+    });
+    await applyGlobalInstructions({ vaultPath, deviceId });
+  } catch (error) {
+    await restoreInstructionBackups(backups, error, { onlyMissing: true });
   }
-  await setGlobalInstructionsProfile({
-    vaultPath,
-    deviceId,
-    profile: selected.profile,
-  });
-  await configureGlobalInstructions({
-    vaultPath,
-    deviceId,
-    targetPaths: paths,
-    automaticPaths: (device.instructions.agents?.auto_paths || []).map(resolvedDestination),
-    appliedProfile: device.instructions.agents?.applied_profile,
-  });
-  await applyGlobalInstructions({ vaultPath, deviceId });
   return {
     ...selected,
     paths,
@@ -595,11 +630,26 @@ export async function forkGlobalInstructionsProfile({
     throw new Error(`Instruction profile already exists: ${next}`);
   }
   await writeInstructionsFile(destination, await readFile(source));
-  return selectGlobalInstructionsProfile({
-    vaultPath,
-    deviceId,
-    profile: next,
-  });
+  try {
+    return await selectGlobalInstructionsProfile({
+      vaultPath,
+      deviceId,
+      profile: next,
+    });
+  } catch (error) {
+    const recovery = `Profile ${next} is retained at ${destination}. After repairing the error, select this profile with skillsync instructions use.`;
+    let unused;
+    try {
+      unused = (await listUnusedGlobalInstructionProfiles(vaultPath))
+        .some((profile) => profile.id === next);
+      if (unused) await removePath(destination);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError],
+        `${error.message}\nFork cleanup also failed: ${cleanupError.message}\n${recovery}`);
+    }
+    if (unused) throw error;
+    throw new Error(`${error.message}\n${recovery}`, { cause: error });
+  }
 }
 
 export async function addGlobalInstructionsPath({

@@ -9,6 +9,7 @@ import {
   isGlobalInstallTarget,
   normalizeGlobalInstalled,
   normalizeInstalled,
+  readDeviceState,
 } from './device-assignments.js';
 import {
   assertSafePathSegment,
@@ -81,53 +82,6 @@ export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
     'assignments',
     `${assertSafePathSegment(deviceId, 'Device ID')}.json`,
   );
-}
-
-function assertDeviceObject(value, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-}
-
-async function readDeviceState(filePath) {
-  try {
-    const value = await readJson(filePath);
-    assertDeviceObject(value, 'Device state');
-    if (value.installed !== undefined) {
-      assertDeviceObject(value.installed, 'installed');
-      for (const [skillName, targets] of Object.entries(value.installed)) {
-        assertSafePathSegment(skillName, 'Skill name');
-        if (!Array.isArray(targets)) throw new Error(`Assignment for ${skillName} must be an array`);
-        for (const target of targets) assertSafePathSegment(target, 'Target name');
-      }
-    }
-    for (const field of ['global_installed', 'globalInstalled']) {
-      if (value[field] === undefined) continue;
-      if (!Array.isArray(value[field])) throw new Error(`${field} must be an array`);
-      for (const name of value[field]) assertSafePathSegment(name, 'Skill name');
-    }
-    if (value.detected !== undefined) {
-      assertDeviceObject(value.detected, 'detected');
-      for (const [target, skills] of Object.entries(value.detected)) {
-        assertSafePathSegment(target, 'Target name');
-        if (!Array.isArray(skills)) throw new Error(`Detected skills for ${target} must be an array`);
-        for (const skill of skills) {
-          assertDeviceObject(skill, 'Detected skill');
-          assertSafePathSegment(skill.name, 'Skill name');
-        }
-      }
-    }
-    if (value.instructions !== undefined) {
-      assertDeviceObject(value.instructions, 'instructions');
-      if (value.instructions.agents !== undefined) {
-        assertDeviceObject(value.instructions.agents, 'instructions.agents');
-      }
-    }
-    return value;
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error(`Cannot read device state at ${filePath}: ${error.message}`, { cause: error });
-  }
 }
 
 export async function loadDevice(vaultPath, deviceId = defaultDeviceId(), { ensure = true } = {}) {
@@ -991,20 +945,24 @@ function presentSkillNames(devices) {
   return present;
 }
 
-export async function listUnusedSkills(vaultPath) {
+export async function listUnusedSkills(vaultPath, { deviceId, detected } = {}) {
   const registry = await loadRegistry(vaultPath);
-  const present = presentSkillNames(await listDevices(vaultPath));
+  const devices = await listDevices(vaultPath);
+  const inventory = detected === undefined ? devices : devices.map((device) => (
+    device.device_id === deviceId ? { ...device, detected } : device
+  ));
+  const present = presentSkillNames(inventory);
   return Object.keys(registry.skills)
     .filter((skillName) => !present.has(skillName))
     .sort();
 }
 
-export async function sweepUnusedSkills({ vaultPath, requirePolicy = true }) {
+export async function sweepUnusedSkills({ vaultPath, requirePolicy = true, deviceId, detected }) {
   if (requirePolicy) {
     const config = await loadVaultConfig(vaultPath);
     if (!config.policies.delete_unassigned_skills) return [];
   }
-  const unused = await listUnusedSkills(vaultPath);
+  const unused = await listUnusedSkills(vaultPath, { deviceId, detected });
   for (const skillName of unused) {
     await deleteSkillFromVault({ vaultPath, skillName });
   }
@@ -1252,9 +1210,10 @@ export async function rollbackLinks({
   });
 }
 
-export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId() }) {
+export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId(), detected }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
-  if (device.applied_generation === device.desired_generation) return device;
+  if (detected === undefined && device.applied_generation === device.desired_generation) return device;
+  if (detected !== undefined) device.detected = detected;
   device.applied_generation = device.desired_generation;
   await saveLocalReportedDevice(vaultPath, device);
   return device;
@@ -1432,11 +1391,11 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
   return false;
 }
 
-export async function scanTargets({ vaultPath, deviceId = defaultDeviceId() }) {
+export async function scanTargets({ vaultPath, deviceId = defaultDeviceId(), save = true }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
   const detected = await detectTargets({ vaultPath, device });
   device.detected = detected;
-  await saveLocalReportedDevice(vaultPath, device);
+  if (save) await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
 
