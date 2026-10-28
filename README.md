@@ -301,6 +301,8 @@ skillsync import hermes
 
 Imports skip existing managed projections at configured target paths, so rerunning an import only processes standalone skills.
 
+Manual `add` and agent imports recognize existing skills at configured targets through directory aliases and convert them to managed projections.
+
 An unreadable source directory stops discovery before any skills are imported. Repair the reported permission or I/O error and retry. A missing agent skills directory still reports that no skills were found.
 
 OpenCode setup detection and imports use `$XDG_CONFIG_HOME/opencode/skills` when `XDG_CONFIG_HOME` is an absolute path. Otherwise, they use `~/.config/opencode/skills`. Rerunning setup preserves paths for targets you have already configured.
@@ -321,7 +323,7 @@ The baseline tracks each skill's path, including same-name folders and directory
 
 On upgrade from an older baseline or migration from a legacy manifest, the first scan refreshes the baseline without adopting existing folders. Later scans adopt newly created skills as usual. Target settings and instruction paths are preserved.
 
-Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Nested folders and mismatched names remain detected for explicit import.
+Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Scan and install paths can use different directory aliases for the same folder in both copy and symlink modes. Nested folders, mismatched names, and symlinked skill folders remain detected for explicit import.
 
 Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.
 
