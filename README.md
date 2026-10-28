@@ -200,7 +200,7 @@ skillsync instructions fork workstation-personal
 
 Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and unmanaged global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups and never overwrites unmanaged replacements during background sync.
 
-If backing up a later instruction destination fails, SkillSync restores the earlier files so you can repair the reported error and retry the same import. If restoration also fails, the error identifies the retained backups and their original destinations.
+If backing up instruction destinations, detaching removed paths, or saving instruction configuration fails before projection starts, SkillSync restores the backed-up local files so you can repair the reported error and retry. Automatic Claude configuration restores its local file on a failed configuration write too. If restoration also fails, the error identifies the retained backups and their original destinations.
 
 Disabling instructions on another device queues the change for its next sync. Status shows the pending disable and its last applied profile until that device applies the change.
 

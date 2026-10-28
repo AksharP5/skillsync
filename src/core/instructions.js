@@ -265,13 +265,17 @@ export async function reconcileGlobalInstructionProviders({
       };
     }
     const backup = info && !owned ? await backupPath(destination) : null;
-    await configureGlobalInstructions({
-      vaultPath,
-      deviceId,
-      targetPaths: [...paths, claudePath],
-      automaticPaths: [...automaticPaths, claudePath],
-      appliedProfile: agents.applied_profile,
-    });
+    try {
+      await configureGlobalInstructions({
+        vaultPath,
+        deviceId,
+        targetPaths: [...paths, claudePath],
+        automaticPaths: [...automaticPaths, claudePath],
+        appliedProfile: agents.applied_profile,
+      });
+    } catch (error) {
+      await restoreInstructionBackups(backup ? [{ destination, backup }] : [], error);
+    }
     return {
       changed: true,
       claudeEnabled: true,
@@ -449,24 +453,28 @@ async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
       });
     }
   } catch (error) {
-    const rollbackErrors = [];
-    for (const { destination, backup } of backups.reverse()) {
-      try {
-        await rename(backup, destination);
-      } catch (rollbackError) {
-        rollbackErrors.push(new Error(
-          `Could not restore ${destination}; backup retained at ${backup}: ${rollbackError.message}`,
-          { cause: rollbackError },
-        ));
-      }
-    }
-    if (rollbackErrors.length) {
-      throw new AggregateError([error, ...rollbackErrors],
-        `${error.message}\nInstruction backup rollback also failed: ${rollbackErrors.map((failure) => failure.message).join('; ')}`);
-    }
-    throw error;
+    await restoreInstructionBackups(backups, error);
   }
   return backups;
+}
+
+async function restoreInstructionBackups(backups, error) {
+  const rollbackErrors = [];
+  for (const { destination, backup } of [...backups].reverse()) {
+    try {
+      await rename(backup, destination);
+    } catch (rollbackError) {
+      rollbackErrors.push(new Error(
+        `Could not restore ${destination}; backup retained at ${backup}: ${rollbackError.message}`,
+        { cause: rollbackError },
+      ));
+    }
+  }
+  if (rollbackErrors.length) {
+    throw new AggregateError([error, ...rollbackErrors],
+      `${error.message}\nInstruction backup rollback also failed: ${rollbackErrors.map((failure) => failure.message).join('; ')}`);
+  }
+  throw error;
 }
 
 async function requireProfile(vaultPath, profile) {
@@ -526,21 +534,25 @@ export async function selectGlobalInstructionsProfile({
     removed.push({ destination, content: await projectedInstructionsContent(vaultPath, owned, targetPath) });
   }
   const backups = await preserveUnmanagedDestinations(vaultPath, paths);
-  for (const { destination, content } of removed) {
-    await writeInstructionsFile(destination, content);
+  try {
+    for (const { destination, content } of removed) {
+      await writeInstructionsFile(destination, content);
+    }
+    await setGlobalInstructionsProfile({
+      vaultPath,
+      deviceId,
+      profile: selected.profile,
+    });
+    await configureGlobalInstructions({
+      vaultPath,
+      deviceId,
+      targetPaths: paths,
+      automaticPaths: (device.instructions.agents?.auto_paths || []).map(resolvedDestination),
+      appliedProfile: device.instructions.agents?.applied_profile,
+    });
+  } catch (error) {
+    await restoreInstructionBackups(backups, error);
   }
-  await setGlobalInstructionsProfile({
-    vaultPath,
-    deviceId,
-    profile: selected.profile,
-  });
-  await configureGlobalInstructions({
-    vaultPath,
-    deviceId,
-    targetPaths: paths,
-    automaticPaths: (device.instructions.agents?.auto_paths || []).map(resolvedDestination),
-    appliedProfile: device.instructions.agents?.applied_profile,
-  });
   await applyGlobalInstructions({ vaultPath, deviceId });
   return {
     ...selected,
