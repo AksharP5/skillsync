@@ -630,11 +630,26 @@ export async function forkGlobalInstructionsProfile({
     throw new Error(`Instruction profile already exists: ${next}`);
   }
   await writeInstructionsFile(destination, await readFile(source));
-  return selectGlobalInstructionsProfile({
-    vaultPath,
-    deviceId,
-    profile: next,
-  });
+  try {
+    return await selectGlobalInstructionsProfile({
+      vaultPath,
+      deviceId,
+      profile: next,
+    });
+  } catch (error) {
+    const recovery = `Profile ${next} is retained at ${destination}. After repairing the error, select this profile with skillsync instructions use.`;
+    let unused;
+    try {
+      unused = (await listUnusedGlobalInstructionProfiles(vaultPath))
+        .some((profile) => profile.id === next);
+      if (unused) await removePath(destination);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError],
+        `${error.message}\nFork cleanup also failed: ${cleanupError.message}\n${recovery}`);
+    }
+    if (unused) throw error;
+    throw new Error(`${error.message}\n${recovery}`, { cause: error });
+  }
 }
 
 export async function addGlobalInstructionsPath({
