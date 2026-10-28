@@ -200,6 +200,8 @@ skillsync instructions fork workstation-personal
 
 Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and unmanaged global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups and never overwrites unmanaged replacements during background sync.
 
+If a fork fails before any device selects or reports its new profile, SkillSync removes that unused profile so the same fork command can retry. An already selected or partly applied fork stays complete; repair the reported error and select it with `skillsync instructions use <name>`.
+
 Disabling instructions on another device queues the change for its next sync. Status shows the pending disable and its last applied profile until that device applies the change.
 
 Instruction destinations are saved as absolute paths when you import, select, enable, or link a profile, so later commands keep using the same files from any directory. For a relative destination saved by an older version, reselect its profile from the original directory to anchor the existing paths.
