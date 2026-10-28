@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -16,7 +16,7 @@ import {
   scanTargets,
   uninstallSkill,
 } from '../src/core/device.js';
-import { git } from '../src/core/git.js';
+import { git, gitPrivatePath } from '../src/core/git.js';
 import { rebuildRegistry } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
@@ -27,7 +27,8 @@ async function makeSkill(directory, body = '# Standalone demo\n') {
   await writeFile(path.join(directory, 'SKILL.md'), body);
 }
 
-async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = false, pendingConflict = false } = {}) {
+async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = false, pendingConflict = false,
+  action = 'uninstall', confirmed = true } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-local-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -64,10 +65,13 @@ async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = fa
   const configDir = path.join(home, '.config', 'skillsync');
   await mkdir(configDir, { recursive: true });
   await writeFile(path.join(configDir, 'config.json'), JSON.stringify({ version: 1, repoPath: vaultPath, deviceId: 'local' }));
+  const confirmationMessage = action === 'update'
+    ? 'Replace 1 local detected skill folder with vault-managed links/copies?'
+    : 'Uninstall demo from this device?';
   await writeFile(path.join(root, 'prompts.mjs'), `let menus = 0;
 export async function select({message}) {
   if (message === 'SkillSync') return menus++ === 0 ? 'installed' : 'quit';
-  if (message === 'Manage 1 selected skill') return 'uninstall';
+  if (message === 'Manage 1 selected skill') return ${JSON.stringify(action)};
   throw Error('Unexpected select: ' + message);
 }
 export async function checkbox({message}) {
@@ -75,8 +79,8 @@ export async function checkbox({message}) {
   throw Error('Unexpected checkbox: ' + message);
 }
 export async function confirm({message, default: defaultValue}) {
-  if (message !== 'Uninstall demo from this device?' || defaultValue !== false) throw Error('Unexpected confirmation');
-  return true;
+  if (message !== ${JSON.stringify(confirmationMessage)} || defaultValue !== false) throw Error('Unexpected confirmation');
+  return ${JSON.stringify(confirmed)};
 }
 export async function input() { throw Error('Unexpected input'); }
 `);
@@ -235,3 +239,51 @@ test('installed can read shared device reports without private filesystem paths'
 
   assert.match(stdout, /demo  \[managed: codex \| local: codex \| in vault\]/);
 });
+
+for (const settings of [
+  { mode: 'symlink', pendingConflict: true, confirmed: true },
+  { mode: 'copy', pendingConflict: true, confirmed: true },
+  { mode: 'symlink', pendingConflict: true, confirmed: false },
+  { mode: 'symlink', pendingConflict: false, confirmed: true },
+]) {
+  test(`selected vault update confirms before applying a local replacement ${JSON.stringify(settings)}`, async (t) => {
+    const { targetPath, vaultPath, options, uninstall: update } = await fixture(t, { ...settings, action: 'update' });
+    const local = path.join(targetPath, 'demo');
+    if (!settings.pendingConflict) {
+      await uninstallSkill({ ...options, skillName: 'demo' });
+      await applyLinks(options);
+      await makeSkill(local);
+    }
+    await scanTargets(options);
+    const original = await readFile(path.join(local, 'SKILL.md'), 'utf8');
+    const desiredPath = path.join(vaultPath, 'devices', 'local.json');
+    const desired = await readFile(desiredPath, 'utf8');
+    const beforeHead = await git(['rev-parse', 'HEAD'], vaultPath);
+
+    const { stdout } = await update();
+
+    if (!settings.confirmed) {
+      assert.doesNotMatch(stdout, /Updated from vault/);
+      assert.equal((await lstat(local)).isSymbolicLink(), false);
+      assert.equal(await readFile(path.join(local, 'SKILL.md'), 'utf8'), original);
+      assert.equal(await readFile(desiredPath, 'utf8'), desired);
+      assert.deepEqual(await git(['rev-parse', 'HEAD'], vaultPath), beforeHead);
+      assert.deepEqual(await git(['rev-parse', 'origin/main'], vaultPath), beforeHead);
+      return;
+    }
+    assert.match(stdout, /Updated from vault: demo/);
+    assert.deepEqual((await loadDevice(vaultPath, 'local')).installed, { demo: ['codex'] });
+    assert.equal((await lstat(local)).isSymbolicLink(), settings.mode === 'symlink');
+    assert.equal(await readFile(path.join(local, 'SKILL.md'), 'utf8'), '# Vault demo\n');
+    if (settings.mode === 'copy') {
+      assert.equal(JSON.parse(await readFile(path.join(local, '.skillsync-owned.json'), 'utf8')).skill, 'demo');
+    }
+    const backups = await gitPrivatePath(vaultPath, 'transactions', 'backups', 'local');
+    const manifests = await Promise.all((await readdir(backups)).map(async (id) => (
+      JSON.parse(await readFile(path.join(backups, id, 'manifest.json'), 'utf8'))
+    )));
+    const saved = manifests.flatMap((manifest) => manifest.entries).find((entry) => entry.destination === local && entry.type === 'directory');
+    assert.ok(saved);
+    assert.equal(await readFile(path.join(saved.stored, 'SKILL.md'), 'utf8'), original);
+  });
+}

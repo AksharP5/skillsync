@@ -2289,7 +2289,7 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
     return;
   }
 
-  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
+  await syncVault({ vaultPath: config.repoPath, pushChanges: false });
 
   const replacements = updatable.flatMap((skill) => removableDetectedTargets(device, skill, { onlyInVault: true }).filter((target) => target.removable));
   let replaceUnmanagedPaths = [];
