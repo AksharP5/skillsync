@@ -52,6 +52,26 @@ test('previewing empty packs leaves existing generated files untouched', async (
   assert.deepEqual(await readdir(path.join(vaultPath, 'groups')), []);
 });
 
+test('malformed group configuration does not replace generated files', async (t) => {
+  for (const config of [
+    null, [], true, 42, 'groups',
+    { packs: [] }, { packs: false }, { packs: 'starter' },
+    { packs: { kept: 42 } }, { packs: { kept: { skills: null } } },
+    { packs: { kept: [42] } },
+  ]) {
+    await t.test(JSON.stringify(config), async (t) => {
+      const vaultPath = await createVault(t, { kept: ['example'] });
+      const files = ['README.md', 'GROUPS.md', 'packs/kept.json', 'groups/kept.md'];
+      const before = await Promise.all(files.map((file) => readFile(path.join(vaultPath, file), 'utf8')));
+      await writeJson(path.join(vaultPath, 'groups.json'), config);
+
+      await assert.rejects(generateGroups({ vaultPath }), /groups\.json/);
+
+      assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(vaultPath, file), 'utf8'))), before);
+    });
+  }
+});
+
 test('obsolete pack cleanup preserves unmanaged files and edited group pages', async (t) => {
   const vaultPath = await createVault(t, { edited: ['example'] });
   const editedPage = '# My own pack notes\n';
