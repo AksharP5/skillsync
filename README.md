@@ -200,6 +200,10 @@ skillsync instructions fork workstation-personal
 
 Editing a shared profile updates every device assigned to that profile. View profiles, assignments, pending changes, and unmanaged global files with `skillsync instructions status`. SkillSync preserves replaced local paths as timestamped backups and never overwrites unmanaged replacements during background sync.
 
+If instruction setup fails, SkillSync restores backed-up local files at destinations that are still missing, so you can repair the reported error and retry. Successfully created managed links stay in place with their original backups retained. Automatic Claude adoption prepares its managed link before other instruction projections run, and restores the original local file if saving its configuration fails. If restoration also fails, the error identifies the retained backups and their original destinations.
+
+If a fork fails before any device selects or reports its new profile, SkillSync removes that unused profile so the same fork command can retry. An already selected or partly applied fork stays complete; repair the reported error and select it with `skillsync instructions use <name>`.
+
 Disabling instructions on another device queues the change for its next sync. Status shows the pending disable and its last applied profile until that device applies the change.
 
 Instruction destinations are saved as absolute paths when you import, select, enable, or link a profile, so later commands keep using the same files from any directory. For a relative destination saved by an older version, reselect its profile from the original directory to anchor the existing paths.
@@ -434,9 +438,13 @@ skillsync uninstall my-skill
 
 With no destination options, uninstall removes all assignments for that skill on the current device, including global installs. Use `--device id` or `-d id` to select another device, `--target codex,claude` or `-t codex,claude` to select targets, or `--global` to remove only the global assignment. Value-taking options require a non-empty value rather than another flag, and an explicit target list must contain at least one name. Uninstall rejects missing values and empty target lists before vault initialization, sync, or removal.
 
+Use **Sync selected from vault** in **Installed on this device** to update skills at `<install-folder>/<skill-name>`, including standalone folders left after a refused install. SkillSync asks for confirmation and retains a recoverable backup before replacement. Nested or differently named detected folders are reported as skipped and stay unchanged; confirmed uninstall still supports those folders.
+
 In the **Installed on this device** menu and `skillsync scan`, a local skill is classified as managed only at its configured projection path with a vault-owned symlink or copy marker, including when its containing directory has a symlink alias. Same-named standalone folders and folders left after a refused install remain unmanaged. Uninstall asks for confirmation before removing standalone folders. Standalone removal skips folders outside the target's install folder, the install folder itself, and symlinked paths.
 
 Standalone removal checks directory permissions before deleting files or changing that skill's assignments. If a folder or its parent is read-only, make it writable and retry; SkillSync does not change those permissions automatically.
+
+Selected vault updates and confirmed standalone removal also accept different scan and install aliases of the same physical folder. Updates still require confirmation before replacing a standalone folder and preserve its contents in a recoverable backup.
 
 Delete it from the vault and every device:
 
@@ -445,6 +453,8 @@ skillsync delete my-skill
 ```
 
 After confirmation, deletion pulls the vault before removing the skill and its assignments, including assignments pushed by other devices since this checkout last synced. If the pull fails, deletion stops before removing the skill or changing assignments. Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
+
+Vault deletion validates every desired device document before rewriting assignments. If a document is malformed, repair the reported file and retry.
 
 Explicit deletion and automatic cleanup support imported read-only directories, including the skill root. They retain the complete skill with its original permissions under Git's private `skillsync/deleted-skills/` directory, or `.skillsync-local/deleted-skills/` in a plain vault. These backups stay on this device, are not indexed as skills, and are not automatically pruned. With Git metadata on another filesystem, deletion stages beside the skill and copies the backup into Git metadata before updating assignments and the registry.
 
