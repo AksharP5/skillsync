@@ -163,6 +163,8 @@ skillsync instructions link ~/.cursor/rules/skillsync.mdc
 
 SkillSync generates this rule from the selected `AGENTS.md` profile. Destinations named `skillsync.mdc` use Cursor's rule format, including paths through symlinked directories. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile.
 
+If refreshing a generated Cursor rule fails, SkillSync keeps the previous complete rule until a later successful sync.
+
 Unlinking or disabling leaves a standalone Cursor rule with the latest profile content, even if the generated file is missing. To recover a replaced Cursor link, use the `--use-vault` command above with `~/.cursor/rules/skillsync.mdc` as the path.
 
 Cursor CLI discovers rules in parent directories, so this home-directory rule applies to projects beneath your home. For projects outside your home directory, use a project-level Cursor rule or `AGENTS.md`. `~/.cursor/AGENTS.md` is not a global instruction location.
@@ -242,6 +244,8 @@ The other device installs missing plugins on its next sync. With auto-adoption e
 SkillSync derives this union from separate per-device reports instead of having devices rewrite one profile file. Concurrent device syncs therefore update different files. Product-managed, disabled, cached, and hosted-session-only plugins never join the union.
 
 Device reports contain only durable user-managed plugin selectors and whether each plugin is enabled. Codex-owned packages, package versions, authentication metadata, and temporary inspection failures stay local, so routine Codex updates do not create vault commits. A failed inspection also leaves the device's last successful report unchanged. Missing inventory lists or entries without plugin identifiers count as inspection failures.
+
+Plugin listing reports directory read failures instead of treating unreadable profiles or assignments as empty.
 
 Automatic adoption is off unless `--auto-adopt` is supplied. Change it later with:
 
