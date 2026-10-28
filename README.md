@@ -416,7 +416,7 @@ Malformed device assignments or inventories stop sync with an error naming the s
 
 Run `skillsync groups` to regenerate pack manifests and group pages from `groups.json`. Packs removed from the configuration, or left without available skills, disappear from the generated outputs. Cleanup preserves unmanaged files and edited group pages.
 
-`groups.json` must be an object. Its optional `packs` field maps pack names to arrays of skill names or objects with a `skills` array. Invalid configuration stops generation before commits or generated-file changes; use `"packs": {}` to remove every generated pack explicitly.
+`groups.json` must be an object. Its optional `packs` field maps pack names to arrays of skill names or objects with a required `skills` array. Missing `skills` is an error; use `"skills": []` for an intentionally empty pack. Invalid configuration stops generation before commits or generated-file changes; use `"packs": {}` to remove every generated pack explicitly.
 
 `skillsync pack list` reads existing pack manifests without initializing or changing the vault. Run `skillsync groups` to apply changes from `groups.json` before listing or installing updated packs.
 
