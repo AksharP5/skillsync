@@ -266,6 +266,9 @@ export async function reconcileGlobalInstructionProviders({
     }
     const backup = info && !owned ? await backupPath(destination) : null;
     try {
+      if (!info || backup) {
+        await createOwnedInstructionsSymlink(source, destination);
+      }
       await configureGlobalInstructions({
         vaultPath,
         deviceId,
@@ -458,10 +461,11 @@ async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
   return backups;
 }
 
-async function restoreInstructionBackups(backups, error) {
+async function restoreInstructionBackups(backups, error, { onlyMissing = false } = {}) {
   const rollbackErrors = [];
   for (const { destination, backup } of [...backups].reverse()) {
     try {
+      if (onlyMissing && await pathInfo(destination)) continue;
       await rename(backup, destination);
     } catch (rollbackError) {
       rollbackErrors.push(new Error(
@@ -550,10 +554,10 @@ export async function selectGlobalInstructionsProfile({
       automaticPaths: (device.instructions.agents?.auto_paths || []).map(resolvedDestination),
       appliedProfile: device.instructions.agents?.applied_profile,
     });
+    await applyGlobalInstructions({ vaultPath, deviceId });
   } catch (error) {
-    await restoreInstructionBackups(backups, error);
+    await restoreInstructionBackups(backups, error, { onlyMissing: true });
   }
-  await applyGlobalInstructions({ vaultPath, deviceId });
   return {
     ...selected,
     paths,
