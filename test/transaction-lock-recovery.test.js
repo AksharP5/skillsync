@@ -68,7 +68,8 @@ test('an owner-file write failure releases the acquired lock and preserves the o
   const failure = Object.assign(new Error('Owner filesystem is full'), { code: 'ENOSPC' });
   const originalWrite = fs.writeFile;
   const mock = t.mock.method(fs, 'writeFile', async (file, ...args) => {
-    if (path.dirname(file) === lock) throw failure;
+    if (path.dirname(path.dirname(file)) === path.dirname(lock)
+      && path.basename(path.dirname(file)).startsWith('.lock-')) throw failure;
     return originalWrite(file, ...args);
   });
   syncBuiltinESMExports();
@@ -79,6 +80,7 @@ test('an owner-file write failure releases the acquired lock and preserves the o
     syncBuiltinESMExports();
   }
   await assert.rejects(() => lstat(lock), { code: 'ENOENT' });
+  assert.deepEqual((await readdir(path.dirname(lock))).filter(name => name.startsWith('.lock-')), []);
   assert.equal(await readFile(path.join(destination, 'SKILL.md'), 'utf8'), '# Old\n');
 
   await applyFilesystemPlan(options);
@@ -126,7 +128,8 @@ test('a failed lock acquisition never removes an existing writer lock', async (t
   const failure = Object.assign(new Error('Cannot create the lock'), { code: 'EACCES', path: lock });
   const originalMkdir = fs.mkdir;
   const mock = t.mock.method(fs, 'mkdir', async (directory, ...args) => {
-    if (directory === lock) throw failure;
+    if (path.dirname(directory) === path.dirname(lock)
+      && path.basename(directory).startsWith('.lock-')) throw failure;
     return originalMkdir(directory, ...args);
   });
   syncBuiltinESMExports();
