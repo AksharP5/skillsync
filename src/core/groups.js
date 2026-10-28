@@ -153,11 +153,30 @@ export async function generateGroups({ vaultPath, write = true } = {}) {
   };
 }
 
-async function loadGroupsConfig(vaultPath) {
+export async function loadGroupsConfig(vaultPath) {
   const configPath = path.join(vaultPath, GROUPS_CONFIG_FILE);
   if (!await exists(configPath)) return {};
-  const value = await readJson(configPath, {});
-  return value && typeof value === 'object' ? value : {};
+  try {
+    const value = await readJson(configPath);
+    const object = (candidate) => candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate);
+    if (!object(value)) throw new Error('Group configuration must be an object');
+    if (value.packs !== undefined) {
+      if (!object(value.packs)) throw new Error('packs must be an object keyed by pack name');
+      for (const [name, pack] of Object.entries(value.packs)) {
+        assertSafePathSegment(name, 'Pack name');
+        if (!Array.isArray(pack) && !object(pack)) {
+          throw new Error(`Pack ${name} must be a skill array or an object`);
+        }
+        const skills = Array.isArray(pack) ? pack : pack.skills;
+        if (skills !== undefined && (!Array.isArray(skills) || !skills.every((skill) => typeof skill === 'string'))) {
+          throw new Error(`Skills for pack ${name} must be an array of names`);
+        }
+      }
+    }
+    return value;
+  } catch (error) {
+    throw new Error(`Cannot read group configuration at ${configPath}: ${error.message}`, { cause: error });
+  }
 }
 
 function normalizePacks(packConfig, skillNames) {
