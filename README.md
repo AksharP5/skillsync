@@ -297,6 +297,8 @@ skillsync import hermes
 
 Imports skip existing managed projections at configured target paths, so rerunning an import only processes standalone skills.
 
+Manual `add` and agent imports recognize existing skills at configured targets through directory aliases and convert them to managed projections.
+
 An unreadable source directory stops discovery before any skills are imported. Repair the reported permission or I/O error and retry. A missing agent skills directory still reports that no skills were found.
 
 OpenCode setup detection and imports use `$XDG_CONFIG_HOME/opencode/skills` when `XDG_CONFIG_HOME` is an absolute path. Otherwise, they use `~/.config/opencode/skills`. Rerunning setup preserves paths for targets you have already configured.
