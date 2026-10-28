@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -235,3 +235,47 @@ test('installed can read shared device reports without private filesystem paths'
 
   assert.match(stdout, /demo  \[managed: codex \| local: codex \| in vault\]/);
 });
+
+for (const restriction of ['assets', 'parent']) {
+  test(`uninstall refuses read-only standalone ${restriction} before changing files or assignments`, {
+    skip: !process.getuid || process.getuid() === 0,
+  }, async (t) => {
+    const { targetPath, vaultPath, options, uninstall } = await fixture(t);
+    const writable = path.join(targetPath, 'a-local', 'demo');
+    const guarded = path.join(targetPath, 'z-local', 'demo');
+    await makeSkill(writable);
+    await makeSkill(guarded);
+    await writeFile(path.join(guarded, 'notes.md'), '# Keep these notes\n');
+    const assets = path.join(guarded, 'assets');
+    await mkdir(assets);
+    await writeFile(path.join(assets, 'data.txt'), 'Keep this data\n');
+    await scanTargets(options);
+    const desiredPath = path.join(vaultPath, 'devices', 'local.json');
+    const desired = await readFile(desiredPath, 'utf8');
+    const files = [path.join(writable, 'SKILL.md'), path.join(guarded, 'SKILL.md'),
+      path.join(guarded, 'notes.md'), path.join(assets, 'data.txt')];
+    const before = await Promise.all(files.map((file) => readFile(file, 'utf8')));
+    const restricted = restriction === 'assets' ? assets : path.dirname(guarded);
+    await chmod(restricted, 0o555);
+    try {
+      await assert.rejects(uninstall(), (error) => {
+        assert.equal(error.code, 1);
+        assert.match(error.stderr, /EACCES/);
+        return true;
+      });
+      assert.deepEqual(await Promise.all(files.map((file) => readFile(file, 'utf8'))), before);
+      assert.equal(await readFile(desiredPath, 'utf8'), desired);
+      assert.equal(await readFile(path.join(targetPath, 'demo', 'SKILL.md'), 'utf8'), '# Vault demo\n');
+    } finally {
+      await chmod(restricted, 0o755);
+    }
+
+    await uninstall();
+
+    for (const directory of [writable, guarded, path.join(targetPath, 'demo')]) {
+      await assert.rejects(lstat(directory), { code: 'ENOENT' });
+    }
+    assert.deepEqual((await loadDevice(vaultPath, 'local')).installed, {});
+    assert.equal(await readFile(path.join(vaultPath, 'skills', 'demo', 'SKILL.md'), 'utf8'), '# Vault demo\n');
+  });
+}

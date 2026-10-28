@@ -424,6 +424,8 @@ With no destination options, uninstall removes all assignments for that skill on
 
 In the **Installed on this device** menu and `skillsync scan`, a local skill is classified as managed only at its configured projection path with a vault-owned symlink or copy marker, including when its containing directory has a symlink alias. Same-named standalone folders and folders left after a refused install remain unmanaged. Uninstall asks for confirmation before removing standalone folders. Standalone removal skips folders outside the target's install folder, the install folder itself, and symlinked paths.
 
+Standalone removal checks directory permissions before deleting files or changing that skill's assignments. If a folder or its parent is read-only, make it writable and retry; SkillSync does not change those permissions automatically.
+
 Delete it from the vault and every device:
 
 ```bash
