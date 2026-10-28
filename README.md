@@ -319,6 +319,8 @@ Automatic adoption requires a folder directly inside the target whose folder nam
 
 Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.
 
+Before moving an existing target, SkillSync checks the proposed destination for conflicts and required write access. A refused move leaves the existing target path and projections intact; fix the destination and repeat the move.
+
 Disable auto-adoption for every target on the current device:
 
 ```bash
