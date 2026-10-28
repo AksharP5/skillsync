@@ -243,6 +243,8 @@ SkillSync derives this union from separate per-device reports instead of having 
 
 Device reports contain only durable user-managed plugin selectors and whether each plugin is enabled. Codex-owned packages, package versions, authentication metadata, and temporary inspection failures stay local, so routine Codex updates do not create vault commits. A failed inspection also leaves the device's last successful report unchanged. Missing inventory lists or entries without plugin identifiers count as inspection failures.
 
+Plugin listing reports directory read failures instead of treating unreadable profiles or assignments as empty.
+
 Automatic adoption is off unless `--auto-adopt` is supplied. Change it later with:
 
 ```bash
