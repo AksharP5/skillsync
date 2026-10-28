@@ -163,6 +163,8 @@ skillsync instructions link ~/.cursor/rules/skillsync.mdc
 
 SkillSync generates this rule from the selected `AGENTS.md` profile. Destinations named `skillsync.mdc` use Cursor's rule format, including paths through symlinked directories. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile.
 
+If refreshing a generated Cursor rule fails, SkillSync keeps the previous complete rule until a later successful sync.
+
 Unlinking or disabling leaves a standalone Cursor rule with the latest profile content, even if the generated file is missing. To recover a replaced Cursor link, use the `--use-vault` command above with `~/.cursor/rules/skillsync.mdc` as the path.
 
 Cursor CLI discovers rules in parent directories, so this home-directory rule applies to projects beneath your home. For projects outside your home directory, use a project-level Cursor rule or `AGENTS.md`. `~/.cursor/AGENTS.md` is not a global instruction location.
@@ -243,6 +245,8 @@ SkillSync derives this union from separate per-device reports instead of having 
 
 Device reports contain only durable user-managed plugin selectors and whether each plugin is enabled. Codex-owned packages, package versions, authentication metadata, and temporary inspection failures stay local, so routine Codex updates do not create vault commits. A failed inspection also leaves the device's last successful report unchanged. Missing inventory lists or entries without plugin identifiers count as inspection failures.
 
+Plugin listing reports directory read failures instead of treating unreadable profiles or assignments as empty.
+
 Automatic adoption is off unless `--auto-adopt` is supplied. Change it later with:
 
 ```bash
@@ -302,6 +306,8 @@ An unreadable source directory stops discovery before any skills are imported. R
 OpenCode setup detection and imports use `$XDG_CONFIG_HOME/opencode/skills` when `XDG_CONFIG_HOME` is an absolute path. Otherwise, they use `~/.config/opencode/skills`. Rerunning setup preserves paths for targets you have already configured.
 
 When a same-named skill already exists in the vault, SkillSync keeps identical content as one skill and asks before resolving different content. Non-interactive commands skip different-content conflicts unless you choose a conflict policy explicitly. Renaming with `--conflict rename --as new-name` preserves the original source and honors `--target` and `--global` for the renamed skill.
+
+Repeating `add` for unchanged content with the same targets preserves its registry timestamp and vault history. Adding a destination or overwriting changed content still syncs normally.
 
 Managed links and copies are detected by their vault name, even when `SKILL.md` retains the source name. Unmanaged folders still use `SKILL.md` frontmatter when present.
 
@@ -410,7 +416,7 @@ Malformed device assignments or inventories stop sync with an error naming the s
 
 Run `skillsync groups` to regenerate pack manifests and group pages from `groups.json`. Packs removed from the configuration, or left without available skills, disappear from the generated outputs. Cleanup preserves unmanaged files and edited group pages.
 
-`groups.json` must be an object. Its optional `packs` field maps pack names to arrays of skill names or objects with a `skills` array. Invalid configuration stops generation before commits or generated-file changes; use `"packs": {}` to remove every generated pack explicitly.
+`groups.json` must be an object. Its optional `packs` field maps pack names to arrays of skill names or objects with a required `skills` array. Missing `skills` is an error; use `"skills": []` for an intentionally empty pack. Invalid configuration stops generation before commits or generated-file changes; use `"packs": {}` to remove every generated pack explicitly.
 
 `skillsync pack list` reads existing pack manifests without initializing or changing the vault. Run `skillsync groups` to apply changes from `groups.json` before listing or installing updated packs.
 
@@ -512,7 +518,7 @@ skillsync installed --device workstation
 
 The background service syncs when it starts and then checks every 120 seconds. It rereads local configuration before each sync, so changing the selected vault or device takes effect on the next cycle. If the updated configuration is invalid, that cycle reports an error and retries after repair. It uses a macOS LaunchAgent or a Linux systemd user service.
 
-Registry hashes exclude untracked files ignored by Git, so local generated files do not cause repeated sync commits across devices. Tracked files still count even when an ignore rule matches them. Copy-mode overwrite protection continues to check every deployed file, including ignored files. The first sync after upgrading may correct an existing hash once; upgrade every device to prevent older versions from restoring it.
+Registry hashes exclude untracked files ignored by Git, including filenames with Unicode characters, so local generated files do not cause repeated sync commits across devices. Tracked files still count even when an ignore rule matches them. Copy-mode overwrite protection continues to check every deployed file, including ignored files. The first sync after upgrading may correct an existing hash once; upgrade every device to prevent older versions from restoring it.
 
 Verify it on macOS:
 
