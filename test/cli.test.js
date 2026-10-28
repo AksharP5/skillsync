@@ -33,6 +33,7 @@ import {
 } from '../src/core/device.js';
 import { exists, writeJson } from '../src/core/fs.js';
 import { git, gitPrivatePath } from '../src/core/git.js';
+import { generateGroups } from '../src/core/groups.js';
 import {
   assignPluginProfile,
   loadPluginAssignment,
@@ -43,6 +44,37 @@ import {
 import { ensureVault, loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
+
+test('group generation rejects malformed config before committing or deleting packs', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, 'vault');
+  await writeConfig(home, vault);
+  await makeSkill(path.join(vault, 'skills'), 'demo');
+  await rebuildRegistry(vault);
+  await writeJson(path.join(vault, 'groups.json'), { packs: { starter: ['demo'] } });
+  await generateGroups({ vaultPath: vault });
+  await git(['add', '-A'], vault);
+  await git(['commit', '-m', 'generated pack fixture'], vault);
+  await git(['push'], vault);
+  const beforeHead = await git(['rev-parse', 'HEAD'], vault);
+  const files = ['README.md', 'GROUPS.md', 'packs/starter.json', 'groups/starter.md'];
+  const before = await Promise.all(files.map((file) => readFile(path.join(vault, file), 'utf8')));
+  await writeJson(path.join(vault, 'groups.json'), null);
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'groups'], { env: cliEnv(home) }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /groups\.json/);
+      return true;
+    },
+  );
+
+  assert.deepEqual(await git(['rev-parse', 'HEAD'], vault), beforeHead);
+  assert.deepEqual(await git(['rev-parse', 'origin/main'], vault), beforeHead);
+  assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(vault, file), 'utf8'))), before);
+});
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-cli-test-'));

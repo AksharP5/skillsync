@@ -163,6 +163,8 @@ skillsync instructions link ~/.cursor/rules/skillsync.mdc
 
 SkillSync generates this rule from the selected `AGENTS.md` profile. Destinations named `skillsync.mdc` use Cursor's rule format, including paths through symlinked directories. Edit the profile and run `skillsync sync` to refresh the rule; the generated `.mdc` file cannot be imported as a profile.
 
+If refreshing a generated Cursor rule fails, SkillSync keeps the previous complete rule until a later successful sync.
+
 Unlinking or disabling leaves a standalone Cursor rule with the latest profile content, even if the generated file is missing. To recover a replaced Cursor link, use the `--use-vault` command above with `~/.cursor/rules/skillsync.mdc` as the path.
 
 Cursor CLI discovers rules in parent directories, so this home-directory rule applies to projects beneath your home. For projects outside your home directory, use a project-level Cursor rule or `AGENTS.md`. `~/.cursor/AGENTS.md` is not a global instruction location.
@@ -409,6 +411,8 @@ Malformed device assignments or inventories stop sync with an error naming the s
 ## Skill packs
 
 Run `skillsync groups` to regenerate pack manifests and group pages from `groups.json`. Packs removed from the configuration, or left without available skills, disappear from the generated outputs. Cleanup preserves unmanaged files and edited group pages.
+
+`groups.json` must be an object. Its optional `packs` field maps pack names to arrays of skill names or objects with a `skills` array. Invalid configuration stops generation before commits or generated-file changes; use `"packs": {}` to remove every generated pack explicitly.
 
 `skillsync pack list` reads existing pack manifests without initializing or changing the vault. Run `skillsync groups` to apply changes from `groups.json` before listing or installing updated packs.
 

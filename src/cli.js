@@ -45,7 +45,7 @@ import {
   removePath,
 } from './core/fs.js';
 import { cloneRepo, commandExists, commitAllIfChanged, gh, git, isGitRepo, push, run } from './core/git.js';
-import { generateGroups } from './core/groups.js';
+import { generateGroups, loadGroupsConfig } from './core/groups.js';
 import {
   DEFAULT_CLAUDE_INSTRUCTIONS_PATH,
   DEFAULT_CURSOR_RULE_PATH,
@@ -562,6 +562,7 @@ function localSkillTargetSummary(skill) {
 
 async function groupsCommand(rest) {
   const config = await configured();
+  await loadGroupsConfig(config.repoPath);
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
   await refreshChangedRegistryEntries(config.repoPath);
   const result = await generateGroups({ vaultPath: config.repoPath, write: true });
