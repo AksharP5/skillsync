@@ -2158,7 +2158,7 @@ async function installedScreen(config) {
     loop: false,
     pageSize: 3,
     choices: [
-      { name: 'Sync selected from vault', value: 'update', description: 'Replace same-named local skills with the vault version.' },
+      { name: 'Sync selected from vault', value: 'update', description: 'Update skills at their configured install paths.' },
       { name: 'Uninstall from this device', value: 'uninstall', description: 'Remove selected skills from this device only.' },
       { name: 'Back', value: 'back' },
     ],
@@ -2298,13 +2298,38 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
     return;
   }
 
-  await syncVault({ vaultPath: config.repoPath, pushChanges: false });
-
   const updates = [];
+  const skippedPaths = [];
   for (const skill of updatable) {
     const detected = await removableDetectedTargets(device, skill, { onlyInVault: true });
-    updates.push({ skill, replacements: detected.filter((target) => target.removable) });
+    const candidates = detected.map((target) => {
+      if (!target.removable) return target;
+      const destination = path.join(target.installRoot, skill.name);
+      if (target.absolutePath === destination) return target;
+      return { ...target, removable: false, reason: `vault updates use ${destination}` };
+    });
+    const { approved, skipped: unavailable } = await inspectRemovableTargetPaths(candidates);
+    skippedPaths.push(...unavailable);
+    const targets = new Set(skill.managedTargets);
+    for (const target of skill.detectedTargets) {
+      if (target.managed && target.inVault) targets.add(target.targetName);
+    }
+    for (const target of approved) targets.add(target.targetName);
+    if (targets.size) {
+      updates.push({ skill, replacements: approved, targets: [...targets].sort() });
+    }
   }
+  for (const target of skippedPaths) {
+    const location = target.absolutePath || `${target.targetName}/${target.path || '.'}`;
+    console.log(`Skipped ${location}: ${target.reason}.`);
+  }
+  if (!updates.length) {
+    console.log(`\nNo selected skills have an updatable local target.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
+    return;
+  }
+
+  await syncVault({ vaultPath: config.repoPath, pushChanges: false });
+
   const replacementCount = updates.reduce((count, update) => count + update.replacements.length, 0);
   if (replacementCount) {
     const confirmed = await confirm({
@@ -2315,22 +2340,14 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
   }
 
   const replaceUnmanagedPaths = [];
-  for (const { skill, replacements } of updates) {
-    const { approved } = await inspectRemovableTargetPaths(replacements);
-    replaceUnmanagedPaths.push(...approved.map((target) => target.absolutePath));
-    const targets = new Set(skill.managedTargets);
-    for (const target of skill.detectedTargets) {
-      if (target.managed && target.inVault) targets.add(target.targetName);
-    }
-    for (const target of approved) targets.add(target.targetName);
-    if (targets.size) {
-      await installSkill({
-        vaultPath: config.repoPath,
-        deviceId: config.deviceId,
-        skillName: skill.name,
-        targets: [...targets].sort(),
-      });
-    }
+  for (const { skill, replacements, targets } of updates) {
+    replaceUnmanagedPaths.push(...replacements.map((target) => target.absolutePath));
+    await installSkill({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      skillName: skill.name,
+      targets,
+    });
   }
 
   await syncVault({
@@ -2339,7 +2356,7 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
     pull: false,
     replaceUnmanagedPaths,
   });
-  console.log(`\nUpdated from vault: ${updatable.map((skill) => skill.name).join(', ')}.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
+  console.log(`\nUpdated from vault: ${updates.map(({ skill }) => skill.name).join(', ')}.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
 }
 
 async function chooseTargets(config) {

@@ -430,7 +430,7 @@ skillsync uninstall my-skill
 
 With no destination options, uninstall removes all assignments for that skill on the current device, including global installs. Use `--device id` or `-d id` to select another device, `--target codex,claude` or `-t codex,claude` to select targets, or `--global` to remove only the global assignment. Value-taking options require a non-empty value rather than another flag, and an explicit target list must contain at least one name. Uninstall rejects missing values and empty target lists before vault initialization, sync, or removal.
 
-Use **Sync selected from vault** in **Installed on this device** to replace standalone folders with the vault version, including folders left after a refused install. SkillSync asks for confirmation and retains a recoverable backup before replacement.
+Use **Sync selected from vault** in **Installed on this device** to update skills at `<install-folder>/<skill-name>`, including standalone folders left after a refused install. SkillSync asks for confirmation and retains a recoverable backup before replacement. Nested or differently named detected folders are reported as skipped and stay unchanged; confirmed uninstall still supports those folders.
 
 In the **Installed on this device** menu and `skillsync scan`, a local skill is classified as managed only at its configured projection path with a vault-owned symlink or copy marker, including when its containing directory has a symlink alias. Same-named standalone folders and folders left after a refused install remain unmanaged. Uninstall asks for confirmation before removing standalone folders. Standalone removal skips folders outside the target's install folder, the install folder itself, and symlinked paths.
 

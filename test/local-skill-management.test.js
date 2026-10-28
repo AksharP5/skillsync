@@ -28,7 +28,7 @@ async function makeSkill(directory, body = '# Standalone demo\n') {
 }
 
 async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = false, targetAlias = false, pendingConflict = false,
-  action = 'uninstall', confirmed = true } = {}) {
+  action = 'uninstall', confirmed = true, allowConfirmation = true } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-local-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -84,9 +84,11 @@ export async function checkbox({message}) {
   throw Error('Unexpected checkbox: ' + message);
 }
 export async function confirm({message, default: defaultValue}) {
+  if (!${JSON.stringify(allowConfirmation)}) throw Error('Unexpected replacement confirmation');
   if (message !== ${JSON.stringify(confirmationMessage)} || defaultValue !== false) throw Error('Unexpected confirmation');
   return ${JSON.stringify(confirmed)};
 }
+
 export async function input() { throw Error('Unexpected input'); }
 `);
   await writeFile(path.join(root, 'loader.mjs'), `export async function resolve(specifier, context, nextResolve) {
@@ -347,4 +349,74 @@ for (const mode of ['symlink', 'copy']) {
       assert.equal(await readFile(path.join(sibling, 'SKILL.md'), 'utf8'), '# Standalone demo\n');
     });
   }
+}
+
+for (const mode of ['symlink', 'copy']) {
+  for (const settings of [
+    { location: 'nested/demo', assigned: false, scanAlias: true },
+    { location: 'nested/demo', assigned: true, targetAlias: true },
+    { location: 'different-folder', assigned: false },
+    { location: 'different-folder', assigned: true },
+  ]) {
+    test(`selected ${mode} update reports an unchanged nonmatching folder ${JSON.stringify(settings)}`, async (t) => {
+      const { targetPath, vaultPath, options, uninstall: update } = await fixture(t, {
+        ...settings, mode, action: 'update', allowConfirmation: false,
+      });
+      if (!settings.assigned) {
+        await uninstallSkill({ ...options, skillName: 'demo' });
+        await applyLinks(options);
+      }
+      const original = path.join(targetPath, settings.location);
+      const content = '---\nname: demo\n---\n# Standalone instructions\n';
+      await makeSkill(original, content);
+      await writeFile(path.join(original, 'notes.txt'), 'Keep my notes\n');
+      await scanTargets(options);
+      await git(['add', '-A'], vaultPath);
+      await git(['commit', '-m', 'standalone update fixture'], vaultPath);
+      await git(['push'], vaultPath);
+      const beforeHead = await git(['rev-parse', 'HEAD'], vaultPath);
+      const desired = await readFile(path.join(vaultPath, 'devices/local.json'), 'utf8');
+
+      const { stdout } = await update();
+
+      assert.match(stdout, /Skipped .*vault updates use/);
+      assert.ok(stdout.includes(original));
+      assert.equal(await readFile(path.join(original, 'SKILL.md'), 'utf8'), content);
+      assert.equal(await readFile(path.join(original, 'notes.txt'), 'utf8'), 'Keep my notes\n');
+      assert.equal((await lstat(original)).isSymbolicLink(), false);
+      assert.equal(await readFile(path.join(vaultPath, 'devices/local.json'), 'utf8'), desired);
+      if (settings.assigned) {
+        assert.match(stdout, /Updated from vault: demo/);
+        assert.equal(await readFile(path.join(targetPath, 'demo/SKILL.md'), 'utf8'), '# Vault demo\n');
+      } else {
+        assert.doesNotMatch(stdout, /Updated from vault/);
+        await assert.rejects(lstat(path.join(targetPath, 'demo')), { code: 'ENOENT' });
+        assert.deepEqual(await git(['rev-parse', 'HEAD'], vaultPath), beforeHead);
+        assert.deepEqual(await git(['rev-parse', 'origin/main'], vaultPath), beforeHead);
+      }
+      const backupRoot = await gitPrivatePath(vaultPath, 'transactions', 'backups', 'local');
+      for (const id of await readdir(backupRoot)) {
+        const manifest = JSON.parse(await readFile(path.join(backupRoot, id, 'manifest.json'), 'utf8'));
+        assert.equal(manifest.entries.some((entry) => entry.destination === original), false);
+      }
+    });
+  }
+
+  test(`selected ${mode} update confirms only a matching root folder beside a nested standalone`, async (t) => {
+    const { targetPath, vaultPath, options, uninstall: update } = await fixture(t, {
+      mode, pendingConflict: true, action: 'update',
+    });
+    const nested = path.join(targetPath, 'nested/demo');
+    await makeSkill(nested, '---\nname: demo\n---\n# Nested instructions\n');
+    await scanTargets(options);
+
+    const { stdout } = await update();
+
+    assert.ok(stdout.includes(nested));
+    assert.match(stdout, /Updated from vault: demo/);
+    assert.equal(await readFile(path.join(nested, 'SKILL.md'), 'utf8'), '---\nname: demo\n---\n# Nested instructions\n');
+    assert.equal(await readFile(path.join(targetPath, 'demo/SKILL.md'), 'utf8'), '# Vault demo\n');
+    assert.equal((await lstat(path.join(targetPath, 'demo'))).isSymbolicLink(), mode === 'symlink');
+    assert.deepEqual((await loadLocalDevice(vaultPath, 'local')).installed, { demo: ['codex'] });
+  });
 }
