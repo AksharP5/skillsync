@@ -492,6 +492,10 @@ Copy-mode updates, removal, and rollback support read-only skill directories, in
 
 New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
 
+Repairing a projection recovery error lets the next daemon cycle retry without a restart.
+
+Projection apply and rollback share a local lock. A competing live writer is refused; an abandoned writer's lock is recovered automatically before applying. Lock cleanup removes only its own lease, so concurrent recovery cannot remove a newer writer's lock. Locks from older releases remain readable, including the one-minute grace period for a writer still starting. Restart an older daemon when upgrading so all writers use the same locking protocol.
+
 Restore the most recent successful local projection apply in an emergency:
 
 ```bash
