@@ -25,7 +25,7 @@ test('generation removes packs deleted from config or left without available ski
     kept: ['example'],
   });
   await writeJson(path.join(vaultPath, 'groups.json'), {
-    packs: { empty: [], unavailable: ['missing'], kept: ['example'] },
+    packs: { empty: { title: 'Empty', skills: [] }, unavailable: ['missing'], kept: ['example'] },
   });
 
   const result = await generateGroups({ vaultPath });
@@ -58,6 +58,8 @@ test('malformed group configuration does not replace generated files', async (t)
     { packs: [] }, { packs: false }, { packs: 'starter' },
     { packs: { kept: 42 } }, { packs: { kept: { skills: null } } },
     { packs: { kept: [42] } },
+    { packs: { kept: { title: 'Kept' } } },
+    { packs: { kept: { title: 'Kept', skill: ['example'] } } },
   ]) {
     await t.test(JSON.stringify(config), async (t) => {
       const vaultPath = await createVault(t, { kept: ['example'] });
