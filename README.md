@@ -303,6 +303,8 @@ skillsync import hermes
 
 Imports skip existing managed projections at configured target paths, so rerunning an import only processes standalone skills.
 
+Manual `add` and agent imports recognize existing skills at configured targets through directory aliases and convert them to managed projections.
+
 An unreadable source directory stops discovery before any skills are imported. Repair the reported permission or I/O error and retry. A missing agent skills directory still reports that no skills were found.
 
 OpenCode setup detection and imports use `$XDG_CONFIG_HOME/opencode/skills` when `XDG_CONFIG_HOME` is an absolute path. Otherwise, they use `~/.config/opencode/skills`. Rerunning setup preserves paths for targets you have already configured.
@@ -323,7 +325,7 @@ The baseline tracks each skill's path, including same-name folders and directory
 
 On upgrade from an older baseline or migration from a legacy manifest, the first scan refreshes the baseline without adopting existing folders. Later scans adopt newly created skills as usual. Target settings and instruction paths are preserved.
 
-Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Nested folders and mismatched names remain detected for explicit import.
+Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Scan and install paths can use different directory aliases for the same folder in both copy and symlink modes. Nested folders, mismatched names, and symlinked skill folders remain detected for explicit import.
 
 Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.
 
@@ -432,7 +434,13 @@ skillsync uninstall my-skill
 
 With no destination options, uninstall removes all assignments for that skill on the current device, including global installs. Use `--device id` or `-d id` to select another device, `--target codex,claude` or `-t codex,claude` to select targets, or `--global` to remove only the global assignment. Value-taking options require a non-empty value rather than another flag, and an explicit target list must contain at least one name. Uninstall rejects missing values and empty target lists before vault initialization, sync, or removal.
 
+Use **Sync selected from vault** in **Installed on this device** to update skills at `<install-folder>/<skill-name>`, including standalone folders left after a refused install. SkillSync asks for confirmation and retains a recoverable backup before replacement. Nested or differently named detected folders are reported as skipped and stay unchanged; confirmed uninstall still supports those folders.
+
 In the **Installed on this device** menu and `skillsync scan`, a local skill is classified as managed only at its configured projection path with a vault-owned symlink or copy marker, including when its containing directory has a symlink alias. Same-named standalone folders and folders left after a refused install remain unmanaged. Uninstall asks for confirmation before removing standalone folders. Standalone removal skips folders outside the target's install folder, the install folder itself, and symlinked paths.
+
+Standalone removal checks directory permissions before deleting files or changing that skill's assignments. If a folder or its parent is read-only, make it writable and retry; SkillSync does not change those permissions automatically.
+
+Selected vault updates and confirmed standalone removal also accept different scan and install aliases of the same physical folder. Updates still require confirmation before replacing a standalone folder and preserve its contents in a recoverable backup.
 
 Delete it from the vault and every device:
 
@@ -441,6 +449,8 @@ skillsync delete my-skill
 ```
 
 After confirmation, deletion pulls the vault before removing the skill and its assignments, including assignments pushed by other devices since this checkout last synced. If the pull fails, deletion stops before removing the skill or changing assignments. Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
+
+Vault deletion validates every desired device document before rewriting assignments. If a document is malformed, repair the reported file and retry.
 
 Explicit deletion and automatic cleanup support imported read-only directories, including the skill root. They retain the complete skill with its original permissions under Git's private `skillsync/deleted-skills/` directory, or `.skillsync-local/deleted-skills/` in a plain vault. These backups stay on this device, are not indexed as skills, and are not automatically pruned. With Git metadata on another filesystem, deletion stages beside the skill and copies the backup into Git metadata before updating assignments and the registry.
 
@@ -493,6 +503,10 @@ Copies created by older versions refresh once to record executable permissions w
 Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
 
 New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
+
+Repairing a projection recovery error lets the next daemon cycle retry without a restart.
+
+Projection apply and rollback share a local lock. A competing live writer is refused; an abandoned writer's lock is recovered automatically before applying. Lock cleanup removes only its own lease, so concurrent recovery cannot remove a newer writer's lock. Locks from older releases remain readable, including the one-minute grace period for a writer still starting. Restart an older daemon when upgrading so all writers use the same locking protocol.
 
 Restore the most recent successful local projection apply in an emergency:
 

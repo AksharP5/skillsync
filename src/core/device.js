@@ -9,6 +9,7 @@ import {
   isGlobalInstallTarget,
   normalizeGlobalInstalled,
   normalizeInstalled,
+  readDeviceState,
 } from './device-assignments.js';
 import {
   assertSafePathSegment,
@@ -81,53 +82,6 @@ export function globalInstructionsAssignmentPath(vaultPath, deviceId) {
     'assignments',
     `${assertSafePathSegment(deviceId, 'Device ID')}.json`,
   );
-}
-
-function assertDeviceObject(value, label) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-}
-
-async function readDeviceState(filePath) {
-  try {
-    const value = await readJson(filePath);
-    assertDeviceObject(value, 'Device state');
-    if (value.installed !== undefined) {
-      assertDeviceObject(value.installed, 'installed');
-      for (const [skillName, targets] of Object.entries(value.installed)) {
-        assertSafePathSegment(skillName, 'Skill name');
-        if (!Array.isArray(targets)) throw new Error(`Assignment for ${skillName} must be an array`);
-        for (const target of targets) assertSafePathSegment(target, 'Target name');
-      }
-    }
-    for (const field of ['global_installed', 'globalInstalled']) {
-      if (value[field] === undefined) continue;
-      if (!Array.isArray(value[field])) throw new Error(`${field} must be an array`);
-      for (const name of value[field]) assertSafePathSegment(name, 'Skill name');
-    }
-    if (value.detected !== undefined) {
-      assertDeviceObject(value.detected, 'detected');
-      for (const [target, skills] of Object.entries(value.detected)) {
-        assertSafePathSegment(target, 'Target name');
-        if (!Array.isArray(skills)) throw new Error(`Detected skills for ${target} must be an array`);
-        for (const skill of skills) {
-          assertDeviceObject(skill, 'Detected skill');
-          assertSafePathSegment(skill.name, 'Skill name');
-        }
-      }
-    }
-    if (value.instructions !== undefined) {
-      assertDeviceObject(value.instructions, 'instructions');
-      if (value.instructions.agents !== undefined) {
-        assertDeviceObject(value.instructions.agents, 'instructions.agents');
-      }
-    }
-    return value;
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error(`Cannot read device state at ${filePath}: ${error.message}`, { cause: error });
-  }
 }
 
 export async function loadDevice(vaultPath, deviceId = defaultDeviceId(), { ensure = true } = {}) {
@@ -1364,12 +1318,15 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
     const skills = await findLocalSkills(scanRoot, vaultPath);
     const installRoot = path.resolve(expandHome(targetConfig.path));
+    const canonicalScanRoot = await realpath(scanRoot).catch(() => scanRoot);
     const canonicalInstallRoot = await realpath(installRoot).catch(() => installRoot);
 
     for (const skill of skills) {
       if (previousKeys.has(detectedSkillKey(skill))) continue;
-      const sourcePath = path.resolve(scanRoot, skill.path || '.');
-      if (sourcePath !== path.join(installRoot, skill.name)) continue;
+      const scannedPath = path.resolve(scanRoot, skill.path || '.');
+      const physicalScanPath = path.resolve(canonicalScanRoot, skill.path || '.');
+      const sourcePath = path.join(installRoot, skill.name);
+      if (scannedPath !== sourcePath && physicalScanPath !== path.join(canonicalInstallRoot, skill.name)) continue;
       const canonicalSource = await realpath(sourcePath).catch(() => null);
       if (!canonicalSource || !pathInside(canonicalSource, canonicalInstallRoot)) continue;
       if (await hasSymlinkBelowRoot(sourcePath, installRoot)) continue;
