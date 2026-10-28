@@ -86,8 +86,7 @@ async function updateCursorRule(vaultPath, profile) {
   const content = await projectedInstructionsContent(vaultPath, profile, DEFAULT_CURSOR_RULE_PATH);
   const current = await readOptionalFile(destination);
   if (current?.equals(content)) return;
-  await ensureDir(path.dirname(destination));
-  await writeFile(destination, content);
+  await writeInstructionsFile(destination, content);
 }
 
 async function projectedInstructionsContent(vaultPath, profile, targetPath) {
