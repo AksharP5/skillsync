@@ -13,6 +13,70 @@ async function makeSkill(directory, name) {
   await writeFile(path.join(directory, 'SKILL.md'), `---\nname: ${name}\n---\n# Skill\n`);
 }
 
+for (const mode of ['symlink', 'copy']) {
+  for (const aliasTarget of [false, true]) {
+    test(`auto-adoption consolidates a ${mode} skill with an aliased ${aliasTarget ? 'target' : 'scan'} root`, async (t) => {
+      const root = await mkdtemp(path.join(tmpdir(), 'skillsync-adoption-alias-'));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
+      const physical = path.join(root, 'physical', 'skills');
+      const alias = path.join(root, 'alias', 'skills');
+      await makeSkill(path.join(physical, 'existing'), 'existing');
+      await symlink(path.dirname(physical), path.dirname(alias), 'dir');
+      const targetPath = aliasTarget ? alias : physical;
+      const scanPath = aliasTarget ? physical : alias;
+      await addTarget({ ...options, name: 'codex', targetPath, scanPath, mode });
+      await scanTargets(options);
+      await makeSkill(path.join(physical, 'demo'), 'demo');
+      await makeSkill(path.join(physical, 'wrong-folder'), 'different-name');
+      await makeSkill(path.join(physical, 'category', 'nested'), 'nested');
+      const outside = path.join(root, 'outside', 'external');
+      await makeSkill(outside, 'external');
+      await symlink(outside, path.join(physical, 'external'), 'dir');
+
+      const syncOptions = { ...options, pull: false, pushChanges: false };
+      const result = await syncVault(syncOptions);
+
+      assert.deepEqual(result.autoImported, [{ name: 'demo', target: 'codex', status: 'added' }]);
+      assert.deepEqual(Object.keys((await loadRegistry(options.vaultPath)).skills), ['demo']);
+      assert.deepEqual((await loadLocalDevice(options.vaultPath, 'local')).installed, { demo: ['codex'] });
+      assert.equal((await lstat(path.join(physical, 'demo'))).isSymbolicLink(), mode === 'symlink');
+      if (mode === 'copy') {
+        const marker = JSON.parse(await readFile(path.join(physical, 'demo', '.skillsync-owned.json'), 'utf8'));
+        assert.equal(marker.skill, 'demo');
+      }
+      assert.deepEqual((await syncVault(syncOptions)).autoImported, []);
+      for (const name of ['existing', 'wrong-folder', 'category/nested']) {
+        assert.equal((await lstat(path.join(physical, name))).isDirectory(), true);
+      }
+      assert.equal((await lstat(path.join(physical, 'external'))).isSymbolicLink(), true);
+      assert.match(await readFile(path.join(outside, 'SKILL.md'), 'utf8'), /name: external/);
+    });
+  }
+
+  test(`adding another scan alias preserves the ${mode} baseline for an aliased target`, async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'skillsync-baseline-alias-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
+    const scanPath = path.join(root, 'agent');
+    const physical = path.join(root, 'physical');
+    const targetPath = path.join(scanPath, 'personal');
+    await makeSkill(path.join(physical, 'existing'), 'existing');
+    await mkdir(scanPath);
+    await symlink(physical, targetPath, 'dir');
+    await addTarget({ ...options, name: 'codex', targetPath, scanPath, mode });
+    await scanTargets(options);
+    await symlink(physical, path.join(scanPath, 'new-alias'), 'dir');
+    const syncOptions = { ...options, pull: false, pushChanges: false };
+
+    assert.deepEqual((await syncVault(syncOptions)).autoImported, []);
+    assert.equal((await loadRegistry(options.vaultPath)).skills.existing, undefined);
+    assert.equal((await lstat(path.join(physical, 'existing'))).isSymbolicLink(), false);
+    await makeSkill(path.join(physical, 'new-skill'), 'new-skill');
+    assert.deepEqual((await syncVault(syncOptions)).autoImported.map(({ name }) => name), ['new-skill']);
+  });
+}
+
 for (const legacyManifest of [false, true]) {
   test(`auto-adoption refreshes incomplete baselines from ${legacyManifest ? 'legacy manifests' : 'version 1 local state'}`, async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillsync-baseline-upgrade-'));

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
-import { lstat, mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
@@ -1315,12 +1316,20 @@ async function targetsMatchingSourcePath({ config, skillName, sourcePath, prefer
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const candidates = preferredTargets?.length ? preferredTargets : Object.keys(device.targets || {});
   const resolvedSource = path.resolve(sourcePath);
-  return candidates.filter((targetName) => {
+  if (path.basename(resolvedSource) !== skillName) return [];
+  // Comparing parents keeps unmanaged leaf symlinks from approving outside sources.
+  const sourceParent = await realpath(path.dirname(resolvedSource));
+  const matching = [];
+  for (const targetName of candidates) {
     const targetConfig = device.targets?.[targetName];
-    if (!targetConfig) return false;
-    const expected = path.resolve(expandHome(targetConfig.path), skillName);
-    return resolvedSource === expected;
-  });
+    if (!targetConfig) continue;
+    const targetRoot = await realpath(path.resolve(expandHome(targetConfig.path))).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (sourceParent === targetRoot) matching.push(targetName);
+  }
+  return matching;
 }
 
 async function installManagedSkill({ config, skillName, targets, sourcePath }) {
@@ -2158,7 +2167,7 @@ async function installedScreen(config) {
     loop: false,
     pageSize: 3,
     choices: [
-      { name: 'Sync selected from vault', value: 'update', description: 'Replace same-named local skills with the vault version.' },
+      { name: 'Sync selected from vault', value: 'update', description: 'Update skills at their configured install paths.' },
       { name: 'Uninstall from this device', value: 'uninstall', description: 'Remove selected skills from this device only.' },
       { name: 'Back', value: 'back' },
     ],
@@ -2197,27 +2206,36 @@ function isPathInside(childPath, parentPath) {
   return child === parent || child.startsWith(parent + path.sep);
 }
 
-function detectedTargetLocation(device, detectedTarget) {
+async function detectedTargetLocation(device, detectedTarget) {
   const targetConfig = device.targets?.[detectedTarget.targetName];
   if (!targetConfig) return { removable: false, reason: 'target is no longer configured' };
 
   const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
   const installRoot = path.resolve(expandHome(targetConfig.path));
-  const absolutePath = path.resolve(scanRoot, detectedTarget.path || '.');
-  if (!isPathInside(absolutePath, scanRoot)) {
+  const scannedPath = path.resolve(scanRoot, detectedTarget.path || '.');
+  if (!isPathInside(scannedPath, scanRoot)) {
     return { removable: false, reason: 'detected path is outside the scan path' };
   }
-  if (absolutePath === installRoot || !isPathInside(absolutePath, installRoot)) {
+  const [canonicalScanRoot, canonicalInstallRoot] = await Promise.all([
+    realpath(scanRoot).catch(() => null),
+    realpath(installRoot).catch(() => null),
+  ]);
+  if (!canonicalScanRoot || !canonicalInstallRoot) {
+    return { removable: false, reason: 'configured skill folder is unavailable' };
+  }
+  const physicalPath = path.resolve(canonicalScanRoot, path.relative(scanRoot, scannedPath));
+  if (physicalPath === canonicalInstallRoot || !isPathInside(physicalPath, canonicalInstallRoot)) {
     return { removable: false, reason: 'detected path is outside the configured install folder' };
   }
+  const absolutePath = path.join(installRoot, path.relative(canonicalInstallRoot, physicalPath));
   return { removable: true, absolutePath, installRoot };
 }
 
-function removableDetectedTargets(device, skill, { onlyInVault = false } = {}) {
-  return skill.detectedTargets
+async function removableDetectedTargets(device, skill, { onlyInVault = false } = {}) {
+  return Promise.all(skill.detectedTargets
     .filter((target) => !target.managed)
     .filter((target) => !onlyInVault || target.inVault)
-    .map((target) => ({ ...target, ...detectedTargetLocation(device, target) }));
+    .map(async (target) => ({ ...target, ...await detectedTargetLocation(device, target) })));
 }
 
 async function inspectRemovableTargetPaths(targets) {
@@ -2250,11 +2268,12 @@ async function inspectRemovableTargetPaths(targets) {
   return { approved, skipped };
 }
 
-async function removeDetectedTargetPaths(targets) {
-  const { approved, skipped } = await inspectRemovableTargetPaths(targets);
-  for (const target of approved) await removePath(target.absolutePath);
-  const removed = approved;
-  return { removed, skipped };
+async function requireRemovableDirectory(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  if (entries.length) await access(directory, constants.W_OK | constants.X_OK);
+  for (const entry of entries) {
+    if (entry.isDirectory()) await requireRemovableDirectory(path.join(directory, entry.name));
+  }
 }
 
 async function hasSymlinkBelowRoot(childPath, rootPath) {
@@ -2272,13 +2291,18 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
 }
 
 async function uninstallLocalSkill({ config, device, skill }) {
+  const { approved, skipped } = await inspectRemovableTargetPaths(await removableDetectedTargets(device, skill));
+  for (const target of approved) {
+    await access(path.dirname(target.absolutePath), constants.W_OK | constants.X_OK);
+    await requireRemovableDirectory(target.absolutePath);
+  }
   await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
     skillName: skill.name,
   });
-  const removed = await removeDetectedTargetPaths(removableDetectedTargets(device, skill));
-  return removed;
+  for (const target of approved) await removePath(target.absolutePath);
+  return { removed: approved, skipped };
 }
 
 async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
@@ -2289,34 +2313,56 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
     return;
   }
 
-  await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: true });
+  const updates = [];
+  const skippedPaths = [];
+  for (const skill of updatable) {
+    const detected = await removableDetectedTargets(device, skill, { onlyInVault: true });
+    const candidates = detected.map((target) => {
+      if (!target.removable) return target;
+      const destination = path.join(target.installRoot, skill.name);
+      if (target.absolutePath === destination) return target;
+      return { ...target, removable: false, reason: `vault updates use ${destination}` };
+    });
+    const { approved, skipped: unavailable } = await inspectRemovableTargetPaths(candidates);
+    skippedPaths.push(...unavailable);
+    const targets = new Set(skill.managedTargets);
+    for (const target of skill.detectedTargets) {
+      if (target.managed && target.inVault) targets.add(target.targetName);
+    }
+    for (const target of approved) targets.add(target.targetName);
+    if (targets.size) {
+      updates.push({ skill, replacements: approved, targets: [...targets].sort() });
+    }
+  }
+  for (const target of skippedPaths) {
+    const location = target.absolutePath || `${target.targetName}/${target.path || '.'}`;
+    console.log(`Skipped ${location}: ${target.reason}.`);
+  }
+  if (!updates.length) {
+    console.log(`\nNo selected skills have an updatable local target.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
+    return;
+  }
 
-  const replacements = updatable.flatMap((skill) => removableDetectedTargets(device, skill, { onlyInVault: true }).filter((target) => target.removable));
-  let replaceUnmanagedPaths = [];
-  if (replacements.length) {
+  await syncVault({ vaultPath: config.repoPath, pushChanges: false });
+
+  const replacementCount = updates.reduce((count, update) => count + update.replacements.length, 0);
+  if (replacementCount) {
     const confirmed = await confirm({
-      message: `Replace ${replacements.length} local detected skill folder${replacements.length === 1 ? '' : 's'} with vault-managed links/copies?`,
+      message: `Replace ${replacementCount} local detected skill folder${replacementCount === 1 ? '' : 's'} with vault-managed links/copies?`,
       default: false,
     });
     if (!confirmed) return;
-    const inspected = await inspectRemovableTargetPaths(replacements);
-    replaceUnmanagedPaths = inspected.approved.map((target) => target.absolutePath);
   }
 
-  for (const skill of updatable) {
-    const targets = new Set(skill.managedTargets);
-    for (const detectedTarget of skill.detectedTargets) {
-      const location = detectedTargetLocation(device, detectedTarget);
-      if (detectedTarget.inVault && location.removable) targets.add(detectedTarget.targetName);
-    }
-    if (targets.size) {
-      await installSkill({
-        vaultPath: config.repoPath,
-        deviceId: config.deviceId,
-        skillName: skill.name,
-        targets: [...targets].sort(),
-      });
-    }
+  const replaceUnmanagedPaths = [];
+  for (const { skill, replacements, targets } of updates) {
+    replaceUnmanagedPaths.push(...replacements.map((target) => target.absolutePath));
+    await installSkill({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      skillName: skill.name,
+      targets,
+    });
   }
 
   await syncVault({
@@ -2325,7 +2371,7 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
     pull: false,
     replaceUnmanagedPaths,
   });
-  console.log(`\nUpdated from vault: ${updatable.map((skill) => skill.name).join(', ')}.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
+  console.log(`\nUpdated from vault: ${updates.map(({ skill }) => skill.name).join(', ')}.${skipped.length ? ` Skipped local-only: ${skipped.join(', ')}.` : ''}\n`);
 }
 
 async function chooseTargets(config) {
