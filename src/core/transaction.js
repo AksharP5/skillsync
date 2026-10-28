@@ -61,14 +61,10 @@ async function makeDirectoriesRemovable(targetPath) {
 }
 
 async function removeProjectionPath(targetPath) {
-  try {
-    await removePath(targetPath);
-  } catch (error) {
-    if (!['EACCES', 'EPERM'].includes(error.code)) throw error;
-    // Only backed-up projections and disposable transaction trees may be unlocked.
-    await makeDirectoriesRemovable(targetPath);
-    await removePath(targetPath);
-  }
+  // Unlock these backed-up or disposable trees before rm, which can reject
+  // while sibling unlinks are still running at the same path.
+  await makeDirectoriesRemovable(targetPath);
+  await removePath(targetPath);
 }
 
 async function transactionRoot(vaultPath) {

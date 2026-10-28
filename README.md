@@ -494,6 +494,8 @@ Copies created by older versions refresh once to record executable permissions w
 
 Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
 
+Cleanup prepares read-only directories before its first removal pass, preventing overlapping permission-error retries at the replacement path.
+
 New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
 
 Repairing a projection recovery error lets the next daemon cycle retry without a restart.
