@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
-import { lstat, mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import path from 'node:path';
 
@@ -2258,11 +2259,12 @@ async function inspectRemovableTargetPaths(targets) {
   return { approved, skipped };
 }
 
-async function removeDetectedTargetPaths(targets) {
-  const { approved, skipped } = await inspectRemovableTargetPaths(targets);
-  for (const target of approved) await removePath(target.absolutePath);
-  const removed = approved;
-  return { removed, skipped };
+async function requireRemovableDirectory(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  if (entries.length) await access(directory, constants.W_OK | constants.X_OK);
+  for (const entry of entries) {
+    if (entry.isDirectory()) await requireRemovableDirectory(path.join(directory, entry.name));
+  }
 }
 
 async function hasSymlinkBelowRoot(childPath, rootPath) {
@@ -2280,13 +2282,18 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
 }
 
 async function uninstallLocalSkill({ config, device, skill }) {
+  const { approved, skipped } = await inspectRemovableTargetPaths(removableDetectedTargets(device, skill));
+  for (const target of approved) {
+    await access(path.dirname(target.absolutePath), constants.W_OK | constants.X_OK);
+    await requireRemovableDirectory(target.absolutePath);
+  }
   await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
     skillName: skill.name,
   });
-  const removed = await removeDetectedTargetPaths(removableDetectedTargets(device, skill));
-  return removed;
+  for (const target of approved) await removePath(target.absolutePath);
+  return { removed: approved, skipped };
 }
 
 async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
