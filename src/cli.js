@@ -2197,27 +2197,36 @@ function isPathInside(childPath, parentPath) {
   return child === parent || child.startsWith(parent + path.sep);
 }
 
-function detectedTargetLocation(device, detectedTarget) {
+async function detectedTargetLocation(device, detectedTarget) {
   const targetConfig = device.targets?.[detectedTarget.targetName];
   if (!targetConfig) return { removable: false, reason: 'target is no longer configured' };
 
   const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
   const installRoot = path.resolve(expandHome(targetConfig.path));
-  const absolutePath = path.resolve(scanRoot, detectedTarget.path || '.');
-  if (!isPathInside(absolutePath, scanRoot)) {
+  const scannedPath = path.resolve(scanRoot, detectedTarget.path || '.');
+  if (!isPathInside(scannedPath, scanRoot)) {
     return { removable: false, reason: 'detected path is outside the scan path' };
   }
-  if (absolutePath === installRoot || !isPathInside(absolutePath, installRoot)) {
+  const [canonicalScanRoot, canonicalInstallRoot] = await Promise.all([
+    realpath(scanRoot).catch(() => null),
+    realpath(installRoot).catch(() => null),
+  ]);
+  if (!canonicalScanRoot || !canonicalInstallRoot) {
+    return { removable: false, reason: 'configured skill folder is unavailable' };
+  }
+  const physicalPath = path.resolve(canonicalScanRoot, path.relative(scanRoot, scannedPath));
+  if (physicalPath === canonicalInstallRoot || !isPathInside(physicalPath, canonicalInstallRoot)) {
     return { removable: false, reason: 'detected path is outside the configured install folder' };
   }
+  const absolutePath = path.join(installRoot, path.relative(canonicalInstallRoot, physicalPath));
   return { removable: true, absolutePath, installRoot };
 }
 
-function removableDetectedTargets(device, skill, { onlyInVault = false } = {}) {
-  return skill.detectedTargets
+async function removableDetectedTargets(device, skill, { onlyInVault = false } = {}) {
+  return Promise.all(skill.detectedTargets
     .filter((target) => !target.managed)
     .filter((target) => !onlyInVault || target.inVault)
-    .map((target) => ({ ...target, ...detectedTargetLocation(device, target) }));
+    .map(async (target) => ({ ...target, ...await detectedTargetLocation(device, target) })));
 }
 
 async function inspectRemovableTargetPaths(targets) {
@@ -2277,7 +2286,7 @@ async function uninstallLocalSkill({ config, device, skill }) {
     deviceId: config.deviceId,
     skillName: skill.name,
   });
-  const removed = await removeDetectedTargetPaths(removableDetectedTargets(device, skill));
+  const removed = await removeDetectedTargetPaths(await removableDetectedTargets(device, skill));
   return removed;
 }
 
@@ -2291,24 +2300,29 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
 
   await syncVault({ vaultPath: config.repoPath, pushChanges: false });
 
-  const replacements = updatable.flatMap((skill) => removableDetectedTargets(device, skill, { onlyInVault: true }).filter((target) => target.removable));
-  let replaceUnmanagedPaths = [];
-  if (replacements.length) {
+  const updates = [];
+  for (const skill of updatable) {
+    const detected = await removableDetectedTargets(device, skill, { onlyInVault: true });
+    updates.push({ skill, replacements: detected.filter((target) => target.removable) });
+  }
+  const replacementCount = updates.reduce((count, update) => count + update.replacements.length, 0);
+  if (replacementCount) {
     const confirmed = await confirm({
-      message: `Replace ${replacements.length} local detected skill folder${replacements.length === 1 ? '' : 's'} with vault-managed links/copies?`,
+      message: `Replace ${replacementCount} local detected skill folder${replacementCount === 1 ? '' : 's'} with vault-managed links/copies?`,
       default: false,
     });
     if (!confirmed) return;
-    const inspected = await inspectRemovableTargetPaths(replacements);
-    replaceUnmanagedPaths = inspected.approved.map((target) => target.absolutePath);
   }
 
-  for (const skill of updatable) {
+  const replaceUnmanagedPaths = [];
+  for (const { skill, replacements } of updates) {
+    const { approved } = await inspectRemovableTargetPaths(replacements);
+    replaceUnmanagedPaths.push(...approved.map((target) => target.absolutePath));
     const targets = new Set(skill.managedTargets);
-    for (const detectedTarget of skill.detectedTargets) {
-      const location = detectedTargetLocation(device, detectedTarget);
-      if (detectedTarget.inVault && location.removable) targets.add(detectedTarget.targetName);
+    for (const target of skill.detectedTargets) {
+      if (target.managed && target.inVault) targets.add(target.targetName);
     }
+    for (const target of approved) targets.add(target.targetName);
     if (targets.size) {
       await installSkill({
         vaultPath: config.repoPath,

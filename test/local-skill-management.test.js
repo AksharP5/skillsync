@@ -27,7 +27,7 @@ async function makeSkill(directory, body = '# Standalone demo\n') {
   await writeFile(path.join(directory, 'SKILL.md'), body);
 }
 
-async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = false, pendingConflict = false,
+async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = false, targetAlias = false, pendingConflict = false,
   action = 'uninstall', confirmed = true } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-local-management-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -35,7 +35,8 @@ async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = fa
   const vaultPath = path.join(root, 'vault');
   const remote = path.join(root, 'remote.git');
   const scanRoot = path.join(root, 'target');
-  const targetPath = scanParent ? path.join(scanRoot, 'personal') : scanRoot;
+  const targetRoot = targetAlias ? path.join(root, 'target-alias') : scanRoot;
+  const targetPath = scanParent ? path.join(targetRoot, 'personal') : targetRoot;
   const scanPath = scanAlias ? path.join(root, 'scan-alias') : scanRoot;
   const options = { vaultPath, deviceId: 'local' };
   await git(['init', '--bare', remote]);
@@ -52,8 +53,12 @@ async function fixture(t, { mode = 'symlink', scanParent = false, scanAlias = fa
     await mkdir(scanRoot, { recursive: true });
     await symlink(scanRoot, scanPath, 'dir');
   }
+  if (targetAlias) {
+    await mkdir(scanRoot, { recursive: true });
+    await symlink(scanRoot, targetRoot, 'dir');
+  }
   if (pendingConflict) await makeSkill(path.join(targetPath, 'demo'));
-  await addTarget({ ...options, name: 'codex', targetPath, scanPath: scanParent ? scanPath : undefined, mode, autoImport: false });
+  await addTarget({ ...options, name: 'codex', targetPath, scanPath: scanParent || scanAlias || targetAlias ? scanPath : undefined, mode, autoImport: false });
   await installSkill({ ...options, skillName: 'demo', targets: ['codex'] });
   if (pendingConflict) await assert.rejects(applyLinks(options), /Refusing to overwrite unmanaged target path/);
   else await applyLinks(options);
@@ -91,10 +96,10 @@ export async function input() { throw Error('Unexpected input'); }
   const preload = path.join(root, 'preload.mjs');
   await writeFile(preload, `import {register} from 'node:module';
 register('./loader.mjs', import.meta.url); process.stdin.isTTY = true;`);
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config') };
+  const env = { ...process.env, HOME: home, CODEX_HOME: path.join(home, '.codex'), XDG_CONFIG_HOME: path.join(home, '.config') };
   const cli = (...args) => execFileAsync(process.execPath, [cliPath, ...args], { env, timeout: 15000 });
   const uninstall = () => execFileAsync(process.execPath, ['--import', preload, cliPath], { env, timeout: 15000 });
-  return { root, home, vaultPath, scanRoot, targetPath, options, cli, uninstall };
+  return { root, home, vaultPath, scanRoot, scanPath, targetPath, options, cli, uninstall };
 }
 
 for (const mode of ['symlink', 'copy']) {
@@ -139,48 +144,50 @@ for (const mode of ['symlink', 'copy']) {
   });
 }
 
-test('uninstall preserves same-named detections outside the install root or reached through symlinks', async (t) => {
-  const { root, targetPath, scanRoot, options, cli, uninstall } = await fixture(t, { scanParent: true });
-  const sibling = path.join(scanRoot, 'other', 'demo');
-  const external = path.join(root, 'external');
-  await makeSkill(sibling);
-  const externalBody = '---\nname: demo\n---\n# External demo\n';
-  await makeSkill(path.join(external, 'demo'), externalBody);
-  const alias = path.join(targetPath, 'alias');
-  await symlink(path.join(external, 'demo'), alias, 'dir');
-  await symlink(external, path.join(targetPath, 'linked'), 'dir');
-  await scanTargets(options);
+for (const alias of [null, 'scanAlias', 'targetAlias']) {
+  test(`uninstall preserves outside and symlinked detections with ${alias || 'direct paths'}`, async (t) => {
+    const { root, targetPath, scanRoot, options, cli, uninstall } = await fixture(t, { scanParent: true, ...(alias ? { [alias]: true } : {}) });
+    const sibling = path.join(scanRoot, 'other', 'demo');
+    const external = path.join(root, 'external');
+    await makeSkill(sibling);
+    const externalBody = '---\nname: demo\n---\n# External demo\n';
+    await makeSkill(path.join(external, 'demo'), externalBody);
+    const leafAlias = path.join(targetPath, 'alias');
+    await symlink(path.join(external, 'demo'), leafAlias, 'dir');
+    await symlink(external, path.join(targetPath, 'linked'), 'dir');
+    await scanTargets(options);
 
-  const { stdout: scan } = await cli('scan', '--json');
-  const skills = JSON.parse(scan).skills;
-  assert.deepEqual(skills.filter((skill) => skill.managed).map((skill) => skill.path), ['personal/demo']);
-  assert.equal(skills.length, 4);
-  const { stdout } = await uninstall();
+    const { stdout: scan } = await cli('scan', '--json');
+    const skills = JSON.parse(scan).skills;
+    assert.deepEqual(skills.filter((skill) => skill.managed).map((skill) => skill.path), ['personal/demo']);
+    assert.equal(skills.length, 4);
+    const { stdout } = await uninstall();
 
-  assert.match(stdout, /Local-only detected folders are not SkillSync-managed/);
-  await assert.rejects(lstat(path.join(targetPath, 'demo')), { code: 'ENOENT' });
-  assert.equal(await readFile(path.join(sibling, 'SKILL.md'), 'utf8'), '# Standalone demo\n');
-  assert.equal(await readFile(path.join(external, 'demo', 'SKILL.md'), 'utf8'), externalBody);
-  assert.equal((await lstat(alias)).isSymbolicLink(), true);
-  assert.equal((await lstat(path.join(targetPath, 'linked'))).isSymbolicLink(), true);
-});
+    assert.match(stdout, /Local-only detected folders are not SkillSync-managed/);
+    await assert.rejects(lstat(path.join(targetPath, 'demo')), { code: 'ENOENT' });
+    assert.equal(await readFile(path.join(sibling, 'SKILL.md'), 'utf8'), '# Standalone demo\n');
+    assert.equal(await readFile(path.join(external, 'demo', 'SKILL.md'), 'utf8'), externalBody);
+    assert.equal((await lstat(leafAlias)).isSymbolicLink(), true);
+    assert.equal((await lstat(path.join(targetPath, 'linked'))).isSymbolicLink(), true);
+  });
 
-test('uninstall never removes a detected skill at the install root itself', async (t) => {
-  const { targetPath, options, cli, uninstall } = await fixture(t);
-  const body = '---\nname: demo\n---\n# Root skill\n';
-  await makeSkill(targetPath, body);
-  await scanTargets(options);
+  test(`uninstall never removes the install root itself with ${alias || 'direct paths'}`, async (t) => {
+    const { targetPath, options, cli, uninstall } = await fixture(t, alias ? { [alias]: true } : {});
+    const body = '---\nname: demo\n---\n# Root skill\n';
+    await makeSkill(targetPath, body);
+    await scanTargets(options);
 
-  const { stdout: scan } = await cli('scan', '--json');
-  assert.deepEqual(JSON.parse(scan).skills, [
-    { name: 'demo', target: 'codex', path: '.', in_vault: true, managed: false, new: false },
-  ]);
-  const { stdout } = await uninstall();
+    const { stdout: scan } = await cli('scan', '--json');
+    assert.deepEqual(JSON.parse(scan).skills, [
+      { name: 'demo', target: 'codex', path: '.', in_vault: true, managed: false, new: false },
+    ]);
+    const { stdout } = await uninstall();
 
-  assert.match(stdout, /Local-only detected folders are not SkillSync-managed/);
-  assert.equal(await readFile(path.join(targetPath, 'SKILL.md'), 'utf8'), body);
-  await assert.rejects(lstat(path.join(targetPath, 'demo')), { code: 'ENOENT' });
-});
+    assert.match(stdout, /Local-only detected folders are not SkillSync-managed/);
+    assert.equal(await readFile(path.join(targetPath, 'SKILL.md'), 'utf8'), body);
+    await assert.rejects(lstat(path.join(targetPath, 'demo')), { code: 'ENOENT' });
+  });
+}
 
 test('a refused install does not make the conflicting local folder managed', async (t) => {
   const { targetPath, options, cli, uninstall } = await fixture(t, { pendingConflict: true });
@@ -245,6 +252,11 @@ for (const settings of [
   { mode: 'copy', pendingConflict: true, confirmed: true },
   { mode: 'symlink', pendingConflict: true, confirmed: false },
   { mode: 'symlink', pendingConflict: false, confirmed: true },
+  ...['symlink', 'copy'].flatMap((mode) => ['scanAlias', 'targetAlias'].flatMap((alias) => [
+    { mode, [alias]: true, pendingConflict: true, confirmed: true },
+    { mode, [alias]: true, pendingConflict: false, confirmed: true },
+    { mode, [alias]: true, pendingConflict: true, confirmed: false },
+  ])),
 ]) {
   test(`selected vault update confirms before applying a local replacement ${JSON.stringify(settings)}`, async (t) => {
     const { targetPath, vaultPath, options, uninstall: update } = await fixture(t, { ...settings, action: 'update' });
@@ -282,8 +294,57 @@ for (const settings of [
     const manifests = await Promise.all((await readdir(backups)).map(async (id) => (
       JSON.parse(await readFile(path.join(backups, id, 'manifest.json'), 'utf8'))
     )));
-    const saved = manifests.flatMap((manifest) => manifest.entries).find((entry) => entry.destination === local && entry.type === 'directory');
-    assert.ok(saved);
-    assert.equal(await readFile(path.join(saved.stored, 'SKILL.md'), 'utf8'), original);
+    const saved = manifests.flatMap((manifest) => manifest.entries).filter((entry) => entry.destination === local && entry.type === 'directory');
+    const savedBodies = await Promise.all(saved.map((entry) => readFile(path.join(entry.stored, 'SKILL.md'), 'utf8')));
+    assert.ok(savedBodies.includes(original));
   });
+}
+
+for (const mode of ['symlink', 'copy']) {
+  test(`selected update retains an owned ${mode} projection whose assignment was removed`, async (t) => {
+    const { targetPath, vaultPath, options, uninstall: update } = await fixture(t, { mode, scanAlias: true, action: 'update' });
+    await uninstallSkill({ ...options, skillName: 'demo' });
+    await scanTargets(options);
+
+    await update();
+
+    assert.deepEqual((await loadLocalDevice(vaultPath, 'local')).installed, { demo: ['codex'] });
+    assert.equal(await readFile(path.join(targetPath, 'demo', 'SKILL.md'), 'utf8'), '# Vault demo\n');
+    assert.equal((await lstat(path.join(targetPath, 'demo'))).isSymbolicLink(), mode === 'symlink');
+  });
+
+  for (const alias of ['scanAlias', 'targetAlias']) {
+    test(`confirmed uninstall removes a standalone folder from an aliased ${mode} target with ${alias}`, async (t) => {
+      const { targetPath, scanPath, vaultPath, options, uninstall } = await fixture(t, { mode, [alias]: true, pendingConflict: true });
+      await scanTargets(options);
+
+      const { stdout } = await uninstall();
+
+      assert.match(stdout, /Removed demo from this device/);
+      await assert.rejects(lstat(path.join(targetPath, 'demo')), { code: 'ENOENT' });
+      assert.deepEqual((await loadLocalDevice(vaultPath, 'local')).installed, {});
+      assert.equal(await readFile(path.join(vaultPath, 'skills', 'demo', 'SKILL.md'), 'utf8'), '# Vault demo\n');
+      assert.equal((await lstat(alias === 'targetAlias' ? targetPath : scanPath)).isSymbolicLink(), true);
+    });
+
+    test(`selected ${mode} update with ${alias} preserves outside folders and leaf symlinks`, async (t) => {
+      const { root, scanRoot, targetPath, vaultPath, options, uninstall: update } = await fixture(t, { mode, [alias]: true, scanParent: true, action: 'update' });
+      await uninstallSkill({ ...options, skillName: 'demo' });
+      await applyLinks(options);
+      const outside = path.join(root, 'external', 'demo');
+      const sibling = path.join(scanRoot, 'other', 'demo');
+      await makeSkill(outside, '# External demo\n');
+      await makeSkill(sibling);
+      const local = path.join(targetPath, 'demo');
+      await symlink(outside, local, 'dir');
+      await scanTargets(options);
+
+      await update();
+
+      assert.deepEqual((await loadLocalDevice(vaultPath, 'local')).installed, {});
+      assert.equal((await lstat(local)).isSymbolicLink(), true);
+      assert.equal(await readFile(path.join(outside, 'SKILL.md'), 'utf8'), '# External demo\n');
+      assert.equal(await readFile(path.join(sibling, 'SKILL.md'), 'utf8'), '# Standalone demo\n');
+    });
+  }
 }
