@@ -1315,12 +1315,20 @@ async function targetsMatchingSourcePath({ config, skillName, sourcePath, prefer
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const candidates = preferredTargets?.length ? preferredTargets : Object.keys(device.targets || {});
   const resolvedSource = path.resolve(sourcePath);
-  return candidates.filter((targetName) => {
+  if (path.basename(resolvedSource) !== skillName) return [];
+  // Comparing parents keeps unmanaged leaf symlinks from approving outside sources.
+  const sourceParent = await realpath(path.dirname(resolvedSource));
+  const matching = [];
+  for (const targetName of candidates) {
     const targetConfig = device.targets?.[targetName];
-    if (!targetConfig) return false;
-    const expected = path.resolve(expandHome(targetConfig.path), skillName);
-    return resolvedSource === expected;
-  });
+    if (!targetConfig) continue;
+    const targetRoot = await realpath(path.resolve(expandHome(targetConfig.path))).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (sourceParent === targetRoot) matching.push(targetName);
+  }
+  return matching;
 }
 
 async function installManagedSkill({ config, skillName, targets, sourcePath }) {

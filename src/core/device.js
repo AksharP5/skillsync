@@ -1364,12 +1364,15 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     const scanRoot = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
     const skills = await findLocalSkills(scanRoot, vaultPath);
     const installRoot = path.resolve(expandHome(targetConfig.path));
+    const canonicalScanRoot = await realpath(scanRoot).catch(() => scanRoot);
     const canonicalInstallRoot = await realpath(installRoot).catch(() => installRoot);
 
     for (const skill of skills) {
       if (previousKeys.has(detectedSkillKey(skill))) continue;
-      const sourcePath = path.resolve(scanRoot, skill.path || '.');
-      if (sourcePath !== path.join(installRoot, skill.name)) continue;
+      const scannedPath = path.resolve(scanRoot, skill.path || '.');
+      const physicalScanPath = path.resolve(canonicalScanRoot, skill.path || '.');
+      const sourcePath = path.join(installRoot, skill.name);
+      if (scannedPath !== sourcePath && physicalScanPath !== path.join(canonicalInstallRoot, skill.name)) continue;
       const canonicalSource = await realpath(sourcePath).catch(() => null);
       if (!canonicalSource || !pathInside(canonicalSource, canonicalInstallRoot)) continue;
       if (await hasSymlinkBelowRoot(sourcePath, installRoot)) continue;
