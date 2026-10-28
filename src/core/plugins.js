@@ -97,7 +97,10 @@ export async function loadPluginProfile(vaultPath, name) {
 
 export async function listPluginProfiles(vaultPath) {
   const directory = path.join(pluginRoot(vaultPath), 'profiles');
-  const files = await readdir(directory).catch(() => []);
+  const files = await readdir(directory).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
   const profiles = [];
   for (const file of files.filter((name) => name.endsWith('.json')).sort()) {
     const name = file.slice(0, -'.json'.length);
@@ -139,7 +142,10 @@ export async function loadPluginAssignment(vaultPath, deviceId) {
 
 export async function listPluginAssignments(vaultPath) {
   const directory = path.join(pluginRoot(vaultPath), 'assignments');
-  const files = await readdir(directory).catch(() => []);
+  const files = await readdir(directory).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
   const assignments = [];
   for (const file of files.filter((name) => name.endsWith('.json')).sort()) {
     const deviceId = file.slice(0, -'.json'.length);

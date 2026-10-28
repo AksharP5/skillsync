@@ -236,7 +236,12 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
 export async function ensureSkillInRegistry(vaultPath, skillName) {
   assertSafePathSegment(skillName, 'Skill name');
   const registry = await loadRegistry(vaultPath);
-  registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName);
+  const entry = await registryEntryForSkill(vaultPath, skillName);
+  const previous = registry.skills[skillName];
+  if (previous?.path === entry.path && previous.hash === entry.hash && previous.updated_at) {
+    return previous;
+  }
+  registry.skills[skillName] = entry;
   await saveRegistry(vaultPath, registry);
   return registry.skills[skillName];
 }

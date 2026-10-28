@@ -32,6 +32,8 @@ export function run(command, args, options = {}) {
     let stdout = '';
     let stderr = '';
     if (!options.inherit) {
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
       child.stdout?.on('data', (chunk) => { stdout += chunk; });
       child.stderr?.on('data', (chunk) => { stderr += chunk; });
     }
