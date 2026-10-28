@@ -4,7 +4,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
-import { normalizeGlobalInstalled, normalizeInstalled } from './device-assignments.js';
+import { normalizeGlobalInstalled, normalizeInstalled, readDeviceState } from './device-assignments.js';
 import { gitPrivatePath, hashSyncedDirectory, ignoredGitPaths } from './git.js';
 import {
   assertSafePathSegment,
@@ -354,11 +354,13 @@ export async function deleteSkillFromVault({ vaultPath, skillName }) {
 async function removeSkillAssignments(vaultPath, skillName) {
   const devicesDir = path.join(vaultPath, 'devices');
   await mkdir(devicesDir, { recursive: true });
-  const devices = await readdir(devicesDir);
-  for (const file of devices) {
+  const devices = [];
+  for (const file of await readdir(devicesDir)) {
     if (!file.endsWith('.json')) continue;
     const filePath = path.join(devicesDir, file);
-    const device = await readJson(filePath, null);
+    devices.push({ file, filePath, device: await readDeviceState(filePath) });
+  }
+  for (const { file, filePath, device } of devices) {
     const installed = normalizeInstalled(device?.installed);
     const globalInstalled = normalizeGlobalInstalled(device);
     const changed = Object.hasOwn(installed, skillName) || globalInstalled.includes(skillName);
