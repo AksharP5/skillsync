@@ -441,11 +441,30 @@ async function preserveUnmanagedDestinations(vaultPath, targetPaths) {
     unmanaged.set(await canonicalDestination(destination), destination);
   }
   const backups = [];
-  for (const destination of unmanaged.values()) {
-    backups.push({
-      destination,
-      backup: await backupPath(destination),
-    });
+  try {
+    for (const destination of unmanaged.values()) {
+      backups.push({
+        destination,
+        backup: await backupPath(destination),
+      });
+    }
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const { destination, backup } of backups.reverse()) {
+      try {
+        await rename(backup, destination);
+      } catch (rollbackError) {
+        rollbackErrors.push(new Error(
+          `Could not restore ${destination}; backup retained at ${backup}: ${rollbackError.message}`,
+          { cause: rollbackError },
+        ));
+      }
+    }
+    if (rollbackErrors.length) {
+      throw new AggregateError([error, ...rollbackErrors],
+        `${error.message}\nInstruction backup rollback also failed: ${rollbackErrors.map((failure) => failure.message).join('; ')}`);
+    }
+    throw error;
   }
   return backups;
 }
