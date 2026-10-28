@@ -60,20 +60,26 @@ test('group generation rejects malformed config before committing or deleting pa
   const beforeHead = await git(['rev-parse', 'HEAD'], vault);
   const files = ['README.md', 'GROUPS.md', 'packs/starter.json', 'groups/starter.md'];
   const before = await Promise.all(files.map((file) => readFile(path.join(vault, file), 'utf8')));
-  await writeJson(path.join(vault, 'groups.json'), null);
+  for (const config of [
+    null,
+    { packs: { starter: { title: 'Starter' } } },
+    { packs: { starter: { title: 'Starter', skill: ['demo'] } } },
+  ]) {
+    await writeJson(path.join(vault, 'groups.json'), config);
 
-  await assert.rejects(
-    execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'groups'], { env: cliEnv(home) }),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /groups\.json/);
-      return true;
-    },
-  );
+    await assert.rejects(
+      execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'groups'], { env: cliEnv(home) }),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(error.stderr, /groups\.json/);
+        return true;
+      },
+    );
 
-  assert.deepEqual(await git(['rev-parse', 'HEAD'], vault), beforeHead);
-  assert.deepEqual(await git(['rev-parse', 'origin/main'], vault), beforeHead);
-  assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(vault, file), 'utf8'))), before);
+    assert.deepEqual(await git(['rev-parse', 'HEAD'], vault), beforeHead);
+    assert.deepEqual(await git(['rev-parse', 'origin/main'], vault), beforeHead);
+    assert.deepEqual(await Promise.all(files.map((file) => readFile(path.join(vault, file), 'utf8'))), before);
+  }
 });
 
 async function tempDir() {

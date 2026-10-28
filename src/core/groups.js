@@ -168,7 +168,7 @@ export async function loadGroupsConfig(vaultPath) {
           throw new Error(`Pack ${name} must be a skill array or an object`);
         }
         const skills = Array.isArray(pack) ? pack : pack.skills;
-        if (skills !== undefined && (!Array.isArray(skills) || !skills.every((skill) => typeof skill === 'string'))) {
+        if (!Array.isArray(skills) || !skills.every((skill) => typeof skill === 'string')) {
           throw new Error(`Skills for pack ${name} must be an array of names`);
         }
       }
