@@ -90,18 +90,8 @@ async function acquireLock(root, recover) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       await mkdir(lockPath, { mode: 0o700 });
-      await writePrivateJson(path.join(lockPath, 'owner.json'), {
-        version: 1,
-        pid: process.pid,
-        started_at: new Date().toISOString(),
-      });
-      await recover();
-      return async () => removePath(lockPath);
     } catch (error) {
-      if (error.code !== 'EEXIST') {
-        if (await pathInfo(lockPath)) await removePath(lockPath);
-        throw error;
-      }
+      if (error.code !== 'EEXIST') throw error;
       const owner = await readJson(path.join(lockPath, 'owner.json'), null).catch(() => null);
       if (processIsRunning(owner?.pid)) {
         throw new Error('Another SkillSync apply is already running');
@@ -111,6 +101,19 @@ async function acquireLock(root, recover) {
         throw new Error('Another SkillSync apply is already starting');
       }
       await removePath(lockPath);
+      continue;
+    }
+    try {
+      await writePrivateJson(path.join(lockPath, 'owner.json'), {
+        version: 1,
+        pid: process.pid,
+        started_at: new Date().toISOString(),
+      });
+      await recover();
+      return async () => removePath(lockPath);
+    } catch (error) {
+      await removePath(lockPath);
+      throw error;
     }
   }
   throw new Error('Could not acquire the SkillSync apply lock');

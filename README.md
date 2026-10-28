@@ -484,6 +484,8 @@ Copy-mode updates, removal, and rollback support read-only skill directories, in
 
 New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
 
+Repairing a projection recovery error lets the next daemon cycle retry without a restart.
+
 Restore the most recent successful local projection apply in an emergency:
 
 ```bash
