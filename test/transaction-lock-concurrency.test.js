@@ -192,6 +192,32 @@ test('release removes only the caller\'s lease even in the same process', async 
   assert.deepEqual(remainingOwners, owners);
 });
 
+test('a delayed reclaimer cannot rmdir a newly published lease', { timeout: 15_000 }, async (t) => {
+  const { destination, lock, worker } = await fixture(t);
+  const dead = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  assert.equal((await once(dead, 'exit'))[0], 0);
+  await mkdir(lock, { recursive: true });
+  await writeFile(path.join(lock, 'owner.json'), JSON.stringify({ version: 1, pid: dead.pid }));
+  const reclaimer = worker('reclaimer', dead.pid);
+  const writer = worker('A', dead.pid);
+  await Promise.all([reclaimer.wait('stale-owner-read'), writer.wait('stale-owner-read')]);
+  reclaimer.resume();
+  await reclaimer.wait('lease-unlinked');
+  writer.resume();
+  await writer.wait('projection-rename');
+  const owners = await readdir(lock);
+  reclaimer.resume();
+  const result = await reclaimer.closed;
+  const remainingOwners = await readdir(lock).catch(() => []);
+  writer.resume();
+  assert.equal((await writer.closed).code, 0);
+
+  assert.equal(result.code, 1, JSON.stringify(result));
+  assert.equal(result.messages.some(message => message.event === 'entered'), false);
+  assert.deepEqual(remainingOwners, owners);
+  assert.equal(await readFile(path.join(destination, 'SKILL.md'), 'utf8'), '# New\n');
+});
+
 test('a process exiting during interrupted recovery leaves a recoverable lease', { timeout: 15_000 }, async (t) => {
   const { destination, transactions, options, worker } = await fixture(t);
   const { backupId } = await applyFilesystemPlan(options);
