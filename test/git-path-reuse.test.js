@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -44,7 +44,7 @@ test('sync reuses private paths while reading fresh state and resolving Git meta
     await syncVault(options);
     assert.equal(resolutions, 1);
     assert.equal(await gitPrivatePath(vaultPath, 'local', 'devices', 'local.json'),
-      path.join(metadata, 'skillsync', 'local', 'devices', 'local.json'));
+      path.join(await realpath(metadata), 'skillsync', 'local', 'devices', 'local.json'));
   } finally {
     mock.mock.restore();
     syncBuiltinESMExports();
