@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, readlink, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, readlink, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -335,6 +335,15 @@ async function writeDeviceState(updates) {
   const attempted = [];
   try {
     for (const update of snapshots) {
+      if (isDeepStrictEqual(update.previous, update.value)) {
+        if (update.write !== writePrivateJson) continue;
+        const info = await lstat(update.filePath);
+        if (info.isFile() && info.nlink === 1) {
+          await chmod(path.dirname(update.filePath), 0o700);
+          await chmod(update.filePath, 0o600);
+          continue;
+        }
+      }
       // A private write can fail its permission check after replacing the file.
       attempted.push(update);
       await update.write(update.filePath, update.value);
