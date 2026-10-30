@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    name: Node ${{ matrix.node.label }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -20,16 +20,17 @@ jobs:
           - ubuntu-latest
           - macos-latest
         node:
-          - "20"
-          - "22"
-          - "24"
+          - { label: "20", version: "20.17.0" }
+          - { label: "22", version: "22.13.0" }
+          - { label: "23.5.0", version: "23.5.0" }
+          - { label: "24", version: "24" }
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ matrix.node.version }}
           cache: npm
 
       - run: npm ci

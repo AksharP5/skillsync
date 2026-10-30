@@ -6,7 +6,7 @@ Thanks for helping improve SkillSync.
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js matching `^20.17.0 || ^22.13.0 || >=23.5.0`
 - Git
 
 Run:
