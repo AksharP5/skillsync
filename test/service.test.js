@@ -139,7 +139,7 @@ test('service definitions execute the stable CLI directly', () => {
     unit,
     /Environment="PATH=\/home\/user\/\.local\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin"/,
   );
-  assert.match(unit, /ExecStart="\/home\/user\/\.local\/bin\/skillsync" "daemon"/);
+  assert.match(unit, /ExecStart=:"\/home\/user\/\.local\/bin\/skillsync" "daemon"/);
   assert.doesNotMatch(unit, /content-addressed/);
 });
 
@@ -150,6 +150,17 @@ test('systemd preserves literal percent signs in executable, argument, and PATH 
     pathValue: '/opt/%Q/bin:/usr/bin:/bin',
   });
 
-  assert.ok(unit.includes('ExecStart="/opt/100%%ready/skillsync" "/opt/%%h/cli.js" "daemon"'));
+  assert.ok(unit.includes('ExecStart=:"/opt/100%%ready/skillsync" "/opt/%%h/cli.js" "daemon"'));
   assert.ok(unit.includes('Environment="PATH=/opt/100%%ready:/opt/%%Q/bin:/usr/bin:/bin:/usr/sbin:/sbin"'));
+});
+
+test('systemd disables variable expansion for literal installation paths and arguments', () => {
+  const unit = renderSystemdUserService({
+    command: '/opt/${USER}/skillsync',
+    args: ['/checkout/${PROJECT}/cli.js', '$USER', 'daemon'],
+    pathValue: '/opt/${TOOLS}/bin:/usr/bin:/bin',
+  });
+
+  assert.ok(unit.includes('ExecStart=:"/opt/${USER}/skillsync" "/checkout/${PROJECT}/cli.js" "$USER" "daemon"'));
+  assert.ok(unit.includes('Environment="PATH=/opt/${USER}:/opt/${TOOLS}/bin:/usr/bin:/bin:/usr/sbin:/sbin"'));
 });

@@ -105,5 +105,5 @@ export function renderSystemdUserService({
 }) {
   const invocation = [command, ...args].map(systemdQuote).join(' ');
   const environmentPath = servicePath(command, pathValue);
-  return `[Unit]\nDescription=SkillSync daemon\n\n[Service]\nType=simple\nEnvironment=${systemdQuote(`PATH=${environmentPath}`)}\nExecStart=${invocation}\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n`;
+  return `[Unit]\nDescription=SkillSync daemon\n\n[Service]\nType=simple\nEnvironment=${systemdQuote(`PATH=${environmentPath}`)}\nExecStart=:${invocation}\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n`;
 }
