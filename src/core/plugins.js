@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { assertSafePathSegment, exists, readJson, writeJson } from './fs.js';
 import { commandExists, run } from './git.js';
@@ -387,7 +388,9 @@ export async function syncCodexPlugins({
     profile,
     inspection,
   });
-  await writeJson(pluginStatePath(vaultPath, deviceId), report);
+  if (!isDeepStrictEqual(previousState, report)) {
+    await writeJson(pluginStatePath(vaultPath, deviceId), report);
+  }
   return {
     ...report,
     available: true,
