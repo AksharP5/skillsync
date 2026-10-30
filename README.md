@@ -11,7 +11,7 @@ Paste this into any terminal-capable coding agent:
 ```text
 Set up SkillSync completely on this device.
 
-1. Check for Node.js 20 or newer, Git, GitHub CLI, and an authenticated `gh auth status`. Stop and tell me what is missing before continuing.
+1. Check for Node.js matching `^20.17.0 || ^22.13.0 || >=23.5.0`, Git, GitHub CLI, and an authenticated `gh auth status`. Stop and tell me what is missing before continuing.
 2. Ask whether I already have a SkillSync vault. If I do, run `npx -y @akshar5/skillsync@latest setup --repo OWNER/REPO`. Otherwise, run `npx -y @akshar5/skillsync@latest setup`.
 3. Let setup detect my Codex, OpenCode, Claude Code, Hermes, and Grok Bot skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
 4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
@@ -26,7 +26,7 @@ The `npx` command starts setup without requiring an existing installation. The g
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js matching `^20.17.0 || ^22.13.0 || >=23.5.0`
 - Git
 - [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`
 - A private GitHub repository for your skill vault
@@ -539,6 +539,8 @@ skillsync installed --device workstation
 ```
 
 The background service syncs when it starts and then checks every 120 seconds. It rereads local configuration before each sync, so changing the selected vault or device takes effect on the next cycle. If the updated configuration is invalid, that cycle reports an error and retries after repair. It uses a macOS LaunchAgent or a Linux systemd user service.
+
+For a custom interval, run `skillsync daemon --interval <seconds>`. The value must be positive and no greater than 2147483.647 seconds, Node's maximum timer delay. Larger values are rejected instead of overflowing into a rapid sync loop.
 
 Registry hashes exclude untracked files ignored by Git, including filenames with Unicode characters, so local generated files do not cause repeated sync commits across devices. Tracked files still count even when an ignore rule matches them. Copy-mode overwrite protection continues to check every deployed file, including ignored files. The first sync after upgrading may correct an existing hash once; upgrade every device to prevent older versions from restoring it.
 

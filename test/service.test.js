@@ -153,3 +153,14 @@ test('systemd preserves literal percent signs in executable, argument, and PATH 
   assert.ok(unit.includes('ExecStart="/opt/100%%ready/skillsync" "/opt/%%h/cli.js" "daemon"'));
   assert.ok(unit.includes('Environment="PATH=/opt/100%%ready:/opt/%%Q/bin:/usr/bin:/bin:/usr/sbin:/sbin"'));
 });
+
+test('systemd escapes literal dollars in arguments without changing executable or PATH values', () => {
+  const unit = renderSystemdUserService({
+    command: '/opt/${USER}/skillsync',
+    args: ['/checkout/${PROJECT}/cli.js', '$USER', '$$', 'daemon'],
+    pathValue: '/opt/${TOOLS}/bin:/usr/bin:/bin',
+  });
+
+  assert.ok(unit.includes('ExecStart="/opt/${USER}/skillsync" "/checkout/$${PROJECT}/cli.js" "$$USER" "$$$$" "daemon"'));
+  assert.ok(unit.includes('Environment="PATH=/opt/${USER}:/opt/${TOOLS}/bin:/usr/bin:/bin:/usr/sbin:/sbin"'));
+});

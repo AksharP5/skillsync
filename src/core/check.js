@@ -114,11 +114,13 @@ async function inspectTree(rootPath, {
 
   await walk(rootPath);
   for (const file of files) {
-    const secret = await detectedSecret(file.path);
+    const json = path.extname(file.path) === '.json';
+    const content = json ? await readFile(file.path, 'utf8') : null;
+    const secret = json ? secretType(content) : await detectedSecret(file.path);
     if (secret) errors.push(`Possible ${secret}: ${file.relative}`);
-    if (path.extname(file.path) !== '.json') continue;
+    if (!json) continue;
     try {
-      JSON.parse(await readFile(file.path, 'utf8'));
+      JSON.parse(content);
     } catch {
       errors.push(`Invalid JSON: ${file.relative}`);
     }

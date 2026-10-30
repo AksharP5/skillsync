@@ -1981,6 +1981,9 @@ async function daemon(rest) {
     throw new Error('Daemon interval must be a positive number of seconds');
   }
   const interval = intervalSeconds * 1000;
+  if (interval > 2_147_483_647) {
+    throw new Error('Daemon interval must not exceed 2147483.647 seconds');
+  }
   const initialConfig = await configured();
   console.log(`SkillSync daemon started for ${initialConfig.repoPath}; interval ${interval / 1000}s`);
   while (true) {
