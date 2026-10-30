@@ -1286,6 +1286,16 @@ test('daemon rejects a non-positive interval instead of entering a tight loop', 
   );
 });
 
+for (const interval of ['2147483.648', '2147484', '1e308']) {
+  test(`daemon rejects overflowing interval ${interval} before loading a vault`, async (t) => {
+    const home = await tempDir();
+    t.after(() => rm(home, { recursive: true, force: true }));
+    await assert.rejects(() => execFileAsync(process.execPath, [
+      path.resolve('src/cli.js'), 'daemon', '--interval', interval,
+    ], { env: cliEnv(home) }), /Daemon interval must not exceed 2147483\.647 seconds/);
+  });
+}
+
 for (const scenario of [
   { name: 'Claude is already linked', claude: true, cursor: false },
   { name: 'Cursor is already linked', claude: false, cursor: true },
