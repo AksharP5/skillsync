@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +14,7 @@ import {
   normalizePluginList,
   normalizePluginSelector,
   pluginProfileHash,
+  pluginStatePath,
   savePluginProfile,
   setPluginProfileAutoAdopt,
   syncCodexPlugins,
@@ -22,6 +23,39 @@ import {
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-plugins-test-'));
 }
+
+test('idle plugin sync preserves the report file while inspecting fresh inventory', async (t) => {
+  const vaultPath = await tempDir();
+  t.after(() => rm(vaultPath, { recursive: true, force: true }));
+  const deviceId = 'local';
+  await savePluginProfile({ vaultPath, name: 'shared', plugins: ['demo@local'] });
+  await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
+  let enabled = true;
+  let inspections = 0;
+  const options = {
+    vaultPath, deviceId,
+    commandAvailable: async () => true,
+    runCommand: async () => {
+      inspections++;
+      return { stdout: JSON.stringify({ installed: [{ pluginId: 'demo@local', enabled }] }) };
+    },
+  };
+  await syncCodexPlugins(options);
+  const reportPath = pluginStatePath(vaultPath, deviceId);
+  const timestamp = new Date('2000-01-01T00:00:00Z');
+  await utimes(reportPath, timestamp, timestamp);
+
+  await syncCodexPlugins(options);
+  await syncCodexPlugins(options);
+
+  assert.equal(inspections, 3);
+  assert.equal((await stat(reportPath)).mtimeMs, timestamp.getTime());
+  enabled = false;
+  const changed = await syncCodexPlugins(options);
+  assert.deepEqual(changed.disabled, ['demo@local']);
+  assert.equal((await loadPluginState(vaultPath, deviceId)).applied_profile, null);
+  assert.notEqual((await stat(reportPath)).mtimeMs, timestamp.getTime());
+});
 
 test('Codex plugin inventory excludes disabled and product-managed plugins from imports', () => {
   const installed = normalizePluginList({
