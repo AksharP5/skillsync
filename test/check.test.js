@@ -4,8 +4,26 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { checkVault } from '../src/core/check.js';
+import { checkSkillFolder, checkVault } from '../src/core/check.js';
 import { ensureVault } from '../src/core/registry.js';
+
+test('JSON checks report secrets and invalid syntax from the same file', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'skillsync-json-check-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(path.join(directory, 'SKILL.md'), '# Demo\n');
+  const token = `ghp_${'a'.repeat(25)}`;
+  for (const content of [JSON.stringify({ token }), `{"token":"${token}"`]) {
+    await writeFile(path.join(directory, 'settings.json'), `${' '.repeat(65536)}${content}`);
+    await assert.rejects(() => checkSkillFolder(directory), (error) => {
+      assert.match(error.message, /Possible GitHub token: settings\.json/);
+      assert.equal(error.message.includes('Invalid JSON: settings.json'), !content.endsWith('}'));
+      assert.equal(error.message.includes(token), false);
+      return true;
+    });
+  }
+  await writeFile(path.join(directory, 'settings.json'), '{"safe":true}');
+  assert.deepEqual(await checkSkillFolder(directory), { files: 2 });
+});
 
 for (const [filename, expected] of [
   ['registry.json', /registry\.json has an unsupported shape/],
