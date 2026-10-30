@@ -1620,9 +1620,10 @@ export async function listDevices(vaultPath) {
   const deviceIds = new Set([...desiredFiles, ...reportedFiles, ...instructionFiles]
     .filter((file) => file.endsWith('.json'))
     .map((file) => file.slice(0, -'.json'.length)));
+  if (deviceIds.size) await ensureVault(vaultPath);
   const devices = [];
   for (const deviceId of deviceIds) {
-    devices.push(await loadDevice(vaultPath, deviceId));
+    devices.push(await loadDevice(vaultPath, deviceId, { ensure: false }));
   }
   return devices.sort((a, b) => String(a.display_name).localeCompare(String(b.display_name)));
 }
