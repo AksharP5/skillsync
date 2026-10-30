@@ -134,9 +134,24 @@ for (const failure of ['detachment', 'assignment', 'path-state']) {
         sourcePath,
         targetPaths: failure === 'detachment' ? [sourcePath] : [old, sourcePath],
       });
-      await chmod(protectedDirectory, 0o555);
-
-      await assert.rejects(operation, { code: 'EACCES' });
+      let mock;
+      if (failure === 'path-state') {
+        const original = fs.rename;
+        const localState = path.join(options.vaultPath, '.skillsync-local', 'devices', 'local.json');
+        mock = t.mock.method(fs, 'rename', async (source, destination) => {
+          if (destination === localState) throw Object.assign(new Error('Injected path-state failure'), { code: 'EIO' });
+          return original(source, destination);
+        });
+        syncBuiltinESMExports();
+      } else {
+        await chmod(protectedDirectory, 0o555);
+      }
+      try {
+        await assert.rejects(operation, { code: failure === 'path-state' ? 'EIO' : 'EACCES' });
+      } finally {
+        mock?.mock.restore();
+        syncBuiltinESMExports();
+      }
 
       assert.equal((await lstat(sourcePath)).isFile(), true);
       assert.equal(await readFile(sourcePath, 'utf8'), '# Next complete profile\n');
@@ -156,9 +171,7 @@ for (const failure of ['detachment', 'assignment', 'path-state']) {
 test('failed automatic Claude configuration restores working standalone instructions',
   { skip: !process.getuid || process.getuid() === 0 }, async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'skillsync-claude-preparation-'));
-    let reportDirectory;
     t.after(async () => {
-      if (reportDirectory) await chmod(reportDirectory, 0o755);
       await rm(root, { recursive: true, force: true });
     });
     const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
@@ -171,20 +184,28 @@ test('failed automatic Claude configuration restores working standalone instruct
     await writeFile(claudePath, content);
     await importGlobalInstructionsProfile({ ...options, profile: 'shared', sourcePath });
     const before = (await loadLocalDevice(options.vaultPath, options.deviceId)).instructions.agents;
-    reportDirectory = path.join(options.vaultPath, 'state');
     const operation = () => reconcileGlobalInstructionProviders({
       ...options, claudePath, commandExistsFn: async () => true,
     });
-    await chmod(reportDirectory, 0o555);
-
-    await assert.rejects(operation, { code: 'EACCES' });
+    const original = fs.rename;
+    const localState = path.join(options.vaultPath, '.skillsync-local', 'devices', 'local.json');
+    const mock = t.mock.method(fs, 'rename', async (source, destination) => {
+      if (destination === localState) throw Object.assign(new Error('Injected path-state failure'), { code: 'EIO' });
+      return original(source, destination);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(operation, { code: 'EIO' });
+    } finally {
+      mock.mock.restore();
+      syncBuiltinESMExports();
+    }
 
     assert.equal((await lstat(claudePath)).isFile(), true);
     assert.equal(await readFile(claudePath, 'utf8'), content);
     assert.deepEqual(await readdir(path.dirname(claudePath)), ['CLAUDE.md']);
     assert.deepEqual((await loadLocalDevice(options.vaultPath, options.deviceId)).instructions.agents, before);
 
-    await chmod(reportDirectory, 0o755);
     const result = await operation();
     assert.equal(result.backups.length, 1);
     assert.equal(await readFile(result.backups[0], 'utf8'), content);
