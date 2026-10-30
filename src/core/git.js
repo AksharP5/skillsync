@@ -1,6 +1,13 @@
 import { spawn } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { assertSafePathSegment, exists, hashDirectory } from './fs.js';
 import path from 'node:path';
+
+const privatePathCache = new AsyncLocalStorage();
+
+export function withGitPrivatePathCache(operation) {
+  return privatePathCache.run(new Map(), operation);
+}
 
 export function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -100,8 +107,13 @@ export async function gitPrivatePath(repoPath, ...segments) {
     'skillsync',
     ...segments.map((segment) => assertSafePathSegment(segment, 'Private Git path segment')),
   );
+  const cache = privatePathCache.getStore();
+  const key = JSON.stringify([path.resolve(repoPath), relativePath]);
+  if (cache?.has(key)) return cache.get(key);
   const { stdout } = await git(['rev-parse', '--git-path', relativePath], repoPath);
-  return path.resolve(repoPath, stdout.trim());
+  const resolved = path.resolve(repoPath, stdout.trim());
+  cache?.set(key, resolved);
+  return resolved;
 }
 
 export async function cloneRepo(repo, repoPath) {

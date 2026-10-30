@@ -21,6 +21,7 @@ import {
   isGitRepo,
   pullRebase,
   pushWithPullRebaseRetry,
+  withGitPrivatePathCache,
 } from './git.js';
 import {
   applyGlobalInstructions,
@@ -169,7 +170,11 @@ async function preserveRemoteDeletionRemnants(vaultPath, pending) {
   }
 }
 
-export async function syncVault({
+export function syncVault(options = {}) {
+  return withGitPrivatePathCache(() => sync(options));
+}
+
+async function sync({
   vaultPath,
   deviceId,
   pushChanges = true,
