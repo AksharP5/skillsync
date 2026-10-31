@@ -24,6 +24,7 @@ export function run(command, args, options = {}) {
         timedOut = true;
         child.kill('SIGTERM');
         forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
+        if (child.exitCode !== null || child.signalCode !== null) finishTimeout();
       }, options.timeoutMs)
       : null;
     const clearTimers = () => {
@@ -36,6 +37,12 @@ export function run(command, args, options = {}) {
       clearTimers();
       reject(error);
     };
+    const finishTimeout = () => {
+      // Wait for the child to exit, but not for pipes inherited by descendants.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      fail(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+    };
     let stdout = '';
     let stderr = '';
     if (!options.inherit) {
@@ -47,18 +54,17 @@ export function run(command, args, options = {}) {
     child.on('error', (error) => {
       fail(error);
     });
+    child.on('exit', () => {
+      if (timedOut) finishTimeout();
+    });
     child.on('close', (code) => {
-      if (timedOut) {
-        fail(new Error(`${command} timed out after ${options.timeoutMs}ms`));
-        return;
-      }
+      clearTimers();
+      if (settled) return;
       if (code !== 0) {
         fail(new Error(`${command} ${args.join(' ')} failed (${code})\n${stderr || stdout}`));
         return;
       }
-      if (settled) return;
       settled = true;
-      clearTimers();
       resolve({ stdout, stderr, code });
     });
   });
