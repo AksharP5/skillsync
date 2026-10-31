@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { checkbox, confirm, input, select } from '@inquirer/prompts';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
@@ -335,6 +334,7 @@ async function setup(rest) {
     if (nameArg || yes || !process.stdin.isTTY) {
       repo = await ensureOwnedVaultRepo(owner, nameArg || 'skills');
     } else {
+      const { input, select } = await import('@inquirer/prompts');
       const setupMode = await promptWithEscape(select({
         message: 'Which skills vault do you want to use?',
         loop: false,
@@ -410,6 +410,7 @@ async function maybeAddDetectedTargets(repoPath, deviceId, yes) {
   if (!detected.length) return;
   let selected = detected;
   if (!yes && process.stdin.isTTY) {
+    const { checkbox } = await import('@inquirer/prompts');
     selected = await checkbox({
       message: 'Which local skill targets should SkillSync manage?',
       choices: detected.map((target) => ({ name: `${target.name} (${target.path})`, value: target })),
@@ -783,6 +784,7 @@ async function pluginsCommand(rest = []) {
     let selected = requested;
     if (!selected.length && hasFlag(rest, '--auto-adopt')) selected = importable;
     if (!selected.length) {
+      const { checkbox } = await import('@inquirer/prompts');
       selected = await promptWithEscape(checkbox({
         message: 'Which Codex plugins should this profile manage?',
         choices: importable.map((selector) => ({ name: selector, value: selector })),
@@ -1193,6 +1195,7 @@ async function instructionsCommand(rest = []) {
       && !inspected.destinationOwned
       && !inspected.sameContents
       && process.stdin.isTTY) {
+      const { select } = await import('@inquirer/prompts');
       const cursorRule = isCursorRulePath(targetPath);
       strategy = await promptWithEscape(select({
         message: cursorRule
@@ -1351,6 +1354,7 @@ async function chooseConflictAction({ rest, skillName, canUseVault }) {
   const explicit = conflictAction(rest);
   if (explicit) return explicit;
   if (!process.stdin.isTTY) return 'skip';
+  const { select } = await import('@inquirer/prompts');
   return promptWithEscape(select({
     message: `${skillName} already exists in the vault with different content. What should SkillSync do?`,
     loop: false,
@@ -1368,6 +1372,7 @@ async function renamedSkillName({ rest, currentName }) {
   const explicit = flagValue(rest, '--as') || flagValue(rest, '--name');
   if (explicit && explicit !== currentName) return explicit;
   if (!process.stdin.isTTY) throw new Error(`--conflict rename requires --as <new-name> for ${currentName}`);
+  const { input } = await import('@inquirer/prompts');
   return input({ message: `New vault name for ${currentName}:`, default: `${currentName}-local` });
 }
 
@@ -1496,6 +1501,7 @@ async function addRemoteSkills(source, rest, config) {
 
     let selected = matching;
     if (!wanted.length && matching.length > 1 && process.stdin.isTTY) {
+      const { checkbox } = await import('@inquirer/prompts');
       selected = await checkbox({
         message: `Select skills to add from ${source}`,
         choices: matching.map((skill) => ({ name: `${skill.name} (${skill.relative})`, value: skill })),
@@ -1554,12 +1560,14 @@ async function importSkills(rest) {
     console.log(`No unmanaged ${importSource.label} skills found under ${importSource.root}`);
     return;
   }
-  const selected = process.stdin.isTTY
-    ? await checkbox({
-        message: `Select ${importSource.label} skills to import into the vault`,
-        choices: found.map((skill) => ({ name: `${skill.name} (${skill.relative})`, value: skill })),
-      })
-    : found;
+  let selected = found;
+  if (process.stdin.isTTY) {
+    const { checkbox } = await import('@inquirer/prompts');
+    selected = await checkbox({
+      message: `Select ${importSource.label} skills to import into the vault`,
+      choices: found.map((skill) => ({ name: `${skill.name} (${skill.relative})`, value: skill })),
+    });
+  }
   const results = [];
   for (const skill of selected) {
     const targets = await targetsMatchingSourcePath({
@@ -1587,6 +1595,7 @@ async function importSkills(rest) {
 }
 
 async function chooseImportSource() {
+  const { select } = await import('@inquirer/prompts');
   const names = supportedImportSources();
   return promptWithEscape(select({
     message: 'Import skills from which local agent?',
@@ -1640,6 +1649,7 @@ async function deleteSkill(rest) {
   if (!skillName) throw new Error('Usage: skillsync delete <skill>');
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
   if (!yes && process.stdin.isTTY) {
+    const { input } = await import('@inquirer/prompts');
     const typed = await input({ message: `Delete ${skillName} from the vault and all devices? Type the skill name to confirm:` });
     if (typed !== skillName) {
       console.log('Cancelled.');
@@ -1678,6 +1688,7 @@ async function chooseInstallTargets(config, rest) {
   }
   if (explicit) return explicit;
   if (hasFlag(rest, '--no-install') || hasFlag(rest, '--yes') || hasFlag(rest, '-y') || !process.stdin.isTTY || !available.length) return [];
+  const { checkbox, confirm } = await import('@inquirer/prompts');
   const shouldInstall = await confirm({ message: 'Install on this device now?', default: true });
   if (!shouldInstall) return [];
   return promptWithEscape(checkbox({
@@ -2010,6 +2021,7 @@ async function daemon(rest) {
 
 async function runUi() {
   if (!process.stdin.isTTY) return listSkills();
+  const { confirm, input, select } = await import('@inquirer/prompts');
   let config = await loadConfig();
   try {
     config = await configured({ config });
@@ -2059,6 +2071,7 @@ async function runUi() {
 }
 
 async function skillsScreen(config) {
+  const { checkbox, confirm } = await import('@inquirer/prompts');
   const registry = await loadRegistry(config.repoPath);
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const names = Object.keys(registry.skills).sort();
@@ -2134,6 +2147,7 @@ async function skillsScreen(config) {
 }
 
 async function installedScreen(config) {
+  const { checkbox, confirm, select } = await import('@inquirer/prompts');
   await refreshChangedRegistryEntries(config.repoPath);
   const registry = await loadRegistry(config.repoPath);
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
@@ -2350,6 +2364,7 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
 
   const replacementCount = updates.reduce((count, update) => count + update.replacements.length, 0);
   if (replacementCount) {
+    const { confirm } = await import('@inquirer/prompts');
     const confirmed = await confirm({
       message: `Replace ${replacementCount} local detected skill folder${replacementCount === 1 ? '' : 's'} with vault-managed links/copies?`,
       default: false,
@@ -2378,6 +2393,7 @@ async function updateLocalSkillsFromVault({ config, device, selectedSkills }) {
 }
 
 async function chooseTargets(config) {
+  const { checkbox } = await import('@inquirer/prompts');
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const targetNames = Object.keys(device.targets);
   const choices = [
@@ -2395,6 +2411,7 @@ async function chooseTargets(config) {
 }
 
 async function devicesScreen(config) {
+  const { select } = await import('@inquirer/prompts');
   await syncVault({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
@@ -2422,6 +2439,7 @@ async function devicesScreen(config) {
 }
 
 async function matrixScreen(config) {
+  const { select } = await import('@inquirer/prompts');
   await syncVault({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
@@ -2474,6 +2492,7 @@ function deviceTargetChoices(device, selected = []) {
 }
 
 async function chooseTargetsForDevice(device, selected = null) {
+  const { checkbox } = await import('@inquirer/prompts');
   const targetNames = Object.keys(device.targets || {});
   const defaultTargets = targetNames.length ? targetNames : ['global'];
   const choices = deviceTargetChoices(
@@ -2507,6 +2526,7 @@ function matrixDeviceChoice(device, skillName) {
 }
 
 async function editMatrixSkillDraft({ skillName, draftDevices }) {
+  const { checkbox } = await import('@inquirer/prompts');
   const sortedDevices = [...draftDevices].sort((a, b) => a.device_id.localeCompare(b.device_id));
   const selected = await promptWithEscape(checkbox({
     message: `${skillName}: assigned devices`,
@@ -2599,6 +2619,7 @@ async function matrixEditorScreen(config, { syncFirst = true } = {}) {
   if (!process.stdin.isTTY) {
     throw new Error('The matrix editor needs an interactive terminal. Run: skillsync matrix --edit');
   }
+  const { confirm, select } = await import('@inquirer/prompts');
   if (syncFirst) {
     await syncVault({
       vaultPath: config.repoPath,
@@ -2714,6 +2735,7 @@ async function applyDeviceAssignmentChanges({ config, deviceId, toInstall, toUni
 }
 
 async function deviceDetailScreen(config, deviceId) {
+  const { select } = await import('@inquirer/prompts');
   const device = await requireKnownDevice(config.repoPath, deviceId);
   const action = await promptWithEscape(select({
     message: `${device.display_name} — ${deviceApplyState(device)}`,
@@ -2731,6 +2753,7 @@ async function deviceDetailScreen(config, deviceId) {
 }
 
 async function deviceSkillsScreen(config, deviceId) {
+  const { checkbox, confirm } = await import('@inquirer/prompts');
   const registry = await loadRegistry(config.repoPath);
   const device = await requireKnownDevice(config.repoPath, deviceId);
   const names = Object.keys(registry.skills).sort();
@@ -2779,6 +2802,7 @@ async function deviceSkillsScreen(config, deviceId) {
 }
 
 async function deviceSkillDestinationsScreen(config, deviceId) {
+  const { checkbox, select } = await import('@inquirer/prompts');
   const registry = await loadRegistry(config.repoPath);
   const device = await requireKnownDevice(config.repoPath, deviceId);
   const names = Object.keys(registry.skills).sort();
@@ -2833,6 +2857,7 @@ async function deviceSkillDestinationsScreen(config, deviceId) {
 }
 
 async function targetsScreen(config) {
+  const { confirm, input, select } = await import('@inquirer/prompts');
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const choices = Object.entries(device.targets).map(([name, targetConfig]) => ({
     name: `${name}: ${targetConfig.path} (${targetConfig.mode})${targetConfig.scan_path ? ` scan ${targetConfig.scan_path}` : ''} [auto-adopt ${targetConfig.auto_import ? 'on' : 'off'}]`,
@@ -2889,6 +2914,7 @@ async function targetsScreen(config) {
 }
 
 async function settingsScreen(config) {
+  const { confirm, select } = await import('@inquirer/prompts');
   const vaultConfig = await loadVaultConfig(config.repoPath);
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const enabled = vaultConfig.policies.delete_unassigned_skills;
@@ -2958,6 +2984,7 @@ async function settingsScreen(config) {
 }
 
 async function instructionProfileSettingsScreen(config, device) {
+  const { confirm, input, select } = await import('@inquirer/prompts');
   const profiles = await listGlobalInstructionProfiles(config.repoPath);
   const agents = device.instructions.agents;
   const unlinkablePaths = agents?.profile && (agents.paths || []).length > 1
