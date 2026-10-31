@@ -16,16 +16,15 @@ export function run(command, args, options = {}) {
       env: { ...process.env, ...(options.env || {}) },
       stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });
+    let timedOut = false;
     let settled = false;
     let forceKill = null;
     const timeout = options.timeoutMs
       ? setTimeout(() => {
+        timedOut = true;
         child.kill('SIGTERM');
         forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
-        // Descendants can keep the pipes open after the child exits.
-        fail(new Error(`${command} timed out after ${options.timeoutMs}ms`));
-        child.stdout?.destroy();
-        child.stderr?.destroy();
+        if (child.exitCode !== null || child.signalCode !== null) finishTimeout();
       }, options.timeoutMs)
       : null;
     const clearTimers = () => {
@@ -35,7 +34,14 @@ export function run(command, args, options = {}) {
     const fail = (error) => {
       if (settled) return;
       settled = true;
+      clearTimers();
       reject(error);
+    };
+    const finishTimeout = () => {
+      // Wait for the child to exit, but not for pipes inherited by descendants.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      fail(new Error(`${command} timed out after ${options.timeoutMs}ms`));
     };
     let stdout = '';
     let stderr = '';
@@ -46,8 +52,10 @@ export function run(command, args, options = {}) {
       child.stderr?.on('data', (chunk) => { stderr += chunk; });
     }
     child.on('error', (error) => {
-      clearTimers();
       fail(error);
+    });
+    child.on('exit', () => {
+      if (timedOut) finishTimeout();
     });
     child.on('close', (code) => {
       clearTimers();
