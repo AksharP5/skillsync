@@ -11,6 +11,7 @@ import {
   inspectTargets,
   isManagedSkillPath,
   installSkill,
+  installSkills,
   initializeLocalPathState,
   listDevices,
   loadLocalDevice,
@@ -626,8 +627,10 @@ async function packCommand(rest) {
     if (!packName) throw new Error('Usage: skillsync pack install <pack> [--target codex,claude] [--global]');
     const pack = await loadPack(config, packName);
     const targets = parseTargets(rest.slice(2));
+    if (pack.skills.length) {
+      await installSkills({ vaultPath: config.repoPath, deviceId: config.deviceId, skillNames: pack.skills, targets });
+    }
     for (const skillName of pack.skills) {
-      await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
       console.log(`Installed ${skillName}${targets ? ` -> ${targets.join(', ')}` : ''}`);
     }
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
@@ -2133,8 +2136,8 @@ async function skillsScreen(config) {
     });
     if (!confirmed) return;
   }
-  for (const skillName of toInstall) {
-    await installSkill({ vaultPath: config.repoPath, deviceId: config.deviceId, skillName, targets });
+  if (toInstall.length) {
+    await installSkills({ vaultPath: config.repoPath, deviceId: config.deviceId, skillNames: toInstall, targets });
   }
   for (const skill of localToRemove) {
     await uninstallLocalSkill({ config, device, skill });
@@ -2711,11 +2714,11 @@ async function matrixEditorScreen(config, { syncFirst = true } = {}) {
 }
 
 async function applyDeviceAssignmentChanges({ config, deviceId, toInstall, toUninstall, targets }) {
-  for (const skillName of toInstall) {
-    await installSkill({
+  if (toInstall.length) {
+    await installSkills({
       vaultPath: config.repoPath,
       deviceId,
-      skillName,
+      skillNames: toInstall,
       targets,
     });
   }

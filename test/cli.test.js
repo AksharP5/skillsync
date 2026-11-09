@@ -45,6 +45,33 @@ import { ensureVault, loadRegistry, rebuildRegistry, setVaultPolicy } from '../s
 
 const execFileAsync = promisify(execFile);
 
+test('pack installation saves one desired snapshot after validating every member', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, 'vault');
+  await writeConfig(home, vault);
+  for (const name of ['first', 'second']) await makeSkill(path.join(vault, 'skills'), name);
+  await rebuildRegistry(vault);
+  const packPath = path.join(vault, 'packs', 'example.json');
+  await writeJson(packPath, { name: 'example', skills: ['first', 'missing'] });
+  const before = await loadDevice(vault, 'test-device');
+  const install = () => execFileAsync(process.execPath,
+    [path.resolve('src/cli.js'), 'pack', 'install', 'example', '--global'], { env: cliEnv(home) });
+
+  await assert.rejects(install, /Skill not found in vault: missing/);
+  const failed = await loadDevice(vault, 'test-device');
+  assert.deepEqual(failed.global_installed, before.global_installed);
+  assert.equal(failed.desired_generation, before.desired_generation);
+
+  await writeJson(packPath, { name: 'example', skills: ['first', 'second'] });
+  const { stdout } = await install();
+  assert.equal(stdout, 'Installed first -> global\nInstalled second -> global\nInstalled pack example (2 skills).\n');
+  const installed = await loadDevice(vault, 'test-device');
+  assert.deepEqual(installed.global_installed, ['first', 'second']);
+  assert.equal(installed.desired_generation, before.desired_generation + 1);
+  assert.equal(installed.applied_generation, installed.desired_generation);
+});
+
 test('group generation rejects malformed config before committing or deleting packs', async (t) => {
   const home = await tempDir();
   t.after(() => rm(home, { recursive: true, force: true }));
