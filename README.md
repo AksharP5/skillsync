@@ -510,6 +510,8 @@ Directory hashes include file lengths so binary content cannot be mistaken for f
 
 Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
 
+Copy checks use bounded memory for large files. If a file grows or shrinks while it is being checked, sync stops; retry after the file stops changing.
+
 Cleanup prepares read-only directories before its first removal pass, preventing overlapping permission-error retries at the replacement path.
 
 New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
