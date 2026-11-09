@@ -319,6 +319,8 @@ Repeating `add` for unchanged content with the same targets preserves its regist
 
 Managed links and copies are detected by their vault name, even when `SKILL.md` retains the source name. Unmanaged folders still use `SKILL.md` frontmatter when present.
 
+Detected names must satisfy the vault's skill-name rules. An invalid name stops the scan before it replaces the last valid inventory. Correct the reported folder name or `SKILL.md` name, then scan again.
+
 ## Automatic skill adoption
 
 New targets automatically adopt new skills created inside their managed folder. For example, if Codex creates `~/.codex/skills/my-new-skill`, the next SkillSync run adds it to the vault, assigns it to Codex on that device, and replaces the standalone folder with a managed projection.
