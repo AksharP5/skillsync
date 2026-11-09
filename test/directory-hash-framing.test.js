@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -41,7 +41,7 @@ test('legacy hash verification retains the original content and executable forma
     'sha256-exec:b42283548414bdbe37a27cbfc2c6ded347faae34a3e42bf68527b727f6d9c77d');
 });
 
-test('registry refresh upgrades old hashes and remains stable on later refreshes', async (t) => {
+test('legacy registries verify without writes and upgrade during refresh', async (t) => {
   const vaultPath = await mkdtemp(path.join(tmpdir(), 'skillsync-hash-upgrade-'));
   t.after(() => rm(vaultPath, { recursive: true, force: true }));
   const source = path.join(vaultPath, 'skills', 'example');
@@ -49,11 +49,22 @@ test('registry refresh upgrades old hashes and remains stable on later refreshes
   await writeFile(path.join(source, 'SKILL.md'), '# Example\n');
   const registry = await rebuildRegistry(vaultPath);
   registry.skills.example.hash = await hashDirectory(source, { legacy: true });
-  await writeJson(path.join(vaultPath, 'registry.json'), registry);
+  const registryPath = path.join(vaultPath, 'registry.json');
+  await writeJson(registryPath, registry);
+  const timestamp = new Date('2000-01-01T00:00:00Z');
+  await utimes(registryPath, timestamp, timestamp);
+  const saved = await readFile(registryPath, 'utf8');
+
+  await checkVault(vaultPath);
+  assert.equal(await readFile(registryPath, 'utf8'), saved);
+  assert.equal((await stat(registryPath)).mtimeMs, timestamp.getTime());
+  await writeFile(path.join(source, 'SKILL.md'), '# Changed\n');
+  await assert.rejects(checkVault(vaultPath), /Registry hash is stale: example/);
+  await writeFile(path.join(source, 'SKILL.md'), '# Example\n');
 
   const upgraded = await refreshChangedRegistryEntries(vaultPath);
   assert.match(upgraded.skills.example.hash, /^sha256-v2:/);
   await checkVault(vaultPath);
   await refreshChangedRegistryEntries(vaultPath);
-  assert.deepEqual(await readJson(path.join(vaultPath, 'registry.json')), upgraded);
+  assert.deepEqual(await readJson(registryPath), upgraded);
 });

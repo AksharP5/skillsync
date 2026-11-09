@@ -97,13 +97,14 @@ export async function ignoredGitPaths(repoPath) {
   return stdout.split('\0').filter(Boolean);
 }
 
-export async function hashSyncedDirectory(repoPath, relativePath, ignoredPaths) {
+export async function hashSyncedDirectory(repoPath, relativePath, ignoredPaths, { legacy = false } = {}) {
   const directory = path.resolve(repoPath, relativePath);
   const ignored = ignoredPaths ?? await ignoredGitPaths(repoPath);
   const relativeDirectory = path.relative(repoPath, directory).split(path.sep).join(path.posix.sep);
   const prefix = relativeDirectory ? `${relativeDirectory}/` : '';
   return hashDirectory(directory, {
     exclude: ignored.filter((file) => file.startsWith(prefix)).map((file) => file.slice(prefix.length)),
+    legacy,
   });
 }
 
