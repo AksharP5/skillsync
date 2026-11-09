@@ -1245,7 +1245,7 @@ test('global instruction discovery inventories managed and differing provider fi
   });
   assert.equal(discovered[0].profile, 'macbook');
   assert.equal(discovered[1].profile, null);
-  assert.match(discovered[1].hash, /^sha256-v2:/);
+  assert.match(discovered[1].hash, /^sha256:/);
   assert.notEqual(discovered[0].hash, discovered[1].hash);
 });
 
