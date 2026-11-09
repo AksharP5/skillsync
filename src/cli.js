@@ -25,6 +25,7 @@ import {
   setSkillTargets,
   setTargetAutoImport,
   uninstallSkillAndPrune,
+  uninstallSkills,
 } from './core/device.js';
 import { checkVault, checkVaultForPush } from './core/check.js';
 import {
@@ -2722,11 +2723,11 @@ async function applyDeviceAssignmentChanges({ config, deviceId, toInstall, toUni
       targets,
     });
   }
-  for (const skillName of toUninstall) {
-    await uninstallSkillAndPrune({
+  if (toUninstall.length) {
+    await uninstallSkills({
       vaultPath: config.repoPath,
       deviceId,
-      skillName,
+      skillNames: toUninstall,
     });
   }
   const syncResult = await syncVault({
