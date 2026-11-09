@@ -675,30 +675,29 @@ export async function addTarget({
       ? autoImport
       : previousTarget?.auto_import ?? true,
   };
-  let cleanup = null;
-  if (JSON.stringify(previousTarget) !== JSON.stringify(nextTarget)) {
-    if (previousTarget
-      && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
-      const plan = await planLinks({
-        vaultPath,
-        deviceId,
-        device: { ...device, targets: { ...device.targets, [name]: nextTarget } },
-        readOnly: true,
-      });
-      if (plan.operations.some((operation) => operation.targetNames.includes(name))) {
-        await requireWritableTargetRoot(nextTarget.path);
+  const publishTarget = async () => {
+    if (JSON.stringify(previousTarget) !== JSON.stringify(nextTarget)) {
+      if (previousTarget?.path !== nextTarget.path || previousTarget?.scan_path !== nextTarget.scan_path) {
+        delete device.detected[name];
       }
-      cleanup = await removeOwnedTargetProjections({ vaultPath, device, name });
+      device.targets[name] = nextTarget;
     }
-    if (previousTarget?.path !== nextTarget.path || previousTarget?.scan_path !== nextTarget.scan_path) {
-      delete device.detected[name];
-    }
-    device.targets[name] = nextTarget;
-  }
-  try {
     await saveLocalReportedDevice(vaultPath, device);
-  } catch (error) {
-    await rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error });
+  };
+  if (previousTarget
+    && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
+    const plan = await planLinks({
+      vaultPath,
+      deviceId,
+      device: { ...device, targets: { ...device.targets, [name]: nextTarget } },
+      readOnly: true,
+    });
+    if (plan.operations.some((operation) => operation.targetNames.includes(name))) {
+      await requireWritableTargetRoot(nextTarget.path);
+    }
+    await removeOwnedTargetProjections({ vaultPath, device, name, afterApply: publishTarget });
+  } else {
+    await publishTarget();
   }
   return device;
 }
@@ -722,35 +721,41 @@ export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), na
   assertSafePathSegment(name, 'Target name');
   const device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.targets[name]) return device;
-  const cleanup = await removeOwnedTargetProjections({ vaultPath, device, name });
-  delete device.targets[name];
-  delete device.detected[name];
-  let assignmentsChanged = false;
-  for (const [skillName, targets] of Object.entries(device.installed)) {
-    const index = targets.indexOf(name);
-    if (index >= 0) {
-      targets.splice(index, 1);
-      assignmentsChanged = true;
-    }
-    if (!targets.length) delete device.installed[skillName];
-  }
-  if (assignmentsChanged) bumpDesiredGeneration(device);
-  try {
-    await saveDevice(vaultPath, device);
-  } catch (error) {
-    await rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error });
-  }
+  await removeOwnedTargetProjections({
+    vaultPath,
+    device,
+    name,
+    afterApply: async () => {
+      delete device.targets[name];
+      delete device.detected[name];
+      let assignmentsChanged = false;
+      for (const [skillName, targets] of Object.entries(device.installed)) {
+        const index = targets.indexOf(name);
+        if (index >= 0) {
+          targets.splice(index, 1);
+          assignmentsChanged = true;
+        }
+        if (!targets.length) delete device.installed[skillName];
+      }
+      if (assignmentsChanged) bumpDesiredGeneration(device);
+      await saveDevice(vaultPath, device);
+    },
+  });
   return device;
 }
 
-async function removeOwnedTargetProjections({ vaultPath, device, name }) {
+async function removeOwnedTargetProjections({ vaultPath, device, name, afterApply }) {
   const targetConfig = device.targets[name];
-  if (!targetConfig?.path) return null;
+  if (!targetConfig?.path) {
+    await afterApply?.();
+    return;
+  }
   const targetPath = path.resolve(expandHome(targetConfig.path));
-  const transaction = await applyFilesystemPlan({
+  await applyFilesystemPlan({
     vaultPath,
     deviceId: device.device_id,
     roots: [targetPath],
+    afterApply,
     plan: async () => {
       const registry = await loadRegistry(vaultPath);
       const operations = [];
@@ -791,24 +796,6 @@ async function removeOwnedTargetProjections({ vaultPath, device, name }) {
       return operations;
     },
   });
-  return { ...transaction, roots: [targetPath] };
-}
-
-async function rollbackProjectionCleanup({ vaultPath, deviceId, cleanup, error }) {
-  if (!cleanup?.backupId) throw error;
-  try {
-    await rollbackFilesystemBackup({
-      vaultPath,
-      deviceId,
-      roots: cleanup.roots,
-      backupId: cleanup.backupId,
-    });
-  } catch (rollbackError) {
-    throw new Error(`${error.message}\nProjection rollback also failed: ${rollbackError.message}`, {
-      cause: error,
-    });
-  }
-  throw error;
 }
 
 export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceId(), name, enabled }) {
