@@ -430,6 +430,7 @@ export async function applyFilesystemPlan({
   operations = [],
   plan,
   fault,
+  afterApply,
 }) {
   const allowedRoots = normalizeRoots(roots);
   const root = await transactionRoot(vaultPath);
@@ -437,6 +438,7 @@ export async function applyFilesystemPlan({
     const plannedOperations = plan ? await plan() : operations;
     validateOperations(plannedOperations, allowedRoots);
     if (!plannedOperations.length) {
+      await afterApply?.();
       return { applied: false, backupId: null, operations: plannedOperations };
     }
     const { backupPath, manifest } = await createBackup(
@@ -446,11 +448,13 @@ export async function applyFilesystemPlan({
       plannedOperations,
     );
     const markerPath = path.join(root, 'in-progress.json');
-    await writePrivateJson(markerPath, {
+    const marker = {
       version: 1,
       device_id: deviceId,
       backup_id: manifest.id,
-    });
+    };
+    await writePrivateJson(markerPath, marker);
+    let reconciling = false;
     try {
       for (const [index, operation] of plannedOperations.entries()) {
         await applyOperation(operation);
@@ -459,17 +463,35 @@ export async function applyFilesystemPlan({
       await updateManifest(backupPath, manifest, 'applied');
       await removePath(markerPath);
       await pruneBackups(root, deviceId);
+      // Finish all fallible bookkeeping before reconciliation publishes its report.
+      reconciling = true;
+      await afterApply?.();
       return { applied: true, backupId: manifest.id, operations: plannedOperations };
     } catch (error) {
+      const recoveryErrors = [];
+      // Reconciliation can fail after finalization removed the original marker.
+      // Journal the restore first, but still try to restore if journaling fails.
+      await writePrivateJson(markerPath, marker).catch((journalError) => {
+        recoveryErrors.push(new Error(`Projection recovery marker could not be saved: ${journalError.message}`, {
+          cause: journalError,
+        }));
+      });
       try {
         await restoreBackup(backupPath, manifest, deviceId, allowedRoots);
         await updateManifest(backupPath, manifest, 'rolled-back');
         await removePath(markerPath);
       } catch (rollbackError) {
-        throw new Error(`Projection apply failed: ${error.message}\nProjection rollback also failed: ${rollbackError.message}`, {
-          cause: error,
-        });
+        recoveryErrors.push(new Error(`Projection rollback also failed: ${rollbackError.message}`, {
+          cause: rollbackError,
+        }));
       }
+      if (recoveryErrors.length) {
+        throw new AggregateError([error, ...recoveryErrors],
+          `Projection apply failed: ${error.message}\n${recoveryErrors.map((failure) => failure.message).join('\n')}`, {
+            cause: error,
+          });
+      }
+      if (reconciling) throw error;
       throw new Error(`Projection apply failed and was rolled back: ${error.message}`, { cause: error });
     }
   });

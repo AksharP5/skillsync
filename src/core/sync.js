@@ -6,7 +6,6 @@ import {
   autoImportNewLocalSkills,
   markDeviceApplied,
   migrateLegacyLocalPathState,
-  rollbackLinkBackup,
   scanTargets,
   sweepUnusedSkills,
 } from './device.js';
@@ -232,52 +231,37 @@ async function sync({
       await checkVault(vaultPath);
       return;
     }
-    let projectionApply = null;
-    try {
-      const autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
-      result.autoImported.push(...autoImport.adopted);
-      result.autoImportConflicts.push(...autoImport.conflicts);
-      projectionApply = await applyLinks({
-        vaultPath,
-        deviceId,
-        discardLocalChanges,
-        replaceUnmanagedPaths: [
-          ...new Set([
-            ...replaceUnmanagedPaths,
-            ...autoImport.replaceUnmanagedPaths,
-          ]),
-        ],
-      });
-      const instructionProviders = await reconcileGlobalInstructionProviders({ vaultPath, deviceId });
-      result.instructionProviderConflicts.push(...instructionProviders.conflicts);
-      result.instructionProviderBackups.push(...(instructionProviders.backups || []));
-      const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
-      result.prunedInstructionProfiles.push(...(instructions.prunedProfiles || []));
-      result.plugins = await syncCodexPlugins({ vaultPath, deviceId });
-      const scanned = await scanTargets({ vaultPath, deviceId, save: false });
-      if (pull) {
-        result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath, deviceId, detected: scanned.detected }));
-      }
-      await checkVault(vaultPath);
-      await markDeviceApplied({
-        vaultPath, deviceId, detected: scanned.detected, generation: projectionApply.generation,
-      });
-      result.projectionOperations.push(...projectionApply.operations);
-    } catch (error) {
-      if (!projectionApply?.backupId) throw error;
-      try {
-        await rollbackLinkBackup({
-          vaultPath,
-          deviceId,
-          backupId: projectionApply.backupId,
+    const autoImport = await autoImportNewLocalSkills({ vaultPath, deviceId });
+    result.autoImported.push(...autoImport.adopted);
+    result.autoImportConflicts.push(...autoImport.conflicts);
+    const projectionApply = await applyLinks({
+      vaultPath,
+      deviceId,
+      discardLocalChanges,
+      replaceUnmanagedPaths: [
+        ...new Set([
+          ...replaceUnmanagedPaths,
+          ...autoImport.replaceUnmanagedPaths,
+        ]),
+      ],
+      afterApply: async (preparedPlan) => {
+        const instructionProviders = await reconcileGlobalInstructionProviders({ vaultPath, deviceId });
+        result.instructionProviderConflicts.push(...instructionProviders.conflicts);
+        result.instructionProviderBackups.push(...(instructionProviders.backups || []));
+        const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
+        result.prunedInstructionProfiles.push(...(instructions.prunedProfiles || []));
+        result.plugins = await syncCodexPlugins({ vaultPath, deviceId });
+        const scanned = await scanTargets({ vaultPath, deviceId, save: false });
+        if (pull) {
+          result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath, deviceId, detected: scanned.detected }));
+        }
+        await checkVault(vaultPath);
+        await markDeviceApplied({
+          vaultPath, deviceId, detected: scanned.detected, generation: preparedPlan.generation,
         });
-      } catch (rollbackError) {
-        throw new Error(`${error.message}\nProjection rollback also failed: ${rollbackError.message}`, {
-          cause: error,
-        });
-      }
-      throw error;
-    }
+      },
+    });
+    result.projectionOperations.push(...projectionApply.operations);
   }
   await reconcileLocalState();
   let committed = false;

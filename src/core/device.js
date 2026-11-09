@@ -1200,6 +1200,7 @@ export async function applyLinks(options) {
       return preparedPlan.operations;
     },
     fault: options.fault,
+    afterApply: () => options.afterApply?.(preparedPlan),
   });
   return { ...preparedPlan, ...transaction };
 }
