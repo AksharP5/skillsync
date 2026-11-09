@@ -25,9 +25,12 @@ export function skillDeviceMarker(device, skillName) {
   return '·';
 }
 
-export function skillAssignmentTargets(device, skillName) {
+export function skillAssignmentTargets(device, skillName, globalSkills) {
+  const assignedGlobally = globalSkills
+    ? globalSkills.has(skillName)
+    : device?.global_installed?.includes(skillName);
   return [
-    ...(device?.global_installed?.includes(skillName) ? ['global'] : []),
+    ...(assignedGlobally ? ['global'] : []),
     ...(device?.installed?.[skillName] || []),
   ].sort();
 }
@@ -47,6 +50,8 @@ export function matrixAssignmentChanges(initialDevices, draftDevices) {
   const changes = [];
   for (const draft of draftDevices) {
     const initial = initialById.get(draft.device_id);
+    const initialGlobal = new Set(initial?.global_installed || []);
+    const draftGlobal = new Set(draft.global_installed || []);
     const skillNames = new Set([
       ...Object.keys(initial?.installed || {}),
       ...(initial?.global_installed || []),
@@ -54,8 +59,8 @@ export function matrixAssignmentChanges(initialDevices, draftDevices) {
       ...(draft.global_installed || []),
     ]);
     for (const skillName of skillNames) {
-      const before = skillAssignmentTargets(initial, skillName);
-      const after = skillAssignmentTargets(draft, skillName);
+      const before = skillAssignmentTargets(initial, skillName, initialGlobal);
+      const after = skillAssignmentTargets(draft, skillName, draftGlobal);
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         changes.push({
           deviceId: draft.device_id,
