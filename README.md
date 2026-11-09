@@ -117,6 +117,8 @@ Before applying, the editor syncs and checks that each staged cell still has its
 
 Remote changes apply automatically when those devices next sync. If a skill is removed from every device and `delete-unassigned-skills` is enabled, SkillSync waits until every device reports the local copy gone and then removes it from the vault.
 
+Assignments changed while a sync is already applying remain pending until a later sync deploys them.
+
 ## Sync global instructions
 
 Global instruction locations depend on the agent:
