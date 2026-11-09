@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -23,6 +23,28 @@ import {
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-plugins-test-'));
 }
+
+test('plugin sync only reads other device reports when auto-adoption is enabled', async (t) => {
+  const vaultPath = await tempDir();
+  t.after(() => rm(vaultPath, { recursive: true, force: true }));
+  await savePluginProfile({ vaultPath, name: 'shared', plugins: ['demo@local'] });
+  await assignPluginProfile({ vaultPath, deviceId: 'local', profile: 'shared' });
+  const unrelatedReport = pluginStatePath(vaultPath, 'other');
+  await mkdir(path.dirname(unrelatedReport), { recursive: true });
+  await writeFile(unrelatedReport, '{invalid');
+  const options = {
+    vaultPath, deviceId: 'local',
+    commandAvailable: async () => true,
+    runCommand: async () => ({ stdout: JSON.stringify({ installed: [{ pluginId: 'demo@local' }] }) }),
+  };
+
+  const report = await syncCodexPlugins(options);
+  assert.equal(report.applied_profile, 'shared');
+  assert.deepEqual(report.errors, []);
+
+  await setPluginProfileAutoAdopt({ vaultPath, name: 'shared', enabled: true });
+  await assert.rejects(() => syncCodexPlugins(options), SyntaxError);
+});
 
 test('idle plugin sync preserves the report file while inspecting fresh inventory', async (t) => {
   const vaultPath = await tempDir();

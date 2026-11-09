@@ -333,7 +333,7 @@ export async function syncCodexPlugins({
 
   let inspection = await inspectCodexPlugins({ commandAvailable, runCommand });
   const previousState = await loadPluginState(vaultPath, deviceId);
-  if (profile) {
+  if (profile?.auto_adopt) {
     const [assignments, states] = await Promise.all([
       listPluginAssignments(vaultPath),
       listPluginStates(vaultPath),
