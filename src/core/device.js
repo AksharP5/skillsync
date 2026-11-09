@@ -1494,6 +1494,7 @@ async function findLocalSkills(scanPath, vaultPath) {
           : null;
         name = marker?.skill || await readSkillName(current);
       }
+      assertSafePathSegment(name, `Detected skill name at ${current}`);
       skills.push({
         name,
         path: path.relative(root, current).split(path.sep).join(path.posix.sep) || '.',
