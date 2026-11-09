@@ -908,30 +908,35 @@ export async function installSkills({ vaultPath, deviceId = defaultDeviceId(), s
 }
 
 export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {
-  assertSafePathSegment(skillName, 'Skill name');
+  return uninstallSkills({ vaultPath, deviceId, skillNames: [skillName], targets });
+}
+
+export async function uninstallSkills({ vaultPath, deviceId = defaultDeviceId(), skillNames, targets }) {
+  const names = [...new Set(skillNames)];
+  for (const name of names) assertSafePathSegment(name, 'Skill name');
   const device = await loadDevice(vaultPath, deviceId);
-  const hadTargetInstall = Boolean(device.installed[skillName]);
-  const hadGlobalInstall = (device.global_installed || []).includes(skillName);
-  if (!hadTargetInstall && !hadGlobalInstall) return device;
-  const previousTargets = [...(device.installed[skillName] || [])];
-  if (!targets?.length) {
-    delete device.installed[skillName];
-    markGlobalInstalled(device, skillName, false);
-  } else {
-    const removeGlobal = targets.some(isGlobalInstallTarget);
-    const targetNames = targets.filter((target) => !isGlobalInstallTarget(target));
-    if (removeGlobal) markGlobalInstalled(device, skillName, false);
-    if (device.installed[skillName] && targetNames.length) {
-      device.installed[skillName] = device.installed[skillName].filter((target) => !targetNames.includes(target));
-      if (!device.installed[skillName].length) delete device.installed[skillName];
-    }
+  const global = new Set(device.global_installed);
+  const removeGlobal = !targets?.length || targets.some(isGlobalInstallTarget);
+  const removedTargets = new Set((targets || []).filter((target) => !isGlobalInstallTarget(target)));
+  let changed = false;
+  let hadAssignment = false;
+  for (const name of names) {
+    const previousTargets = device.installed[name] || [];
+    const previousGlobal = global.has(name);
+    if (!previousTargets.length && !previousGlobal) continue;
+    hadAssignment = true;
+    const nextTargets = targets?.length
+      ? previousTargets.filter((target) => !removedTargets.has(target))
+      : [];
+    if (nextTargets.length) device.installed[name] = nextTargets;
+    else delete device.installed[name];
+    if (removeGlobal) global.delete(name);
+    changed ||= JSON.stringify(previousTargets) !== JSON.stringify(nextTargets)
+      || previousGlobal !== global.has(name);
   }
-  const nextTargets = device.installed[skillName] || [];
-  const hasGlobalInstall = (device.global_installed || []).includes(skillName);
-  if (JSON.stringify(previousTargets) !== JSON.stringify(nextTargets)
-    || hadGlobalInstall !== hasGlobalInstall) {
-    bumpDesiredGeneration(device);
-  }
+  if (!hadAssignment) return device;
+  device.global_installed = [...global].sort();
+  if (changed) bumpDesiredGeneration(device);
   await saveDesiredDevice(vaultPath, device);
   return device;
 }
