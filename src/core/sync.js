@@ -259,7 +259,9 @@ async function sync({
         result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath, deviceId, detected: scanned.detected }));
       }
       await checkVault(vaultPath);
-      await markDeviceApplied({ vaultPath, deviceId, detected: scanned.detected });
+      await markDeviceApplied({
+        vaultPath, deviceId, detected: scanned.detected, generation: projectionApply.generation,
+      });
       result.projectionOperations.push(...projectionApply.operations);
     } catch (error) {
       if (!projectionApply?.backupId) throw error;

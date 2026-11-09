@@ -1160,6 +1160,7 @@ export async function planLinks({
   operations.sort((left, right) => left.destination.localeCompare(right.destination));
   return {
     deviceId,
+    generation: device.desired_generation,
     roots: [...new Set(Object.values(device.targets)
       .map((target) => path.resolve(expandHome(target.path))))].sort(),
     operations,
@@ -1227,11 +1228,12 @@ export async function rollbackLinks({
   });
 }
 
-export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId(), detected }) {
+export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId(), detected, generation }) {
   const device = await loadLocalDevice(vaultPath, deviceId);
-  if (detected === undefined && device.applied_generation === device.desired_generation) return device;
+  const appliedGeneration = generation ?? device.desired_generation;
+  if (detected === undefined && device.applied_generation === appliedGeneration) return device;
   if (detected !== undefined) device.detected = detected;
-  device.applied_generation = device.desired_generation;
+  device.applied_generation = appliedGeneration;
   await saveLocalReportedDevice(vaultPath, device);
   return device;
 }
