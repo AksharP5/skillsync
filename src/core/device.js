@@ -1305,9 +1305,11 @@ export async function managedProjections({ vaultPath, deviceId = defaultDeviceId
 async function detectTargets({ vaultPath, device }) {
   const registry = await loadRegistry(vaultPath);
   const detected = {};
+  const scans = new Map();
   for (const [targetName, targetConfig] of Object.entries(device.targets)) {
-    const scanPath = expandHome(targetConfig.scan_path || targetConfig.path);
-    const skills = await findLocalSkills(scanPath, vaultPath);
+    const scanPath = path.resolve(expandHome(targetConfig.scan_path || targetConfig.path));
+    if (!scans.has(scanPath)) scans.set(scanPath, await findLocalSkills(scanPath, vaultPath));
+    const skills = scans.get(scanPath);
     detected[targetName] = skills.map((skill) => ({
       ...skill,
       in_vault: Boolean(registry.skills[skill.name]),
