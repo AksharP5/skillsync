@@ -8,6 +8,33 @@ import { addTarget, loadDevice, loadLocalDevice, scanTargets } from '../src/core
 import { rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
 
+test('invalid detected names preserve the last valid inventory and remain recoverable', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-scan-names-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scanPath = path.join(root, 'scan');
+  const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
+  await addTarget({ ...options, name: 'codex', targetPath: scanPath, autoImport: false });
+  const baseline = await scanTargets(options);
+  const reportPath = path.join(options.vaultPath, 'state', 'local.json');
+  const report = await readFile(reportPath, 'utf8');
+  for (const [directory, content] of [
+    ['constructor', '# Constructor\n'],
+    ['example', '---\nname: __proto__\n---\n'],
+    ['example', '---\nname: ..\n---\n'],
+  ]) {
+    const skillPath = path.join(scanPath, directory);
+    await mkdir(skillPath, { recursive: true });
+    await writeFile(path.join(skillPath, 'SKILL.md'), content);
+    await assert.rejects(scanTargets(options), /Detected skill name/);
+    assert.equal(await readFile(reportPath, 'utf8'), report);
+    assert.deepEqual((await loadLocalDevice(options.vaultPath, options.deviceId)).detected, baseline.detected);
+    await rm(skillPath, { recursive: true });
+  }
+  await mkdir(path.join(scanPath, 'corrected'));
+  await writeFile(path.join(scanPath, 'corrected', 'SKILL.md'), '# Corrected\n');
+  assert.deepEqual((await scanTargets(options)).detected.codex.map((skill) => skill.name), ['corrected']);
+});
+
 for (const throughSymlink of [false, true]) {
   test(`failed ${throughSymlink ? 'symlink target inspection' : 'directory read'} preserves inventory and prevents cleanup`, {
     skip: !process.getuid || process.getuid() === 0,
