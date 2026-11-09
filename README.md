@@ -504,7 +504,7 @@ SkillSync checks every destination before applying the plan. It backs up changed
 skillsync sync --discard-local-changes
 ```
 
-Copies created by older versions refresh once to record executable permissions when their contents have not been edited. That refresh applies the vault's executable bits, since older copies did not record local permission edits.
+Directory hashes include file lengths so binary content cannot be mistaken for file boundaries. The next sync upgrades registry hashes and refreshes unchanged copies once. Existing copy hashes are verified before replacement, preserving their recorded content and executable-permission protection. Copies predating permission tracking retain only content protection during this refresh, which applies the vault's executable bits. Upgrade every device to prevent older versions from restoring old hashes.
 
 Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
 

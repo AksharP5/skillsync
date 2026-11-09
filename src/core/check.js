@@ -247,7 +247,8 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
           continue;
         }
         if (!unsafeTree) {
-          const hash = await hashSyncedDirectory(root, path.posix.join('skills', name), ignoredPaths);
+          const legacy = typeof entry.hash === 'string' && entry.hash.startsWith('sha256:');
+          const hash = await hashSyncedDirectory(root, path.posix.join('skills', name), ignoredPaths, { legacy });
           if (entry.hash !== hash) errors.push(`Registry hash is stale: ${name}`);
         }
       }

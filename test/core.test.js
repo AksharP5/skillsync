@@ -100,7 +100,7 @@ test('addSkillToVault copies a SKILL.md folder and updates registry', async () =
   assert.equal(registry.version, 1);
   assert.ok(registry.skills['bog-hyperframes']);
   assert.equal(registry.skills['bog-hyperframes'].path, 'skills/bog-hyperframes');
-  assert.match(registry.skills['bog-hyperframes'].hash, /^sha256:/);
+  assert.match(registry.skills['bog-hyperframes'].hash, /^sha256-v2:/);
 
   const copied = await readFile(path.join(vault, 'skills', 'bog-hyperframes', 'SKILL.md'), 'utf8');
   assert.match(copied, /# Bog/);
@@ -149,7 +149,7 @@ test('rebuildRegistry removes stale entries and adds folders from skills directo
   const registry = await rebuildRegistry(vault);
 
   assert.deepEqual(Object.keys(registry.skills), ['frontend-design']);
-  assert.match(registry.skills['frontend-design'].hash, /^sha256:/);
+  assert.match(registry.skills['frontend-design'].hash, /^sha256-v2:/);
 });
 
 test('installSkill creates device state and applyLinks creates/removes safe symlinks', async () => {

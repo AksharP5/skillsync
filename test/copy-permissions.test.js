@@ -42,9 +42,9 @@ async function createCopy(t) {
   return { root, vaultPath, targetPath, sourcePath, sourceScript, destination, copiedScript, markerPath, options };
 }
 
-async function writeLegacyMarker({ sourcePath, markerPath }) {
+async function writeLegacyMarker({ sourcePath, markerPath }, includeExecutableBits = false) {
   const marker = JSON.parse(await readFile(markerPath, 'utf8'));
-  marker.source_hash = await hashDirectory(sourcePath);
+  marker.source_hash = await hashDirectory(sourcePath, { legacy: true, includeExecutableBits });
   await writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
 }
 
@@ -100,26 +100,32 @@ test('local executable-bit edits survive rejected changes, explicit discard, and
   assert.equal(await readFile(markerPath, 'utf8'), marker);
 });
 
-test('legacy copy hashes migrate once while preserving protection for local content edits', posixOnly, async (t) => {
-  const clean = await createCopy(t);
-  await writeLegacyMarker(clean);
-  await chmod(clean.sourceScript, 0o755);
+for (const includeExecutableBits of [false, true]) {
+  test(`legacy copy hashes migrate safely, executable bits ${includeExecutableBits}`, posixOnly, async (t) => {
+    const clean = await createCopy(t);
+    await writeLegacyMarker(clean, includeExecutableBits);
+    await chmod(clean.sourceScript, 0o755);
 
-  assert.equal((await applyLinks(clean.options)).operations.length, 1);
-  assert.equal((await stat(clean.copiedScript)).mode & 0o777, 0o755);
-  const marker = JSON.parse(await readFile(clean.markerPath, 'utf8'));
-  assert.match(marker.source_hash, /^sha256-exec:/);
-  assert.deepEqual((await applyLinks(clean.options)).operations, []);
+    assert.equal((await applyLinks(clean.options)).operations.length, 1);
+    assert.equal((await stat(clean.copiedScript)).mode & 0o777, 0o755);
+    const marker = JSON.parse(await readFile(clean.markerPath, 'utf8'));
+    assert.match(marker.source_hash, /^sha256-exec-v2:/);
+    assert.deepEqual((await applyLinks(clean.options)).operations, []);
 
-  const edited = await createCopy(t);
-  await writeLegacyMarker(edited);
-  await writeFile(path.join(edited.destination, 'SKILL.md'), '# Local edit\n');
-  await chmod(edited.sourceScript, 0o755);
+    const edited = await createCopy(t);
+    await writeLegacyMarker(edited, includeExecutableBits);
+    if (includeExecutableBits) await chmod(edited.copiedScript, 0o755);
+    else await writeFile(path.join(edited.destination, 'SKILL.md'), '# Local edit\n');
+    await chmod(edited.sourceScript, 0o755);
 
-  await assert.rejects(applyLinks(edited.options), /Managed copy has local changes/);
-  assert.equal(await readFile(path.join(edited.destination, 'SKILL.md'), 'utf8'), '# Local edit\n');
-  assert.match(JSON.parse(await readFile(edited.markerPath, 'utf8')).source_hash, /^sha256:/);
-});
+    await assert.rejects(applyLinks(edited.options), /Managed copy has local changes/);
+    assert.equal(await readFile(path.join(edited.destination, 'SKILL.md'), 'utf8'),
+      includeExecutableBits ? '# Example\n' : '# Local edit\n');
+    if (includeExecutableBits) assert.equal((await stat(edited.copiedScript)).mode & 0o777, 0o755);
+    assert.match(JSON.parse(await readFile(edited.markerPath, 'utf8')).source_hash,
+      includeExecutableBits ? /^sha256-exec:/ : /^sha256:/);
+  });
+}
 
 test('importing the same bytes with changed executable bits requires explicit overwrite', posixOnly, async (t) => {
   const { root, vaultPath, sourcePath, sourceScript } = await createCopy(t);
