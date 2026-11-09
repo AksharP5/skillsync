@@ -1519,9 +1519,11 @@ function copyDriftError(destination) {
 
 async function copyState({ destination, marker, sourceHash }) {
   const expectedHash = marker?.source_hash || sourceHash || null;
+  const hashType = typeof expectedHash === 'string' ? expectedHash.split(':', 1)[0] : null;
   const localHash = await hashDirectory(destination, {
     exclude: [OWNERSHIP_MARKER],
-    includeExecutableBits: typeof expectedHash === 'string' && expectedHash.startsWith('sha256-exec:'),
+    includeExecutableBits: hashType === 'sha256-exec' || hashType === 'sha256-exec-v2',
+    legacy: hashType === 'sha256' || hashType === 'sha256-exec',
   });
   return {
     localHash,

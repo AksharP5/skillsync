@@ -133,7 +133,7 @@ async function walk(dirPath, root = dirPath) {
   return files.sort();
 }
 
-export async function hashDirectory(dirPath, { exclude = [], includeExecutableBits = false } = {}) {
+export async function hashDirectory(dirPath, { exclude = [], includeExecutableBits = false, legacy = false } = {}) {
   const hash = createHash('sha256');
   const excluded = new Set(exclude.map((relativePath) => relativePath.split(path.sep).join(path.posix.sep)));
   const files = (await walk(dirPath))
@@ -145,8 +145,10 @@ export async function hashDirectory(dirPath, { exclude = [], includeExecutableBi
     if (includeExecutableBits) {
       hash.update(`${(await stat(filePath)).mode & 0o111}\0`);
     }
-    hash.update(await readFile(filePath));
+    const content = await readFile(filePath);
+    if (!legacy) hash.update(`${content.length}\0`);
+    hash.update(content);
     hash.update('\0');
   }
-  return `${includeExecutableBits ? 'sha256-exec' : 'sha256'}:${hash.digest('hex')}`;
+  return `${includeExecutableBits ? 'sha256-exec' : 'sha256'}${legacy ? '' : '-v2'}:${hash.digest('hex')}`;
 }
