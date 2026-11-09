@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -142,12 +142,30 @@ export async function hashDirectory(dirPath, { exclude = [], includeExecutableBi
     const filePath = path.join(dirPath, relativePath);
     hash.update(relativePath);
     hash.update('\0');
-    if (includeExecutableBits) {
-      hash.update(`${(await stat(filePath)).mode & 0o111}\0`);
+    const info = includeExecutableBits ? await stat(filePath) : null;
+    if (info) hash.update(`${info.mode & 0o111}\0`);
+    if (info?.size > 1024 * 1024) {
+      const file = await open(filePath, 'r');
+      try {
+        if (!legacy) hash.update(`${info.size}\0`);
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        let length = 0;
+        // Stop after an excess chunk even if another process keeps appending.
+        while (length <= info.size) {
+          const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+          if (!bytesRead) break;
+          hash.update(buffer.subarray(0, bytesRead));
+          length += bytesRead;
+        }
+        if (length !== info.size) throw new Error(`File changed while hashing: ${filePath}`);
+      } finally {
+        await file.close();
+      }
+    } else {
+      const content = await readFile(filePath);
+      if (!legacy) hash.update(`${content.length}\0`);
+      hash.update(content);
     }
-    const content = await readFile(filePath);
-    if (!legacy) hash.update(`${content.length}\0`);
-    hash.update(content);
     hash.update('\0');
   }
   return `${includeExecutableBits ? 'sha256-exec' : 'sha256'}${legacy ? '' : '-v2'}:${hash.digest('hex')}`;
