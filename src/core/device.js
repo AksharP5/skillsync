@@ -876,27 +876,35 @@ export async function setSkillTargets({ vaultPath, deviceId = defaultDeviceId(),
 }
 
 export async function installSkill({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {
-  assertSafePathSegment(skillName, 'Skill name');
+  return installSkills({ vaultPath, deviceId, skillNames: [skillName], targets });
+}
+
+export async function installSkills({ vaultPath, deviceId = defaultDeviceId(), skillNames, targets }) {
+  const names = [...new Set(skillNames)];
+  for (const name of names) assertSafePathSegment(name, 'Skill name');
   const registry = await loadRegistry(vaultPath);
-  if (!registry.skills[skillName]) throw new Error(`Skill not found in vault: ${skillName}`);
+  for (const name of names) {
+    if (!registry.skills[name]) throw new Error(`Skill not found in vault: ${name}`);
+  }
   const device = await loadDevice(vaultPath, deviceId);
+  if (!names.length) return device;
   const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
   const requested = await validateRequestedTargets(device, requestedTargets);
-  const selectedTargets = [...new Set([
-    ...(device.installed[skillName] || []),
-    ...requested.selectedTargets,
-  ])].sort();
-  const wantsGlobalInstall = (device.global_installed || []).includes(skillName)
-    || requested.wantsGlobalInstall;
-  return setSkillTargets({
-    vaultPath,
-    deviceId,
-    skillName,
-    targets: [
-      ...selectedTargets,
-      ...(wantsGlobalInstall ? [GLOBAL_INSTALL_TARGET] : []),
-    ],
-  });
+  const global = new Set(device.global_installed);
+  let changed = false;
+  for (const name of names) {
+    const previousTargets = device.installed[name] || [];
+    const selectedTargets = [...new Set([...previousTargets, ...requested.selectedTargets])].sort();
+    changed ||= JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)
+      || (requested.wantsGlobalInstall && !global.has(name));
+    if (selectedTargets.length) device.installed[name] = selectedTargets;
+    else delete device.installed[name];
+    if (requested.wantsGlobalInstall) global.add(name);
+  }
+  device.global_installed = [...global].sort();
+  if (changed) bumpDesiredGeneration(device);
+  await saveDesiredDevice(vaultPath, device);
+  return device;
 }
 
 export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {

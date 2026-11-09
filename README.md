@@ -428,6 +428,8 @@ Run `skillsync groups` to regenerate pack manifests and group pages from `groups
 
 `skillsync pack list` reads existing pack manifests without initializing or changing the vault. Run `skillsync groups` to apply changes from `groups.json` before listing or installing updated packs.
 
+Pack installation validates every member and the requested destinations before saving assignments. A missing skill or invalid destination leaves the pack's assignments unchanged. A valid pack saves one desired-state revision, then syncs as usual.
+
 ## Remove skills
 
 Remove a skill from one device:
