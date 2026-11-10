@@ -751,7 +751,9 @@ export async function updatePlugins({
       await release();
     }
   } catch (error) {
-    return recordFailure(`Could not run the daily plugin update: ${error.message}`);
+    // Lease files carry random IDs; drop them so a repeated failure reads as the same failure.
+    const message = error.message.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>');
+    return recordFailure(`Could not run the daily plugin update: ${message}`);
   }
 }
 

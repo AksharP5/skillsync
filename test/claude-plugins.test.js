@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -373,6 +373,17 @@ test('plugin updates run after skill sync releases the apply lock', async (t) =>
   // The same failure next cycle is not news, so the service logs it once.
   assert.equal(brokenAgain.claudePlugins.errorsChanged, false);
   assert.match((await loadLocalPluginState(vaultPath, 'claude')).update_errors.join('\n'), /Could not run the daily plugin update/);
+
+  // An unwritable update directory fails with a differently named lease file each time.
+  const updateRoot = path.join(vaultPath, '.skillsync-local', 'plugins', 'claude-update');
+  await rm(updateRoot, { force: true });
+  await mkdir(updateRoot);
+  await chmod(updateRoot, 0o500);
+  t.after(() => chmod(updateRoot, 0o700).catch(() => {}));
+  const denied = await sync();
+  const deniedAgain = await sync();
+  assert.match(denied.claudePlugins.errors.join('\n'), /Could not run the daily plugin update/);
+  assert.equal(deniedAgain.claudePlugins.errorsChanged, false);
 });
 
 test("an unreadable report of this device's own is replaced through the report writer, never deleted", async (t) => {
