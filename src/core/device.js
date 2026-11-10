@@ -241,7 +241,11 @@ export async function initializeLocalPathState({
   if (!statePath) return null;
   const existing = await readLocalPathState(vaultPath, deviceId);
   if (existing) return existing;
-  return writeLocalPathState(vaultPath, newDevice(deviceId));
+  return withVaultReferences(vaultPath, async () => {
+    const existing = await readLocalPathState(vaultPath, deviceId);
+    if (existing) return existing;
+    return writeLocalPathState(vaultPath, newDevice(deviceId));
+  });
 }
 
 export async function migrateLegacyLocalPathState({
@@ -250,19 +254,23 @@ export async function migrateLegacyLocalPathState({
 }) {
   const existing = await readLocalPathState(vaultPath, deviceId);
   if (existing) return existing;
-  const reported = await readDeviceState(deviceStatePath(vaultPath, deviceId));
-  const desired = await readDeviceState(devicePath(vaultPath, deviceId));
-  const legacy = isLegacyDeviceManifest(desired) ? desired : null;
-  const source = reported || legacy;
-  const normalized = normalizeReportedState(
-    source,
-    deviceId,
-    { legacy: Boolean(legacy && !reported) },
-  );
-  return writeLocalPathState(vaultPath, {
-    ...newDevice(deviceId),
-    ...normalized,
-    detected: {},
+  return withVaultReferences(vaultPath, async () => {
+    const existing = await readLocalPathState(vaultPath, deviceId);
+    if (existing) return existing;
+    const reported = await readDeviceState(deviceStatePath(vaultPath, deviceId));
+    const desired = await readDeviceState(devicePath(vaultPath, deviceId));
+    const legacy = isLegacyDeviceManifest(desired) ? desired : null;
+    const source = reported || legacy;
+    const normalized = normalizeReportedState(
+      source,
+      deviceId,
+      { legacy: Boolean(legacy && !reported) },
+    );
+    return writeLocalPathState(vaultPath, {
+      ...newDevice(deviceId),
+      ...normalized,
+      detected: {},
+    });
   });
 }
 
