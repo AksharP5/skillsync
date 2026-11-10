@@ -738,14 +738,15 @@ export async function updatePlugins({
       });
     if (!release) return null;
     try {
-      const cleared = await recordFailure(null);
       const previous = await readUpdateState(root);
       // Also due when plugins were never updated, since the difference is then NaN.
-      if (now - Date.parse(previous.updated_at) < UPDATE_INTERVAL_MS) return cleared;
+      if (now - Date.parse(previous.updated_at) < UPDATE_INTERVAL_MS) return null;
       const errors = await provider.update({ ...targets, runCommand, deadline: Date.now() + deadlineMs });
       await writePrivateJson(path.join(root, 'state.json'), {
         version: 1, updated_at: new Date(now).toISOString(), update_errors: errors,
       });
+      // Only a completed update step clears a recorded failure, so a recurring one stays visible.
+      await recordFailure(null);
       return { errors, errorsChanged: !isDeepStrictEqual(errors, previous.update_errors) };
     } finally {
       await release();

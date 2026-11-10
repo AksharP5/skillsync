@@ -384,6 +384,13 @@ test('plugin updates run after skill sync releases the apply lock', async (t) =>
   const deniedAgain = await sync();
   assert.match(denied.claudePlugins.errors.join('\n'), /Could not run the daily plugin update/);
   assert.equal(deniedAgain.claudePlugins.errorsChanged, false);
+
+  // A failure after the lease is taken must stay recorded across cycles, not flip on and off.
+  await chmod(updateRoot, 0o700);
+  await mkdir(path.join(updateRoot, 'state.json'));
+  const unsaved = [await sync(), await sync(), await sync()];
+  assert.deepEqual(unsaved.map((run) => run.claudePlugins.errorsChanged), [true, false, false]);
+  assert.match((await loadLocalPluginState(vaultPath, 'claude')).update_errors.join('\n'), /Could not run the daily plugin update/);
 });
 
 test("an unreadable report of this device's own is replaced through the report writer, never deleted", async (t) => {
