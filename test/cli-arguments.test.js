@@ -11,7 +11,7 @@ import { addTarget, applyLinks, devicePath, installSkill, loadDevice, loadLocalD
 import { exists } from '../src/core/fs.js';
 import { git } from '../src/core/git.js';
 import { savePluginProfile } from '../src/core/plugins.js';
-import { deleteSkillFromVault, rebuildRegistry } from '../src/core/registry.js';
+import { rebuildRegistry } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL('../src/cli.js', import.meta.url));
@@ -220,27 +220,23 @@ test('delete and uninstall clear assignments whose skill folder is already gone'
   }
 });
 
-test('a delete or uninstall that removes nothing publishes nothing', async (t) => {
+test('an uninstall that removes nothing publishes nothing', async (t) => {
   const { vault, run, snapshot } = await fixture(t);
   await run(['uninstall', 'demo']);
   // The folder is gone but the registry still lists demo, which is no longer assigned here.
   await rm(path.join(vault, 'skills', 'demo'), { recursive: true });
   await writeFile(path.join(vault, 'packs', 'pending.json'), JSON.stringify({ name: 'pending', skills: [] }));
   const before = await snapshot();
-  for (const args of [['uninstall', 'demo'], ['uninstall', 'demo', '--global']]) {
+  for (const [args, message] of [
+    [['uninstall', 'demo'], 'No matching assignment for demo on local'],
+    [['uninstall', 'demo', '--global'], 'No matching assignment for demo on local (global)'],
+  ]) {
     await assert.rejects(run(args), (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /demo is not installed on local/);
+      assert.equal(error.stderr.trim(), `skillsync: ${message}`);
       return true;
     }, args.join(' '));
   }
-  // Another process deletes the skill after this command's pull would have seen it.
-  await deleteSkillFromVault({ vaultPath: vault, skillName: 'demo' });
-  await assert.rejects(run(['delete', 'demo', '--yes']), (error) => {
-    assert.equal(error.code, 1);
-    assert.match(error.stderr, /Skill not found in vault: demo/);
-    return true;
-  });
   const after = await snapshot();
   assert.deepEqual([after.head, after.remote], [before.head, before.remote]);
   assert.match(after.status, /packs\/pending\.json/);

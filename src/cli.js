@@ -1912,7 +1912,9 @@ async function uninstall(rest) {
     skillName,
     targets,
   });
-  if (!removed) throw new Error(`${skillName} is not installed on ${deviceId}`);
+  if (!removed) {
+    throw new Error(`No matching assignment for ${skillName} on ${deviceId}${targets ? ` (${targets.join(', ')})` : ''}`);
+  }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(deviceId === config.deviceId
     ? `Removed ${skillName} from this device.`
