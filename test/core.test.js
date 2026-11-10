@@ -7,6 +7,7 @@ import {
   readFile,
   readlink,
   realpath,
+  rm,
   symlink,
   unlink,
   writeFile,
@@ -20,6 +21,7 @@ import {
   loadRegistry,
   loadVaultConfig,
   rebuildRegistry,
+  saveRegistry,
   setVaultPolicy,
 } from '../src/core/registry.js';
 import { checkVault } from '../src/core/check.js';
@@ -2183,6 +2185,20 @@ test('deleteSkillFromVault removes the skill from registry and every device mani
   const device = await loadDevice(vault, 'macbook');
   assert.equal(device.installed['bog-hyperframes'], undefined);
   assert.ok(device.desired_generation > device.applied_generation);
+});
+
+test('deleteSkillFromVault reports whether it removed a folder or registry entry', async () => {
+  const vault = path.join(await tempDir(), 'vault');
+  for (const name of ['registered-only', 'folder-only']) await makeSkill(path.join(vault, 'skills'), name);
+  await rebuildRegistry(vault);
+  await rm(path.join(vault, 'skills', 'registered-only'), { recursive: true });
+  const registry = await loadRegistry(vault);
+  delete registry.skills['folder-only'];
+  await saveRegistry(vault, registry);
+
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'registered-only' }), true);
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'folder-only' }), true);
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'folder-only' }), false);
 });
 
 test('path-like skill names and device IDs are rejected before filesystem access', async () => {

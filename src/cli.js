@@ -1903,20 +1903,16 @@ async function uninstall(rest) {
   await configured({ config });
   await pullBeforeRemoteEdit(config, deviceId);
   const device = await requireKnownDevice(config.repoPath, deviceId);
-  // A stale assignment stays removable after its skill leaves the vault.
-  const assigned = Object.hasOwn(device.installed, skillName) || device.global_installed.includes(skillName);
-  if (!assigned && !Object.hasOwn((await loadRegistry(config.repoPath)).skills, skillName)) {
-    throw new Error(`Skill not found in vault: ${skillName}`);
-  }
   // Removing a target the device doesn't have is a typo, not a no-op.
   const unknown = targets?.find((name) => !isGlobalInstallTarget(name) && !Object.hasOwn(device.targets, name));
   if (unknown) throw new Error(`Unknown target on ${deviceId}: ${unknown}`);
-  await uninstallSkillAndPrune({
+  const { removed } = await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId,
     skillName,
     targets,
   });
+  if (!removed) throw new Error(`${skillName} is not installed on ${deviceId}`);
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(deviceId === config.deviceId
     ? `Removed ${skillName} from this device.`
@@ -1938,10 +1934,9 @@ async function deleteSkill(rest) {
   }
   const config = await configured({ initialize: false });
   await syncVault({ vaultPath: config.repoPath, pushChanges: false });
-  if (!Object.hasOwn((await loadRegistry(config.repoPath)).skills, skillName)) {
+  if (!await deleteSkillFromVault({ vaultPath: config.repoPath, skillName })) {
     throw new Error(`Skill not found in vault: ${skillName}`);
   }
-  await deleteSkillFromVault({ vaultPath: config.repoPath, skillName });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(`Deleted ${skillName} from the vault.`);
 }

@@ -322,14 +322,16 @@ export async function deleteSkillFromVault({ vaultPath, skillName, eligible }) {
   assertSafePathSegment(skillName, 'Skill name');
   return withVaultReferences(vaultPath, async () => {
     if (eligible && !await eligible()) return false;
-    await deleteSkill(vaultPath, skillName);
-    return true;
+    return deleteSkill(vaultPath, skillName);
   });
 }
 
+// Returns whether anything was removed: the folder, the registry entry, or any assignment.
 async function deleteSkill(vaultPath, skillName) {
   await ensureVault(vaultPath);
   const registry = await loadRegistry(vaultPath);
+  const registered = Object.hasOwn(registry.skills, skillName);
+  let unassigned = false;
   const skillPath = path.join(vaultPath, 'skills', skillName);
   const skill = await lstat(skillPath).catch((error) => {
     if (error.code === 'ENOENT') return null;
@@ -363,7 +365,7 @@ async function deleteSkill(vaultPath, skillName) {
         });
       }
     }
-    await removeSkillAssignments(vaultPath, skillName);
+    unassigned = await removeSkillAssignments(vaultPath, skillName);
     delete registry.skills[skillName];
     await saveRegistry(vaultPath, registry);
   } catch (error) {
@@ -388,6 +390,7 @@ async function deleteSkill(vaultPath, skillName) {
   }
   // The private original is retained. Only the extra same-filesystem staging copy is disposable.
   if (backupDirectory) await removeDisposableDirectory(staging);
+  return Boolean(skill) || registered || unassigned;
 }
 
 async function removeSkillAssignments(vaultPath, skillName) {
@@ -399,11 +402,13 @@ async function removeSkillAssignments(vaultPath, skillName) {
     const filePath = path.join(devicesDir, file);
     devices.push({ file, filePath, device: await readDeviceState(filePath) });
   }
+  let removed = false;
   for (const { file, filePath, device } of devices) {
     const installed = normalizeInstalled(device?.installed);
     const globalInstalled = normalizeGlobalInstalled(device);
     const changed = Object.hasOwn(installed, skillName) || globalInstalled.includes(skillName);
     if (!changed) continue;
+    removed = true;
     delete installed[skillName];
     const deviceId = assertSafePathSegment(file.slice(0, -'.json'.length), 'Device ID');
     const statePath = path.join(vaultPath, 'state', file);
@@ -449,6 +454,7 @@ async function removeSkillAssignments(vaultPath, skillName) {
       global_installed: globalInstalled.filter((name) => name !== skillName),
     });
   }
+  return removed;
 }
 
 export async function listSkillFolders(vaultPath) {
