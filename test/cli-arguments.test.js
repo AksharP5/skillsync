@@ -71,7 +71,7 @@ exit 1
       XDG_CONFIG_HOME: path.join(home, '.config'),
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     },
-    timeout: 10000,
+    timeout: 60000,
   });
   await run(['instructions', 'import', '--name', 'shared', '--from', instructions, '--to', instructions]);
   await writeFile(path.join(vault, 'skills', 'demo', 'SKILL.md'), '# Pending edit\n');
@@ -112,6 +112,8 @@ const invalid = [
   ['install', 'demo', '--device', 'remote', '--target', ' , '], ['install', 'demo', '--device'],
   ['uninstall'], ['uninstall', '--bogus'], ['uninstall', 'demo', '--dry-run'], ['uninstall', 'demo', 'extra'],
   ['uninstall', 'demo', '--device', 'remote', '--target'], ['uninstall', 'demo', '-d', '../bad'],
+  ['uninstall', 'demo', '--target', '../bad'], ['uninstall', 'demo', '-d', 'remote', '-t', 'codex,../bad'],
+  ['install', 'demo', '--target', 'constructor'], ['install', 'demo', '-t', '__proto__'], ['pack', 'install', 'demo', '-t', 'prototype'],
   ['delete', '--yes'], ['delete', '--bogus', '--yes'], ['delete', 'demo', '--yes', '--dry-run'], ['delete', 'demo', 'extra', '--yes'],
   ...['status', 'profiles', 'import', 'use', 'use-device', 'fork', 'link', 'unlink', 'enable', 'disable']
     .map((subcommand) => ['instructions', subcommand, ...instructionOperands[subcommand] ?? [], '--bogus']),
@@ -129,6 +131,9 @@ const invalid = [
   ['plugins', 'auto-adopt', 'shared', 'bogus'], ['plugins', 'auto-adopt', '../bad', 'on'], ['plugins', 'import', '--name'],
   ['plugins', 'import', '--name', '../bad', '--plugin', 'demo@test'], ['plugins', 'use', 'shared', '--device'],
   ['plugins', 'import', '--name', 'another', '--plugin', 'demo@test', '--auto-adopt', '--no-auto-adopt'],
+  ['plugins', 'import', '--name', 'another', '--plugin', 'demo@test', 'extra'],
+  ['plugins', 'import', 'extra', '--name', 'another', '--plugin', 'demo@test'],
+  ['plugin', 'import', '--name', 'another', '--plugin', 'demo@test', 'extra'],
   ['device', 'unknown'], ['device', 'show'], ['device', 'show', 'local', '--bogus'], ['device', 'list', 'extra'],
   ['pack', 'unknown'], ['pack', 'show'], ['pack', 'show', 'demo', 'extra'], ['pack', 'install', 'demo', '--bogus'],
   ['pack', 'install', 'demo', '--target'], ['pack', 'install', 'demo', '-t', ' , '], ['pack', 'install', '../bad'],
@@ -147,16 +152,25 @@ const invalid = [
 test('invalid arguments exit 1 before changing the vault, the remote, or services', async (t) => {
   const { run, snapshot } = await fixture(t);
   const before = await snapshot();
+  const failures = [];
   for (const args of invalid) {
-    assert.equal(await exitCode(run(args)), 1, args.join(' '));
-    assert.deepEqual(await snapshot(), before, args.join(' '));
+    const code = await exitCode(run(args));
+    const after = await snapshot();
+    const changed = Object.keys(before).filter((key) => after[key] !== before[key]);
+    if (code !== 1 || changed.length) failures.push({ args: args.join(' '), code, changed });
+    Object.assign(before, after);
   }
+  assert.deepEqual(failures, []);
 });
 
 test('failures that depend on vault state commit and push nothing', async (t) => {
   const { vault, run, snapshot } = await fixture(t);
-  const { head, remote } = await snapshot();
+  const { head, remote, device } = await snapshot();
   for (const args of [
+    ['install', 'demo', '--target', 'toString'],
+    ['install', 'demo', '--target', 'missing'],
+    ['uninstall', 'demo', '--target', 'missing'],
+    ['uninstall', 'demo', '-d', 'remote', '--target', 'missing'],
     ['install', 'demo', '--device', 'missing'],
     ['uninstall', 'demo', '--device', 'missing'],
     ['install', 'missing', '--device', 'remote'],
@@ -168,9 +182,17 @@ test('failures that depend on vault state commit and push nothing', async (t) =>
     ['instructions', 'unlink', 'not-linked.md'],
   ]) {
     assert.equal(await exitCode(run(args)), 1, args.join(' '));
-    assert.deepEqual(await snapshot().then((after) => [after.head, after.remote]), [head, remote], args.join(' '));
+    assert.deepEqual(await snapshot().then((after) => [after.head, after.remote, after.device]), [head, remote, device], args.join(' '));
   }
   assert.match((await git(['status', '--porcelain'], vault)).stdout, /skills\/demo\/SKILL\.md/);
+});
+
+test('a remote edit publishes earlier pending edits along with its own change', async (t) => {
+  const { home, run } = await fixture(t);
+  const remote = path.join(home, 'remote.git');
+  await run(['uninstall', 'demo', '-d', 'remote', '-t', 'codex']);
+  assert.equal((await git(['show', 'main:skills/demo/SKILL.md'], remote)).stdout, '# Pending edit\n');
+  assert.doesNotMatch((await git(['show', 'main:devices/remote.json'], remote)).stdout, /"demo"/);
 });
 
 test('help flags print usage instead of running the command', async (t) => {

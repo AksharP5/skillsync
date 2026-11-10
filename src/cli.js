@@ -28,6 +28,7 @@ import {
   uninstallSkills,
 } from './core/device.js';
 import { checkVault, checkVaultForPush } from './core/check.js';
+import { isGlobalInstallTarget } from './core/device-assignments.js';
 import {
   matrixAssignmentChanges,
   renderSkillSelectionChanges,
@@ -111,7 +112,7 @@ const pluginProfileArg = segment('Plugin profile');
 const instructionProfileArg = segment('Instruction profile');
 const onOff = oneOf('on', 'off', 'true', 'false');
 const deviceOptions = { '--device': deviceIdArg, '-d': deviceIdArg };
-const targetOptions = { '--target': text, '-t': text, '--global': true, '-g': true };
+const targetOptions = { '--target': targetList, '-t': targetList, '--global': true, '-g': true };
 const conflictOptions = { '--conflict': oneOf('skip', 'use-vault', 'overwrite-vault', 'rename'), '--as': skillNameArg };
 const instructionsSpec = {
   run: instructionsCommand,
@@ -134,7 +135,12 @@ const instructionsSpec = {
       operands: [deviceIdArg],
       options: { '--device': deviceIdArg, '--path': text },
     },
-    fork: { usage: 'skillsync instructions fork [profile]', optional: [instructionProfileArg], options: { '--name': instructionProfileArg } },
+    fork: {
+      usage: 'skillsync instructions fork [profile]',
+      optional: [instructionProfileArg],
+      options: { '--name': instructionProfileArg },
+      operandOption: '--name',
+    },
     link: { usage: 'skillsync instructions link <path>', operands: [pathArgument] },
     unlink: { usage: 'skillsync instructions unlink <path>', operands: [pathArgument] },
     enable: {
@@ -158,6 +164,7 @@ const pluginsSpec = {
       optional: [pluginProfileArg],
       options: { '--name': pluginProfileArg, '--plugin': text, '--plugins': text, '--auto-adopt': true, '--no-auto-adopt': true },
       exclusive: ['--auto-adopt', '--no-auto-adopt'],
+      operandOption: '--name',
     },
     use: { usage: 'skillsync plugins use <profile> [--device id]', operands: [pluginProfileArg], options: deviceOptions },
     'auto-adopt': { usage: 'skillsync plugins auto-adopt <profile> <on|off>', operands: [pluginProfileArg, onOff] },
@@ -302,7 +309,7 @@ function parseArguments(spec, rest, name) {
     if (!Object.hasOwn(spec.subcommands, subcommand)) throw new Error(usage);
     return [subcommand, ...parseArguments(spec.subcommands[subcommand], tail, `${name} ${subcommand}`)];
   }
-  const { operands = [], optional = [], options = {}, exclusive = [] } = spec;
+  const { operands = [], optional = [], options = {}, exclusive = [], operandOption } = spec;
   const slots = [...operands, ...optional];
   const positionals = [];
   const flags = [];
@@ -316,7 +323,7 @@ function parseArguments(spec, rest, name) {
     if (option) {
       const value = rest[index += 1];
       if (!value?.trim() || value.startsWith('-')) throw new Error(`Missing value for ${token}. ${usage}`);
-      flags.push(token, option(value, usage));
+      flags.push(token, option(value, usage, token));
       continue;
     }
     const slot = slots[positionals.length];
@@ -328,6 +335,9 @@ function parseArguments(spec, rest, name) {
   if (positionals.length < operands.length) throw new Error(usage);
   if (exclusive.length && exclusive.every((flag) => flags.includes(flag))) {
     throw new Error(`Choose only one: ${exclusive.join(' or ')}`);
+  }
+  if (operandOption && positionals.length && flags.includes(operandOption)) {
+    throw new Error(`Give either an argument or ${operandOption}, not both. ${usage}`);
   }
   return [...slots.map((_, index) => positionals[index]), ...flags];
 }
@@ -341,6 +351,13 @@ function oneOf(...values) {
     if (values.includes(value)) return value;
     throw new Error(`Expected ${values.join(', ')}; received ${value}. ${usage}`);
   };
+}
+
+function targetList(value, usage, flag) {
+  const names = value.split(',').map((name) => name.trim()).filter(Boolean);
+  if (!names.length) throw new Error(`Expected at least one target for ${flag}. ${usage}`);
+  for (const name of names) assertSafePathSegment(name, 'Target name');
+  return value;
 }
 
 function text(value, usage) {
@@ -1142,9 +1159,6 @@ async function matrixCommand(rest = []) {
 
 async function instructionsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
-  if (subcommand === 'fork' && rest[1] && hasFlag(rest, '--name')) {
-    throw new Error('Give the fork profile either as an argument or with --name, not both');
-  }
   const config = await configured();
   const report = subcommand === 'status' || subcommand === 'profiles';
   // Changing commands publish only after they succeed.
@@ -1778,7 +1792,10 @@ async function uninstall(rest) {
   const targets = parseTargets(rest);
   await configured({ config });
   await pullBeforeRemoteEdit(config, deviceId);
-  await requireKnownDevice(config.repoPath, deviceId);
+  const device = await requireKnownDevice(config.repoPath, deviceId);
+  // Removing a target the device doesn't have is a typo, not a no-op.
+  const unknown = targets?.find((name) => !isGlobalInstallTarget(name) && !Object.hasOwn(device.targets, name));
+  if (unknown) throw new Error(`Unknown target on ${deviceId}: ${unknown}`);
   await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId,

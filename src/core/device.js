@@ -711,7 +711,7 @@ export async function addTarget({
   const inventoryRevision = await readInventoryRevision(vaultPath);
   await initializeLocalPathState({ vaultPath, deviceId });
   const device = await loadLocalDevice(vaultPath, deviceId);
-  const previousTarget = device.targets[name];
+  const previousTarget = Object.hasOwn(device.targets, name) ? device.targets[name] : undefined;
   const nextTarget = {
     path: targetPath,
     mode,
@@ -765,7 +765,7 @@ async function requireWritableTargetRoot(targetPath) {
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   assertSafePathSegment(name, 'Target name');
   let device = await loadLocalDevice(vaultPath, deviceId);
-  if (!device.targets[name]) return device;
+  if (!Object.hasOwn(device.targets, name)) return device;
   await removeOwnedTargetProjections({
     vaultPath,
     device,
@@ -849,7 +849,7 @@ export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceI
   assertSafePathSegment(name, 'Target name');
   let inventoryRevision = await readInventoryRevision(vaultPath);
   let device = await loadLocalDevice(vaultPath, deviceId);
-  if (!device.targets[name]) throw new Error(`Unknown target on this device: ${name}`);
+  if (!Object.hasOwn(device.targets, name)) throw new Error(`Unknown target on this device: ${name}`);
   if (enabled && !Array.isArray(device.detected?.[name])) {
     await scanTargets({ vaultPath, deviceId });
     inventoryRevision = await readInventoryRevision(vaultPath);
@@ -892,7 +892,7 @@ async function validateRequestedTargets(device, requestedTargets) {
     throw new Error('No targets configured. Add one with: skillsync target add <name> <path>, or use --global for a device-global install.');
   }
   for (const target of selectedTargets) {
-    if (!device.targets[target]) throw new Error(`Unknown target on this device: ${target}`);
+    if (!Object.hasOwn(device.targets, target)) throw new Error(`Unknown target on this device: ${target}`);
   }
   return { selectedTargets, wantsGlobalInstall };
 }
