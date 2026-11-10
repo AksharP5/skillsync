@@ -87,3 +87,30 @@ test('sync rejects unsafe content outside skills before creating assigned projec
   );
   await assert.rejects(() => lstat(path.join(targetPath, 'example')), { code: 'ENOENT' });
 });
+
+test('malformed plugin reports from other devices do not stop skill sync, and ours is never published', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-sync-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const vaultPath = path.join(root, 'vault');
+  const targetPath = path.join(root, 'target');
+  const skillPath = path.join(vaultPath, 'skills', 'example');
+  const deviceId = 'test-device';
+  await mkdir(skillPath, { recursive: true });
+  await writeFile(path.join(skillPath, 'SKILL.md'), '# Example\n');
+  await rebuildRegistry(vaultPath);
+  await addTarget({ vaultPath, deviceId, name: 'codex', targetPath, mode: 'copy' });
+  await installSkill({ vaultPath, deviceId, skillName: 'example', targets: ['codex'] });
+  const foreign = path.join(vaultPath, 'plugins', 'claude', 'state', 'newer-client.json');
+  const own = path.join(vaultPath, 'plugins', 'state', `${deviceId}.json`);
+  for (const file of [foreign, own]) {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, '{"version": 3, "installed": [');
+  }
+
+  const result = await syncVault({ vaultPath, deviceId, pull: false, pushChanges: false });
+
+  assert.equal(await readFile(path.join(targetPath, 'example', 'SKILL.md'), 'utf8'), '# Example\n');
+  assert.deepEqual(result.plugins.errors, ["Rewrote this device's unreadable Codex plugin report"]);
+  assert.equal(JSON.parse(await readFile(own, 'utf8')).device_id, deviceId);
+  assert.equal(await readFile(foreign, 'utf8'), '{"version": 3, "installed": [');
+});

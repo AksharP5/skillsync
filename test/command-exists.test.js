@@ -65,9 +65,9 @@ test('plugin inspection reads Codex available on the inherited PATH', async (t) 
 
   const result = await evaluate(`
     const { run } = await import(${JSON.stringify(gitModule)});
-    const { inspectCodexPlugins } = await import(${JSON.stringify(pluginsModule)});
+    const { inspectPlugins } = await import(${JSON.stringify(pluginsModule)});
     const direct = JSON.parse((await run('codex', ['plugin', 'list', '--json'])).stdout);
-    console.log(JSON.stringify({ direct, inspection: await inspectCodexPlugins() }));
+    console.log(JSON.stringify({ direct, inspection: await inspectPlugins() }));
   `);
 
   assert.equal(result.direct.installed.length, 1);

@@ -17,14 +17,14 @@ import {
   pluginStatePath,
   savePluginProfile,
   setPluginProfileAutoAdopt,
-  syncCodexPlugins,
+  syncPlugins,
 } from '../src/core/plugins.js';
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-plugins-test-'));
 }
 
-test('plugin sync only reads other device reports when auto-adoption is enabled', async (t) => {
+test('plugin sync reads other device reports only for auto-adoption and skips unreadable ones', async (t) => {
   const vaultPath = await tempDir();
   t.after(() => rm(vaultPath, { recursive: true, force: true }));
   await savePluginProfile({ vaultPath, name: 'shared', plugins: ['demo@local'] });
@@ -38,12 +38,14 @@ test('plugin sync only reads other device reports when auto-adoption is enabled'
     runCommand: async () => ({ stdout: JSON.stringify({ installed: [{ pluginId: 'demo@local' }] }) }),
   };
 
-  const report = await syncCodexPlugins(options);
+  const report = await syncPlugins(options);
   assert.equal(report.applied_profile, 'shared');
   assert.deepEqual(report.errors, []);
 
   await setPluginProfileAutoAdopt({ vaultPath, name: 'shared', enabled: true });
-  await assert.rejects(() => syncCodexPlugins(options), SyntaxError);
+  const adopting = await syncPlugins(options);
+  assert.equal(adopting.applied_profile, 'shared');
+  assert.deepEqual(adopting.errors, ['Skipped the unreadable Codex plugin report for other']);
 });
 
 test('idle plugin sync preserves the report file while inspecting fresh inventory', async (t) => {
@@ -62,18 +64,18 @@ test('idle plugin sync preserves the report file while inspecting fresh inventor
       return { stdout: JSON.stringify({ installed: [{ pluginId: 'demo@local', enabled }] }) };
     },
   };
-  await syncCodexPlugins(options);
+  await syncPlugins(options);
   const reportPath = pluginStatePath(vaultPath, deviceId);
   const timestamp = new Date('2000-01-01T00:00:00Z');
   await utimes(reportPath, timestamp, timestamp);
 
-  await syncCodexPlugins(options);
-  await syncCodexPlugins(options);
+  await syncPlugins(options);
+  await syncPlugins(options);
 
   assert.equal(inspections, 3);
   assert.equal((await stat(reportPath)).mtimeMs, timestamp.getTime());
   enabled = false;
-  const changed = await syncCodexPlugins(options);
+  const changed = await syncPlugins(options);
   assert.deepEqual(changed.disabled, ['demo@local']);
   assert.equal((await loadPluginState(vaultPath, deviceId)).applied_profile, null);
   assert.notEqual((await stat(reportPath)).mtimeMs, timestamp.getTime());
@@ -232,7 +234,7 @@ test('plugin sync installs only missing selections and preserves extra plugins',
     throw new Error(`Unexpected Codex command: ${args.join(' ')}`);
   };
 
-  const state = await syncCodexPlugins({
+  const state = await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -313,7 +315,7 @@ test('plugin reports ignore package updates and product-managed inventory', asyn
     code: 0,
   });
 
-  await syncCodexPlugins({
+  await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -341,7 +343,7 @@ test('plugin reports ignore package updates and product-managed inventory', asyn
       authPolicy: 'ON_INSTALL',
     },
   ];
-  await syncCodexPlugins({
+  await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -388,14 +390,14 @@ test('auto-adopted plugins propagate from any assigned device without rewriting 
     'notion@openai-curated',
     'sites@openai-bundled',
   ]);
-  const vpsState = await syncCodexPlugins({
+  const vpsState = await syncPlugins({
     vaultPath,
     deviceId: 'vps',
     commandAvailable: async () => true,
     runCommand: vps.runCommand,
   });
   const mac = runner(['github@openai-curated']);
-  const macState = await syncCodexPlugins({
+  const macState = await syncPlugins({
     vaultPath,
     deviceId: 'mac',
     commandAvailable: async () => true,
@@ -420,7 +422,7 @@ test('plugin sync reports disabled selections without deleting or reinstalling t
   });
   await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
   const calls = [];
-  const state = await syncCodexPlugins({
+  const state = await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -454,7 +456,7 @@ test('plugin sync never writes raw authentication failures to the vault', async 
     plugins: ['gmail@openai-curated'],
   });
   await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
-  const state = await syncCodexPlugins({
+  const state = await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -484,7 +486,7 @@ test('failed inspection leaves the last durable report unchanged', async () => {
     autoAdopt: true,
   });
   await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
-  await syncCodexPlugins({
+  await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -501,7 +503,7 @@ test('failed inspection leaves the last durable report unchanged', async () => {
   });
   const reported = await loadPluginState(vaultPath, deviceId);
 
-  const state = await syncCodexPlugins({
+  const state = await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => false,
@@ -529,7 +531,7 @@ test('malformed plugin inventories preserve the last report and auto-adopted sel
     autoAdopt: true,
   });
   const assignment = await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
-  await syncCodexPlugins({
+  await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => true,
@@ -553,7 +555,7 @@ test('malformed plugin inventories preserve the last report and auto-adopted sel
     { installed: [{ pluginId: 'github@openai-curated' }, {}] },
   ]) {
     const calls = [];
-    const state = await syncCodexPlugins({
+    const state = await syncPlugins({
       vaultPath,
       deviceId,
       commandAvailable: async () => true,
@@ -584,7 +586,7 @@ test('failed first inspection does not create a device report', async () => {
   });
   await assignPluginProfile({ vaultPath, deviceId, profile: 'shared' });
 
-  const state = await syncCodexPlugins({
+  const state = await syncPlugins({
     vaultPath,
     deviceId,
     commandAvailable: async () => false,
@@ -598,7 +600,7 @@ test('failed first inspection does not create a device report', async () => {
 test('devices without a plugin assignment remain unmanaged', async () => {
   const vaultPath = await tempDir();
   let inspected = false;
-  const state = await syncCodexPlugins({
+  const state = await syncPlugins({
     vaultPath,
     deviceId: 'unmanaged',
     commandAvailable: async () => {

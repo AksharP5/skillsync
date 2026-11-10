@@ -87,12 +87,18 @@ import {
   assignPluginProfile,
   effectivePluginProfile,
   importablePluginSelectors,
-  inspectCodexPlugins,
+  inspectPlugins,
   listPluginAssignments,
   listPluginProfiles,
   listPluginStates,
+  loadLocalPluginState,
   loadPluginProfile,
+  loadRemovedPlugins,
+  normalizePluginSelector,
   pluginProfileHash,
+  pluginProvider,
+  removePluginFromProfile,
+  saveRemovedPlugins,
   savePluginProfile,
   setPluginProfileAutoAdopt,
 } from './core/plugins.js';
@@ -151,23 +157,44 @@ const instructionsSpec = {
     disable: { usage: 'skillsync instructions disable [--device id]', options: { '--device': deviceIdArg } },
   },
 };
+const agentOptions = { '--agent': oneOf('codex', 'claude') };
 const pluginsSpec = {
   run: pluginsCommand,
-  usage: 'skillsync plugins status|profiles|show <profile>|import --name <profile>|use <profile> [--device id]|auto-adopt <profile> <on|off>',
+  usage: 'skillsync plugins status|profiles|show <profile>|import --name <profile>|use <profile> [--device id]|auto-adopt <profile> <on|off>|remove <plugin@marketplace> [--agent codex|claude]',
   default: 'status',
   subcommands: {
-    status: {},
-    profiles: {},
-    show: { usage: 'skillsync plugins show <profile>', operands: [pluginProfileArg] },
+    status: { usage: 'skillsync plugins status [--agent codex|claude]', options: agentOptions },
+    profiles: { usage: 'skillsync plugins profiles [--agent codex|claude]', options: agentOptions },
+    show: { usage: 'skillsync plugins show <profile> [--agent codex|claude]', operands: [pluginProfileArg], options: agentOptions },
     import: {
-      usage: 'skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]',
+      usage: 'skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt] [--agent codex|claude]',
       optional: [pluginProfileArg],
-      options: { '--name': pluginProfileArg, '--plugin': text, '--plugins': text, '--auto-adopt': true, '--no-auto-adopt': true },
+      options: {
+        '--name': pluginProfileArg,
+        '--plugin': text,
+        '--plugins': text,
+        '--auto-adopt': true,
+        '--no-auto-adopt': true,
+        ...agentOptions,
+      },
       exclusive: ['--auto-adopt', '--no-auto-adopt'],
       operandOption: '--name',
     },
-    use: { usage: 'skillsync plugins use <profile> [--device id]', operands: [pluginProfileArg], options: deviceOptions },
-    'auto-adopt': { usage: 'skillsync plugins auto-adopt <profile> <on|off>', operands: [pluginProfileArg, onOff] },
+    use: {
+      usage: 'skillsync plugins use <profile> [--device id] [--agent codex|claude]',
+      operands: [pluginProfileArg],
+      options: { ...deviceOptions, ...agentOptions },
+    },
+    'auto-adopt': {
+      usage: 'skillsync plugins auto-adopt <profile> <on|off> [--agent codex|claude]',
+      operands: [pluginProfileArg, onOff],
+      options: agentOptions,
+    },
+    remove: {
+      usage: 'skillsync plugins remove <plugin@marketplace> [--agent codex|claude]',
+      operands: [pluginSelectorArg],
+      options: agentOptions,
+    },
   },
 };
 const deviceSpec = {
@@ -344,6 +371,14 @@ function parseArguments(spec, rest, name) {
 
 function segment(label) {
   return (value) => assertSafePathSegment(value, label);
+}
+
+function pluginSelectorArg(value, usage) {
+  try {
+    return normalizePluginSelector(value);
+  } catch (error) {
+    throw new Error(`${error.message}. ${usage}`);
+  }
 }
 
 function oneOf(...values) {
@@ -915,28 +950,43 @@ async function installedCommand(rest = []) {
 function printPluginIssues(state) {
   if (state?.missing?.length) console.log(`  missing: ${state.missing.join(', ')}`);
   if (state?.disabled?.length) console.log(`  disabled: ${state.disabled.join(', ')}`);
+  for (const [selector, reason] of state?.failures || []) console.log(`  failed: ${selector} (${reason})`);
   for (const error of state?.errors || []) console.log(`  error: ${error}`);
+}
+
+function printPluginSyncMessages(result, prefix = '', { onlyChanged = false } = {}) {
+  for (const plugins of [result.plugins, result.claudePlugins]) {
+    if (!plugins?.errors?.length || (onlyChanged && !plugins.errorsChanged)) continue;
+    const { label } = pluginProvider(plugins.provider);
+    for (const error of plugins.errors) console.warn(`${prefix}${label} plugins: ${error}`);
+  }
+}
+
+async function effectivePluginProfiles(vaultPath, agent, options) {
+  const profiles = await listPluginProfiles(vaultPath, agent);
+  return Promise.all(profiles.map(async (stored) => {
+    const removed = await loadRemovedPlugins(vaultPath, stored.name, agent);
+    return { profile: effectivePluginProfile(stored, { ...options, removed }), removed };
+  }));
 }
 
 async function pluginsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
+  const agent = flagValue(rest, '--agent', 'codex');
+  const { label, ui, uninstall } = pluginProvider(agent);
   const config = await configured();
 
   if (subcommand === 'profiles') {
-    const [storedProfiles, assignments, states] = await Promise.all([
-      listPluginProfiles(config.repoPath),
-      listPluginAssignments(config.repoPath),
-      listPluginStates(config.repoPath),
+    const [assignments, states] = await Promise.all([
+      listPluginAssignments(config.repoPath, agent),
+      listPluginStates(config.repoPath, agent),
     ]);
-    const profiles = storedProfiles.map((profile) => effectivePluginProfile(profile, {
-      assignments,
-      states,
-    }));
+    const profiles = await effectivePluginProfiles(config.repoPath, agent, { assignments, states });
     if (!profiles.length) {
-      console.log('No Codex plugin profiles are configured.');
+      console.log(`No ${label} plugin profiles are configured.`);
       return;
     }
-    for (const profile of profiles) {
+    for (const { profile } of profiles) {
       console.log(`${profile.name}\t${profile.plugins.length} plugins\tauto-adopt ${profile.auto_adopt ? 'on' : 'off'}`);
     }
     return;
@@ -944,27 +994,32 @@ async function pluginsCommand(rest = []) {
 
   if (subcommand === 'show') {
     const name = rest[1];
-    const [storedProfile, assignments, states] = await Promise.all([
-      loadPluginProfile(config.repoPath, name),
-      listPluginAssignments(config.repoPath),
-      listPluginStates(config.repoPath),
+    const [storedProfile, assignments, states, removed] = await Promise.all([
+      loadPluginProfile(config.repoPath, name, agent),
+      listPluginAssignments(config.repoPath, agent),
+      listPluginStates(config.repoPath, agent),
+      loadRemovedPlugins(config.repoPath, name, agent),
     ]);
-    const profile = effectivePluginProfile(storedProfile, { assignments, states });
+    const profile = effectivePluginProfile(storedProfile, { assignments, states, removed });
     console.log(`${profile.name} (${profile.plugins.length} plugins; auto-adopt ${profile.auto_adopt ? 'on' : 'off'})`);
-    for (const selector of profile.plugins) console.log(`- ${selector}`);
+    for (const selector of profile.plugins) {
+      const source = profile.marketplaces?.[selector.slice(selector.lastIndexOf('@') + 1)];
+      console.log(source ? `- ${selector} (from ${source})` : `- ${selector}`);
+    }
+    if (removed.length) console.log(`removed: ${removed.join(', ')}`);
     return;
   }
 
   if (subcommand === 'import') {
     const name = flagValue(rest, '--name') || rest[1];
     if (!name) {
-      throw new Error('Usage: skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]');
+      throw new Error('Usage: skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt] [--agent codex|claude]');
     }
-    const inspection = await inspectCodexPlugins();
+    const inspection = await inspectPlugins({ agent });
     if (!inspection.available) throw new Error(inspection.error);
-    const importable = importablePluginSelectors(inspection.installed);
+    const importable = importablePluginSelectors(inspection.installed, agent);
     if (!importable.length) {
-      throw new Error('No enabled, user-managed Codex plugins are installed on this device');
+      throw new Error(`No enabled, user-managed ${label} plugins are installed on this device`);
     }
     const requested = flagList(rest, ['--plugin', '--plugins']);
     if (!requested.length && !hasFlag(rest, '--auto-adopt') && !process.stdin.isTTY) {
@@ -975,7 +1030,7 @@ async function pluginsCommand(rest = []) {
     if (!selected.length) {
       const { checkbox } = await import('@inquirer/prompts');
       selected = await promptWithEscape(checkbox({
-        message: 'Which Codex plugins should this profile manage?',
+        message: `Which ${label} plugins should this profile manage?`,
         choices: importable.map((selector) => ({ name: selector, value: selector })),
       }), []);
     }
@@ -990,7 +1045,7 @@ async function pluginsCommand(rest = []) {
       pull: true,
       pushChanges: false,
     });
-    const existing = await loadPluginProfile(config.repoPath, name).catch((error) => {
+    const existing = await loadPluginProfile(config.repoPath, name, agent).catch((error) => {
       if (error.message === `Plugin profile not found: ${name}`) return null;
       throw error;
     });
@@ -1001,19 +1056,29 @@ async function pluginsCommand(rest = []) {
       vaultPath: config.repoPath,
       name,
       plugins: selected,
+      marketplaces: inspection.marketplaces,
       autoAdopt,
+      agent,
+    });
+    const removed = await loadRemovedPlugins(config.repoPath, profile.name, agent);
+    await saveRemovedPlugins({
+      vaultPath: config.repoPath,
+      profile: profile.name,
+      plugins: removed.filter((selector) => !profile.plugins.includes(selector)),
+      agent,
     });
     await assignPluginProfile({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       profile: profile.name,
+      agent,
     });
     await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: false,
     });
-    console.log(`Imported ${profile.plugins.length} Codex plugins into ${profile.name}, assigned it to ${config.deviceId}, and set auto-adopt ${profile.auto_adopt ? 'on' : 'off'}.`);
+    console.log(`Imported ${profile.plugins.length} ${label} plugins into ${profile.name}, assigned it to ${config.deviceId}, and set auto-adopt ${profile.auto_adopt ? 'on' : 'off'}.`);
     return;
   }
 
@@ -1022,23 +1087,26 @@ async function pluginsCommand(rest = []) {
     const deviceId = requestedDeviceId(config, rest);
     await pullBeforeRemoteEdit(config, deviceId);
     await requireKnownDevice(config.repoPath, deviceId);
-    await assignPluginProfile({ vaultPath: config.repoPath, deviceId, profile });
-    const { plugins } = await syncVault({
+    await assignPluginProfile({ vaultPath: config.repoPath, deviceId, profile, agent });
+    const synced = await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: false,
+      retryFailedPlugins: true,
     });
+    const plugins = agent === 'claude' ? synced.claudePlugins : synced.plugins;
     if (deviceId === config.deviceId) {
       if (plugins?.available && plugins.applied_profile === profile) {
-        console.log(`Applied Codex plugin profile ${profile} on ${deviceId}. Start a new Codex session to load its plugins.`);
+        console.log(`Applied ${label} plugin profile ${profile} on ${deviceId}. Start a new ${label} session to load its plugins.`);
+        for (const error of plugins.errors) console.log(`  error: ${error}`);
         return;
       }
-      console.log(`Codex plugin profile ${profile} is pending on ${deviceId}.`);
+      console.log(`${label} plugin profile ${profile} is pending on ${deviceId}.`);
       printPluginIssues(plugins);
-      console.log('Install or enable required plugins in Codex /plugins, resolve any errors above, then run skillsync sync.');
+      console.log(`Install or enable required plugins in ${ui}, resolve any errors above, then run skillsync sync.`);
       return;
     }
-    console.log(`Assigned Codex plugin profile ${profile} to ${deviceId}; it will apply on that device's next sync.`);
+    console.log(`Assigned ${label} plugin profile ${profile} to ${deviceId}; it will apply on that device's next sync.`);
     return;
   }
 
@@ -1056,6 +1124,7 @@ async function pluginsCommand(rest = []) {
       vaultPath: config.repoPath,
       name,
       enabled,
+      agent,
     });
     await syncVault({
       vaultPath: config.repoPath,
@@ -1066,26 +1135,58 @@ async function pluginsCommand(rest = []) {
     return;
   }
 
-  const [profiles, assignments, states, devices, localInspection] = await Promise.all([
-    listPluginProfiles(config.repoPath),
-    listPluginAssignments(config.repoPath),
-    listPluginStates(config.repoPath),
+  if (subcommand === 'remove') {
+    const selector = rest[1];
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: true,
+      pushChanges: false,
+    });
+    const removed = await removePluginFromProfile({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      selector,
+      agent,
+    });
+    await syncVault({
+      vaultPath: config.repoPath,
+      deviceId: config.deviceId,
+      pull: false,
+    });
+    // 0.14.0 syncs Codex profiles but knows nothing of removals, so its auto-adoption re-adds them.
+    console.log(`Removed ${selector} from ${label} plugin profile ${removed.profile}. ${agent === 'codex'
+      ? 'Devices on skillsync 0.14.0 or older ignore removals and can add it back through auto-adoption until they upgrade; newer devices will not install it.'
+      : 'Devices will no longer install it.'}`);
+    if (removed.installedOn.length) {
+      console.log(`It is still installed on ${removed.installedOn.join(', ')}. To uninstall it, run this on each of them: ${uninstall} ${selector}`);
+    }
+    return;
+  }
+
+  const warnings = [];
+  const [assignments, states, devices, localInspection, localState] = await Promise.all([
+    listPluginAssignments(config.repoPath, agent),
+    listPluginStates(config.repoPath, agent, warnings),
     listDevices(config.repoPath),
-    inspectCodexPlugins(),
+    inspectPlugins({ agent }),
+    loadLocalPluginState(config.repoPath, agent),
   ]);
-  const effectiveProfiles = profiles.map((profile) => effectivePluginProfile(profile, {
+  const profiles = await effectivePluginProfiles(config.repoPath, agent, {
     assignments,
     states,
     deviceId: config.deviceId,
     installed: localInspection.available ? localInspection.installed : null,
-  }));
-  const profileByName = new Map(effectiveProfiles.map((profile) => [profile.name, profile]));
+    marketplaces: localInspection.marketplaces,
+  });
+  const profileByName = new Map(profiles.map(({ profile }) => [profile.name, profile]));
   const assignmentByDevice = new Map(assignments.map((assignment) => [assignment.device_id, assignment]));
   const stateByDevice = new Map(states.map((state) => [state.device_id, state]));
-  console.log('Codex plugin profiles:');
+  console.log(`${label} plugin profiles:`);
   if (!profiles.length) console.log('- none');
-  for (const profile of effectiveProfiles) {
+  for (const { profile, removed } of profiles) {
     console.log(`- ${profile.name}: ${profile.plugins.length} plugins (auto-adopt ${profile.auto_adopt ? 'on' : 'off'})`);
+    if (removed.length) console.log(`  removed: ${removed.join(', ')}`);
   }
   console.log('Devices:');
   for (const device of devices) {
@@ -1107,15 +1208,24 @@ async function pluginsCommand(rest = []) {
         && !missing.length
         && !disabled.length,
       );
+      const profileHash = profile ? pluginProfileHash(profile) : null;
       state = {
         ...state,
         available: localInspection.available,
         installed: localInspection.installed,
         applied_profile: applied ? assignment.profile : null,
-        applied_profile_hash: applied ? pluginProfileHash(profile) : null,
+        applied_profile_hash: applied ? profileHash : null,
         missing,
         disabled,
-        errors: localInspection.error ? [localInspection.error] : [],
+        failures: Object.entries(localState.failed)
+          .filter(([selector, failure]) => failure?.profile_hash === profileHash && missing.includes(selector))
+          .map(([selector, failure]) => [selector, failure.reason]),
+        errors: [...new Set([
+          ...(localInspection.error ? [localInspection.error] : []),
+          ...localState.warnings,
+          ...localState.update_errors,
+          ...warnings,
+        ])],
       };
     }
     const desired = assignment?.profile || 'unmanaged';
@@ -2018,6 +2128,8 @@ async function syncCommand(rest) {
     deviceId: config.deviceId,
     pull: !hasFlag(rest, '--no-pull'),
     discardLocalChanges,
+    retryFailedPlugins: true,
+    updatePlugins: true,
   });
   for (const adopted of result.autoImported || []) {
     console.log(`Auto-adopted ${adopted.name} from ${adopted.target}.`);
@@ -2026,6 +2138,7 @@ async function syncCommand(rest) {
     console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.`);
   }
   printInstructionSyncMessages(result);
+  printPluginSyncMessages(result);
   if (result.prunedSkills?.length) {
     console.log(`Removed unused vault skills: ${result.prunedSkills.join(', ')}.`);
   }
@@ -2137,7 +2250,7 @@ async function daemon(rest) {
   while (true) {
     try {
       const config = await configured();
-      const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId });
+      const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, updatePlugins: true });
       for (const adopted of result.autoImported || []) {
         console.log(`[${new Date().toISOString()}] auto-adopted ${adopted.name} from ${adopted.target}`);
       }
@@ -2145,6 +2258,7 @@ async function daemon(rest) {
         console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}`);
       }
       printInstructionSyncMessages(result, `[${new Date().toISOString()}] `);
+      printPluginSyncMessages(result, `[${new Date().toISOString()}] `, { onlyChanged: true });
       if (result.prunedSkills?.length) {
         console.log(`[${new Date().toISOString()}] removed unused vault skills: ${result.prunedSkills.join(', ')}`);
       }
@@ -3214,5 +3328,5 @@ async function instructionProfileSettingsScreen(config, device) {
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device] [--path path]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status\n  skillsync plugins profiles\n  skillsync plugins show <profile>\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]\n  skillsync plugins use <profile> [--device id]\n  skillsync plugins auto-adopt <profile> <on|off>\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan [--json]\n  skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]\n  skillsync rollback\n  skillsync check\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device] [--path path]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status [--agent codex|claude]\n  skillsync plugins profiles [--agent codex|claude]\n  skillsync plugins show <profile> [--agent codex|claude]\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt] [--agent codex|claude]\n  skillsync plugins use <profile> [--device id] [--agent codex|claude]\n  skillsync plugins auto-adopt <profile> <on|off> [--agent codex|claude]\n  skillsync plugins remove <plugin@marketplace> [--agent codex|claude]\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan [--json]\n  skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]\n  skillsync rollback\n  skillsync check\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }
