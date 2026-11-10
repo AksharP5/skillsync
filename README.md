@@ -530,6 +530,8 @@ Projection apply holds its local lock through instruction and plugin reconciliat
 
 Removing a target or changing its path or mode holds the same lease from old-projection cleanup through target-state publication. This includes cleanup that leaves a shared target folder unchanged. If saving target state fails, managed projections are restored before a competing apply can proceed.
 
+New projection backup IDs advance beyond existing valid timestamp IDs, preserving creation order if the clock moves backward or repeats a millisecond. Their timestamp-and-UUID format is unchanged. Older ambiguous history retains its recorded ordering; its true creation sequence cannot be reconstructed retroactively, so select a known backup through the core rollback API or retained files when needed.
+
 Restore the most recent successful local projection apply in an emergency:
 
 ```bash
