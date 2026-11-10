@@ -522,7 +522,7 @@ Copy checks use bounded memory for large files. If a file grows or shrinks while
 
 Cleanup prepares read-only directories before its first removal pass, preventing overlapping permission-error retries at the replacement path.
 
-New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder.
+New backups of replaced local folders preserve nested symlinks exactly, including relative paths. Rollback preserves those link targets when restoring the folder. Backup pruning reserves the active snapshot within its ten-backup budget, even if the clock moves backward.
 
 When reconciliation fails, sync records recovery state before restoring changed projections. If restoration fails, repairing the reported error lets the next daemon cycle restore the backup before planning a new apply, without a restart.
 
