@@ -1,7 +1,11 @@
-import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { assertSafePathSegment, exists, hashDirectory } from './fs.js';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { chmod, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+
+import { assertSafePathSegment, exists, hashDirectory, readJson, writePrivateJson } from './fs.js';
+import { acquireDirectoryLease } from './lease.js';
 
 const privatePathCache = new AsyncLocalStorage();
 
@@ -123,6 +127,50 @@ export async function gitPrivatePath(repoPath, ...segments) {
   return resolved;
 }
 
+async function vaultReferencesRoot(vaultPath) {
+  return await gitPrivatePath(vaultPath, 'references')
+    || path.join(vaultPath, '.skillsync-local', 'references');
+}
+
+export async function inventoryRevisionPath(vaultPath) {
+  return path.join(await vaultReferencesRoot(vaultPath), 'inventory.json');
+}
+
+export async function readInventoryRevision(vaultPath) {
+  const revision = await readJson(await inventoryRevisionPath(vaultPath), null);
+  if (revision?.updating === true) {
+    throw new Error('Inventory update is incomplete; retry sync with pull enabled after repairing the failed write');
+  }
+  if (revision !== null && (typeof revision !== 'string' || !revision)) {
+    throw new Error('Invalid inventory publication revision');
+  }
+  return revision;
+}
+
+// Callers own references. Persist this barrier before nontransactional report updates.
+export async function beginInventoryUpdate(vaultPath) {
+  await writePrivateJson(await inventoryRevisionPath(vaultPath), { updating: true });
+}
+
+// Callers own references. Even byte-identical reports represent a new observation.
+export async function recordInventoryPublication(vaultPath) {
+  await writePrivateJson(await inventoryRevisionPath(vaultPath), randomUUID());
+}
+
+// Cooperating writers hold this lease from their fresh reads through commit/rollback.
+// Projection callbacks may acquire references; references owners must not acquire projection.
+export async function withVaultReferences(vaultPath, operation) {
+  const root = await vaultReferencesRoot(vaultPath);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
+  const release = await acquireDirectoryLease(root, { label: 'references update' });
+  try {
+    return await operation();
+  } finally {
+    await release();
+  }
+}
+
 export async function cloneRepo(repo, repoPath) {
   if (await isGitRepo(repoPath)) return;
   await run('git', ['clone', repo, repoPath], { inherit: true });
@@ -130,11 +178,29 @@ export async function cloneRepo(repo, repoPath) {
 
 export async function pullRebase(repoPath, { beforePull } = {}) {
   if (!await isGitRepo(repoPath)) return;
-  const { stdout: previousHead } = await git(['rev-parse', '--revs-only', 'HEAD'], repoPath);
-  if (beforePull) await beforePull(previousHead.trim() || null);
-  await git(['pull', '--rebase', '--autostash'], repoPath);
-  await assertNoGitConflicts(repoPath);
-  return previousHead.trim() || null;
+  return withVaultReferences(repoPath, async () => {
+    await beginInventoryUpdate(repoPath);
+    let failure;
+    try {
+      const { stdout: previousHead } = await git(['rev-parse', '--revs-only', 'HEAD'], repoPath);
+      if (beforePull) await beforePull(previousHead.trim() || null);
+      await git(['pull', '--rebase', '--autostash'], repoPath);
+      await assertNoGitConflicts(repoPath);
+      return previousHead.trim() || null;
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      // A failed rebase can also have changed reports in the working tree.
+      await recordInventoryPublication(repoPath).catch((error) => {
+        if (!failure) throw error;
+        throw new AggregateError([failure, error],
+          `Git pull failed: ${failure.message}\nInventory revision could not be saved: ${error.message}`, {
+            cause: failure,
+          });
+      });
+    }
+  });
 }
 
 export async function assertNoGitConflicts(repoPath) {
