@@ -304,7 +304,7 @@ export async function checkPendingGitHistory(vaultPath) {
   // Older clients reject a vault holding any invalid JSON. Reads tolerate a bad plugin report that
   // is already upstream, but this push must not add or change one.
   const { stdout: changed } = hasUpstream
-    ? await git(['diff', '--name-only', '--no-renames', '--diff-filter=d', '-z', '@{u}', 'HEAD', '--'], root)
+    ? await git(['diff', '--name-only', '--no-renames', '--diff-filter=d', '-z', '@{u}...HEAD', '--'], root)
     : await git(['ls-tree', '-r', '--name-only', '-z', 'HEAD'], root);
   for (const file of changed.split('\0').filter(isPluginReportPath)) {
     const { stdout: content } = await git(['show', `HEAD:${file}`], root);

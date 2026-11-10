@@ -320,11 +320,10 @@ async function sync({
     }
   }
   // Plugin updates can take minutes, so they run after skill sync has released the apply lock.
-  // The sync has already pushed, so an update failure is reported, never thrown.
   for (const [key, agent] of runPluginUpdates && deviceId ? PLUGIN_RESULTS : []) {
     const update = await updatePlugins({
       vaultPath, agent, targets: result[key]?.updateTargets, runCommand: pluginCommands.runCommand,
-    }).catch((error) => ({ errors: [`Could not run the daily plugin update: ${error.message}`], errorsChanged: true }));
+    });
     if (update) result[key] = mergePluginResults(result[key], { ...result[key], ...update });
   }
   return {

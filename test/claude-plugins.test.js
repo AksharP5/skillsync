@@ -362,12 +362,17 @@ test('plugin updates run after skill sync releases the apply lock', async (t) =>
   await rm(path.join(vaultPath, '.skillsync-local', 'plugins', 'claude-update'), { recursive: true });
   await writeFile(path.join(vaultPath, '.skillsync-local', 'plugins', 'claude-update'), 'not a directory');
   const broken = await sync();
+  const brokenAgain = await sync();
 
   assert.equal(applyDuringUpdate, 'ran');
   assert.deepEqual(result.claudePlugins.errors, [
     'Could not update vercel@anthropic-plugin-directory; update it from Claude Code /plugin',
   ]);
   assert.match(broken.claudePlugins.errors.join('\n'), /Could not run the daily plugin update/);
+  assert.equal(broken.claudePlugins.errorsChanged, true);
+  // The same failure next cycle is not news, so the service logs it once.
+  assert.equal(brokenAgain.claudePlugins.errorsChanged, false);
+  assert.match((await loadLocalPluginState(vaultPath, 'claude')).update_errors.join('\n'), /Could not run the daily plugin update/);
 });
 
 test("an unreadable report of this device's own is replaced through the report writer, never deleted", async (t) => {

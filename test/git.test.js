@@ -422,6 +422,11 @@ test('a push never introduces an unreadable plugin report but tolerates one alre
   await writeFile(path.join(local, 'notes.txt'), 'unrelated change\n');
   await commitAllIfChanged(local, 'unrelated change');
   await checkVaultForPush(local);
+  // A fetched upstream fix to the report is not something this push changes.
+  await writeFile(path.join(upstream, report), '{"installed": []}');
+  await commitAllIfChanged(upstream, 'the newer client fixed its report');
+  await git(['fetch'], local);
+  await checkVaultForPush(local);
 
   await writeFile(path.join(local, report), '{"installed": [{');
   await commitAllIfChanged(local, 'damage the report');

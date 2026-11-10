@@ -974,6 +974,13 @@ printf '%s\\n' '{"installed":[]}'
   assert.equal(removed.stdout, `Removed ${stripe} from Claude Code plugin profile shared. Devices will no longer install it.\n`);
   assert.match(repaired.stdout, /- shared: 3 plugins \(auto-adopt on\)\n  removed: stripe@anthropic-plugin-directory\n/);
   assert.match(repaired.stdout, /macbook: shared \(applied; 3 installed\)\n  error: Could not update vercel@anthropic-plugin-directory/);
+
+  // When the update step itself breaks, status still says so.
+  const updateRoot = await gitPrivatePath(vault, 'plugins', 'claude-update');
+  await rm(updateRoot, { recursive: true });
+  await writeFile(updateRoot, 'not a directory');
+  await skillsync('sync');
+  assert.match((await cli('status', '--agent', 'claude')).stdout, /  error: Could not run the daily plugin update/);
   assert.match((await cli('show', 'shared', '--agent', 'claude')).stdout, /\nremoved: stripe@anthropic-plugin-directory\n$/);
 
   // Reinstalling doesn't undo a removal; importing the plugin again does.

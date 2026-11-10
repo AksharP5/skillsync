@@ -720,24 +720,38 @@ export async function updatePlugins({
 }) {
   const provider = pluginProvider(agent);
   if (!provider.update || !targets) return null;
-  const root = await pluginUpdateRoot(vaultPath, agent);
-  const release = await acquireDirectoryLease(root, { label: `${provider.label} plugin update` })
-    .catch((error) => {
-      if (/already (running|starting)/.test(error.message)) return null;
-      throw error;
-    });
-  if (!release) return null;
+  const localPath = await localPluginStatePath(vaultPath, agent);
+  const local = await readLocalPluginState(localPath);
+  // Runs after the sync has pushed, so a failure here is recorded and reported, never thrown.
+  const recordFailure = async (failure) => {
+    if (failure !== local.update_failure) {
+      await writePrivateJson(localPath, { version: 1, ...local, update_failure: failure }).catch(() => {});
+    }
+    return failure ? { errors: [failure], errorsChanged: failure !== local.update_failure } : null;
+  };
   try {
-    const previous = await readUpdateState(root);
-    // Also due when plugins were never updated, since the difference is then NaN.
-    if (now - Date.parse(previous.updated_at) < UPDATE_INTERVAL_MS) return null;
-    const errors = await provider.update({ ...targets, runCommand, deadline: Date.now() + deadlineMs });
-    await writePrivateJson(path.join(root, 'state.json'), {
-      version: 1, updated_at: new Date(now).toISOString(), update_errors: errors,
-    });
-    return { errors, errorsChanged: !isDeepStrictEqual(errors, previous.update_errors) };
-  } finally {
-    await release();
+    const root = await pluginUpdateRoot(vaultPath, agent);
+    const release = await acquireDirectoryLease(root, { label: `${provider.label} plugin update` })
+      .catch((error) => {
+        if (/already (running|starting)/.test(error.message)) return null;
+        throw error;
+      });
+    if (!release) return null;
+    try {
+      const cleared = await recordFailure(null);
+      const previous = await readUpdateState(root);
+      // Also due when plugins were never updated, since the difference is then NaN.
+      if (now - Date.parse(previous.updated_at) < UPDATE_INTERVAL_MS) return cleared;
+      const errors = await provider.update({ ...targets, runCommand, deadline: Date.now() + deadlineMs });
+      await writePrivateJson(path.join(root, 'state.json'), {
+        version: 1, updated_at: new Date(now).toISOString(), update_errors: errors,
+      });
+      return { errors, errorsChanged: !isDeepStrictEqual(errors, previous.update_errors) };
+    } finally {
+      await release();
+    }
+  } catch (error) {
+    return recordFailure(`Could not run the daily plugin update: ${error.message}`);
   }
 }
 
@@ -756,7 +770,12 @@ export async function loadLocalPluginState(vaultPath, agent = 'codex') {
     readLocalPluginState(await localPluginStatePath(vaultPath, agent)),
     readUpdateState(await pluginUpdateRoot(vaultPath, agent)),
   ]);
-  return { ...local, ...update };
+  return {
+    failed: local.failed,
+    warnings: local.warnings,
+    updated_at: update.updated_at,
+    update_errors: [...(local.update_failure ? [local.update_failure] : []), ...update.update_errors],
+  };
 }
 
 async function readLocalPluginState(filePath) {
@@ -764,6 +783,8 @@ async function readLocalPluginState(filePath) {
   return {
     failed: isPlainObject(state?.failed) ? state.failed : {},
     warnings: Array.isArray(state?.warnings) ? state.warnings : [],
+    // Set when the update step itself fails, since its own directory may be what is broken.
+    update_failure: typeof state?.update_failure === 'string' ? state.update_failure : null,
   };
 }
 
@@ -899,6 +920,7 @@ export async function syncPlugins({
   if (ownReportUnreadable) warnings.push(rewrote);
 
   const nextLocal = {
+    ...local,
     failed: Object.fromEntries(failed),
     warnings: [...new Set([...(inspection.error ? [inspection.error] : []), ...warnings])],
   };
