@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -724,13 +724,22 @@ test('legacy local paths are pinned before pulling changed synced paths', async 
   await git(['add', 'state/victim.json'], other);
   await git(['commit', '-m', 'change reported path'], other);
   await git(['push'], other);
+  // Sync links the profile into ~/.claude/CLAUDE.md when a claude CLI is on PATH, so hide it
+  // and keep any agent paths inside the test root.
+  const bin = path.join(root, 'bin');
+  await mkdir(bin);
+  for (const command of ['git', 'sh']) {
+    await symlink((await run('sh', ['-c', `command -v ${command}`])).stdout.trim(), path.join(bin, command));
+  }
+  const { PATH, HOME } = process.env;
+  Object.assign(process.env, { PATH: bin, HOME: root });
 
   await syncVault({
     vaultPath: victim,
     deviceId,
     pull: true,
     pushChanges: false,
-  });
+  }).finally(() => Object.assign(process.env, { PATH, HOME }));
   const local = await loadLocalDevice(victim, deviceId);
 
   assert.deepEqual(local.instructions.agents.paths, [safe]);
