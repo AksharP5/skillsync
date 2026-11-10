@@ -19,6 +19,7 @@ import {
   hasLocalCommitsToPush,
   isGitRepo,
   pullRebase,
+  readInventoryRevision,
   pushWithPullRebaseRetry,
   withGitPrivatePathCache,
 } from './git.js';
@@ -251,13 +252,16 @@ async function sync({
         const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
         result.prunedInstructionProfiles.push(...(instructions.prunedProfiles || []));
         result.plugins = await syncCodexPlugins({ vaultPath, deviceId });
+        const inventoryRevision = await readInventoryRevision(vaultPath);
         const scanned = await scanTargets({ vaultPath, deviceId, save: false });
         if (pull) {
-          result.prunedSkills.push(...await sweepUnusedSkills({ vaultPath, deviceId, detected: scanned.detected }));
+          result.prunedSkills.push(...await sweepUnusedSkills({
+            vaultPath, deviceId, detected: scanned.detected, inventoryRevision,
+          }));
         }
         await checkVault(vaultPath);
         await markDeviceApplied({
-          vaultPath, deviceId, detected: scanned.detected, generation: preparedPlan.generation,
+          vaultPath, deviceId, detected: scanned.detected, generation: preparedPlan.generation, inventoryRevision,
         });
       },
     });

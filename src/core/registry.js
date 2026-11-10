@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
 import { normalizeGlobalInstalled, normalizeInstalled, readDeviceState } from './device-assignments.js';
-import { gitPrivatePath, hashSyncedDirectory, ignoredGitPaths } from './git.js';
+import { beginInventoryUpdate, gitPrivatePath, hashSyncedDirectory, ignoredGitPaths, recordInventoryPublication, withVaultReferences } from './git.js';
 import {
   assertSafePathSegment,
   copyDir,
@@ -82,6 +82,10 @@ export async function loadVaultConfig(vaultPath) {
 }
 
 export async function saveVaultConfig(vaultPath, config) {
+  return withVaultReferences(vaultPath, () => persistVaultConfig(vaultPath, config));
+}
+
+async function persistVaultConfig(vaultPath, config) {
   await ensureVault(vaultPath);
   const normalized = normalizeVaultConfig(config);
   await writeJson(path.join(vaultPath, VAULT_CONFIG_FILE), normalized);
@@ -92,9 +96,11 @@ export async function setVaultPolicy({ vaultPath, name, enabled }) {
   if (name !== 'delete_unassigned_skills') {
     throw new Error(`Unknown vault policy: ${name}`);
   }
-  const config = await loadVaultConfig(vaultPath);
-  config.policies[name] = Boolean(enabled);
-  return saveVaultConfig(vaultPath, config);
+  return withVaultReferences(vaultPath, async () => {
+    const config = await loadVaultConfig(vaultPath);
+    config.policies[name] = Boolean(enabled);
+    return persistVaultConfig(vaultPath, config);
+  });
 }
 
 export async function validateSkillFolder(sourcePath) {
@@ -292,8 +298,16 @@ export async function refreshChangedRegistryEntries(vaultPath) {
   return after;
 }
 
-export async function deleteSkillFromVault({ vaultPath, skillName }) {
+export async function deleteSkillFromVault({ vaultPath, skillName, eligible }) {
   assertSafePathSegment(skillName, 'Skill name');
+  return withVaultReferences(vaultPath, async () => {
+    if (eligible && !await eligible()) return false;
+    await deleteSkill(vaultPath, skillName);
+    return true;
+  });
+}
+
+async function deleteSkill(vaultPath, skillName) {
   await ensureVault(vaultPath);
   const registry = await loadRegistry(vaultPath);
   const skillPath = path.join(vaultPath, 'skills', skillName);
@@ -390,6 +404,7 @@ async function removeSkillAssignments(vaultPath, skillName) {
           auto_adopt: Boolean(target.auto_adopt ?? target.auto_import),
         },
       ]));
+      await beginInventoryUpdate(vaultPath);
       await writeJson(statePath, {
         version: 1,
         device_id: deviceId,
@@ -401,6 +416,7 @@ async function removeSkillAssignments(vaultPath, skillName) {
         detected: device.detected && typeof device.detected === 'object' ? device.detected : {},
         instructions: device.instructions || {},
       });
+      await recordInventoryPublication(vaultPath);
     }
     const desiredGeneration = Number(device.generation ?? device.desired_generation);
     await writeJson(filePath, {

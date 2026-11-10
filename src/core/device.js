@@ -22,7 +22,9 @@ import {
   writeJson,
   writePrivateJson,
 } from './fs.js';
-import { gitPrivatePath } from './git.js';
+import {
+  beginInventoryUpdate, gitPrivatePath, readInventoryRevision, recordInventoryPublication, withVaultReferences,
+} from './git.js';
 import {
   addSkillToVault,
   compareSkillToVault,
@@ -293,17 +295,35 @@ export async function saveDevice(vaultPath, device) {
   return saveLocalReportedDevice(vaultPath, device, { saveDesired: true });
 }
 
-async function saveDesiredDevice(vaultPath, device) {
+async function persistDesiredDevice(vaultPath, device) {
   await ensureVault(vaultPath);
   const normalized = normalizeDevice(device, device.device_id);
   if (!await exists(deviceStatePath(vaultPath, normalized.device_id))) {
-    await writeJson(deviceStatePath(vaultPath, normalized.device_id), reportedStateFromDevice(normalized));
+    await readInventoryRevision(vaultPath);
+    await writeDeviceState(vaultPath, [
+      {
+        filePath: deviceStatePath(vaultPath, normalized.device_id),
+        value: reportedStateFromDevice(normalized),
+        write: writeJson,
+      },
+    ]);
   }
   await writeJson(devicePath(vaultPath, normalized.device_id), desiredStateFromDevice(normalized));
   return normalized;
 }
 
-async function saveLocalReportedDevice(vaultPath, device, { saveDesired = false } = {}) {
+async function saveLocalReportedDevice(vaultPath, device, options) {
+  return withVaultReferences(vaultPath, async () => {
+    if (options?.inventoryRevision !== undefined
+      && await readInventoryRevision(vaultPath) !== options.inventoryRevision) {
+      throw new Error('Device inventory changed during sync; retry');
+    }
+    return persistLocalReportedDevice(vaultPath, device, options);
+  });
+}
+
+// Private persistence helpers require the caller to own references throughout rollback.
+async function persistLocalReportedDevice(vaultPath, device, { saveDesired = false } = {}) {
   await ensureVault(vaultPath);
   const normalized = normalizeDevice(device, device.device_id);
   const updates = [
@@ -321,18 +341,25 @@ async function saveLocalReportedDevice(vaultPath, device, { saveDesired = false 
   const desiredPath = devicePath(vaultPath, normalized.device_id);
   const desired = await readJson(desiredPath, null);
   if (saveDesired || !desired || isLegacyDeviceManifest(desired)) {
-    updates.push({ filePath: desiredPath, value: desiredStateFromDevice(normalized), write: writeJson });
+    updates.push({
+      filePath: desiredPath,
+      value: !saveDesired && desired
+        ? normalizeDesiredState(desired, normalized.device_id)
+        : desiredStateFromDevice(normalized),
+      write: writeJson,
+    });
   }
-  await writeDeviceState(updates);
+  await writeDeviceState(vaultPath, updates);
   return normalized;
 }
 
-async function writeDeviceState(updates) {
+async function writeDeviceState(vaultPath, updates) {
   const snapshots = await Promise.all(updates.map(async (update) => ({
     ...update,
     previous: await readJson(update.filePath, null),
   })));
   const attempted = [];
+  await beginInventoryUpdate(vaultPath);
   try {
     for (const update of snapshots) {
       if (isDeepStrictEqual(update.previous, update.value)) {
@@ -348,8 +375,11 @@ async function writeDeviceState(updates) {
       attempted.push(update);
       await update.write(update.filePath, update.value);
     }
+    await recordInventoryPublication(vaultPath);
   } catch (error) {
     const rollbackErrors = [];
+    // Never restore an earlier revision, including when report restoration fails.
+    await beginInventoryUpdate(vaultPath).catch((failure) => rollbackErrors.push(failure));
     for (const { filePath, previous, write } of attempted.reverse()) {
       try {
         if (isDeepStrictEqual(await readJson(filePath, null), previous)) continue;
@@ -358,6 +388,9 @@ async function writeDeviceState(updates) {
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError);
       }
+    }
+    if (!rollbackErrors.length) {
+      await recordInventoryPublication(vaultPath).catch((failure) => rollbackErrors.push(failure));
     }
     if (rollbackErrors.length) {
       throw new AggregateError([error, ...rollbackErrors],
@@ -636,6 +669,7 @@ export async function configureGlobalInstructions({
   automaticPaths,
   appliedProfile,
 }) {
+  const inventoryRevision = await readInventoryRevision(vaultPath);
   await initializeLocalPathState({ vaultPath, deviceId });
   const device = await loadLocalDevice(vaultPath, deviceId);
   const paths = targetPaths || (targetPath ? [targetPath] : device.instructions.agents?.paths || []);
@@ -647,7 +681,7 @@ export async function configureGlobalInstructions({
     applied_profile: normalizeInstructionProfile(appliedProfile),
   };
   device.instructions.version = 1;
-  await saveLocalReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   return device;
 }
 
@@ -664,6 +698,7 @@ export async function addTarget({
   if (isGlobalInstallTarget(name)) throw new Error(`Target name is reserved for device-global installs: ${name}`);
   if (!targetPath) throw new Error('Target path is required');
   if (!['symlink', 'copy'].includes(mode)) throw new Error(`Unsupported target mode: ${mode}`);
+  const inventoryRevision = await readInventoryRevision(vaultPath);
   await initializeLocalPathState({ vaultPath, deviceId });
   const device = await loadLocalDevice(vaultPath, deviceId);
   const previousTarget = device.targets[name];
@@ -682,7 +717,7 @@ export async function addTarget({
       }
       device.targets[name] = nextTarget;
     }
-    await saveLocalReportedDevice(vaultPath, device);
+    await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   };
   if (previousTarget
     && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
@@ -719,13 +754,15 @@ async function requireWritableTargetRoot(targetPath) {
 
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   assertSafePathSegment(name, 'Target name');
-  const device = await loadLocalDevice(vaultPath, deviceId);
+  let device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.targets[name]) return device;
   await removeOwnedTargetProjections({
     vaultPath,
     device,
     name,
-    afterApply: async () => {
+    afterApply: () => withVaultReferences(vaultPath, async () => {
+      await readInventoryRevision(vaultPath);
+      device = await loadLocalDevice(vaultPath, deviceId);
       delete device.targets[name];
       delete device.detected[name];
       let assignmentsChanged = false;
@@ -738,8 +775,8 @@ export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), na
         if (!targets.length) delete device.installed[skillName];
       }
       if (assignmentsChanged) bumpDesiredGeneration(device);
-      await saveDevice(vaultPath, device);
-    },
+      await persistLocalReportedDevice(vaultPath, device, { saveDesired: true });
+    }),
   });
   return device;
 }
@@ -800,15 +837,19 @@ async function removeOwnedTargetProjections({ vaultPath, device, name, afterAppl
 
 export async function setTargetAutoImport({ vaultPath, deviceId = defaultDeviceId(), name, enabled }) {
   assertSafePathSegment(name, 'Target name');
+  let inventoryRevision = await readInventoryRevision(vaultPath);
   let device = await loadLocalDevice(vaultPath, deviceId);
   if (!device.targets[name]) throw new Error(`Unknown target on this device: ${name}`);
   if (enabled && !Array.isArray(device.detected?.[name])) {
-    device = await scanTargets({ vaultPath, deviceId });
+    await scanTargets({ vaultPath, deviceId });
+    inventoryRevision = await readInventoryRevision(vaultPath);
+    device = await loadLocalDevice(vaultPath, deviceId);
   }
   const target = device.targets[name];
+  if (!target) throw new Error(`Unknown target on this device: ${name}`);
   if (Boolean(target.auto_import) === Boolean(enabled)) return device;
   target.auto_import = Boolean(enabled);
-  await saveLocalReportedDevice(vaultPath, device);
+  await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   return device;
 }
 
@@ -817,9 +858,12 @@ export async function setDeviceAutoImport({
   deviceId = defaultDeviceId(),
   enabled,
 }) {
+  let inventoryRevision = await readInventoryRevision(vaultPath);
   let device = await loadLocalDevice(vaultPath, deviceId);
   if (enabled && Object.keys(device.targets).some((name) => !Array.isArray(device.detected?.[name]))) {
-    device = await scanTargets({ vaultPath, deviceId });
+    await scanTargets({ vaultPath, deviceId });
+    inventoryRevision = await readInventoryRevision(vaultPath);
+    device = await loadLocalDevice(vaultPath, deviceId);
   }
   let changed = false;
   for (const target of Object.values(device.targets)) {
@@ -827,7 +871,7 @@ export async function setDeviceAutoImport({
     target.auto_import = Boolean(enabled);
     changed = true;
   }
-  if (changed) await saveLocalReportedDevice(vaultPath, device);
+  if (changed) await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   return device;
 }
 
@@ -845,21 +889,25 @@ async function validateRequestedTargets(device, requestedTargets) {
 
 export async function setSkillTargets({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {
   assertSafePathSegment(skillName, 'Skill name');
-  const registry = await loadRegistry(vaultPath);
-  if (!registry.skills[skillName]) throw new Error(`Skill not found in vault: ${skillName}`);
-  const device = await loadDevice(vaultPath, deviceId);
-  const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
-  const { selectedTargets, wantsGlobalInstall } = await validateRequestedTargets(device, requestedTargets);
-  const previousTargets = device.installed[skillName] || [];
-  const previousGlobal = (device.global_installed || []).includes(skillName);
-  const changed = JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)
-    || previousGlobal !== wantsGlobalInstall;
-  if (selectedTargets.length) device.installed[skillName] = selectedTargets;
-  else delete device.installed[skillName];
-  markGlobalInstalled(device, skillName, wantsGlobalInstall);
-  if (changed) bumpDesiredGeneration(device);
-  await saveDesiredDevice(vaultPath, device);
-  return device;
+  return withVaultReferences(vaultPath, async () => {
+    const registry = await loadRegistry(vaultPath);
+    if (!registry.skills[skillName] || !await exists(path.join(vaultPath, 'skills', skillName, 'SKILL.md'))) {
+      throw new Error(`Skill not found in vault: ${skillName}`);
+    }
+    const device = await loadDevice(vaultPath, deviceId);
+    const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
+    const { selectedTargets, wantsGlobalInstall } = await validateRequestedTargets(device, requestedTargets);
+    const previousTargets = device.installed[skillName] || [];
+    const previousGlobal = (device.global_installed || []).includes(skillName);
+    const changed = JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)
+      || previousGlobal !== wantsGlobalInstall;
+    if (selectedTargets.length) device.installed[skillName] = selectedTargets;
+    else delete device.installed[skillName];
+    markGlobalInstalled(device, skillName, wantsGlobalInstall);
+    if (changed) bumpDesiredGeneration(device);
+    await persistDesiredDevice(vaultPath, device);
+    return device;
+  });
 }
 
 export async function installSkill({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {
@@ -869,29 +917,33 @@ export async function installSkill({ vaultPath, deviceId = defaultDeviceId(), sk
 export async function installSkills({ vaultPath, deviceId = defaultDeviceId(), skillNames, targets }) {
   const names = [...new Set(skillNames)];
   for (const name of names) assertSafePathSegment(name, 'Skill name');
-  const registry = await loadRegistry(vaultPath);
-  for (const name of names) {
-    if (!registry.skills[name]) throw new Error(`Skill not found in vault: ${name}`);
-  }
-  const device = await loadDevice(vaultPath, deviceId);
-  if (!names.length) return device;
-  const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
-  const requested = await validateRequestedTargets(device, requestedTargets);
-  const global = new Set(device.global_installed);
-  let changed = false;
-  for (const name of names) {
-    const previousTargets = device.installed[name] || [];
-    const selectedTargets = [...new Set([...previousTargets, ...requested.selectedTargets])].sort();
-    changed ||= JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)
-      || (requested.wantsGlobalInstall && !global.has(name));
-    if (selectedTargets.length) device.installed[name] = selectedTargets;
-    else delete device.installed[name];
-    if (requested.wantsGlobalInstall) global.add(name);
-  }
-  device.global_installed = [...global].sort();
-  if (changed) bumpDesiredGeneration(device);
-  await saveDesiredDevice(vaultPath, device);
-  return device;
+  return withVaultReferences(vaultPath, async () => {
+    const registry = await loadRegistry(vaultPath);
+    for (const name of names) {
+      if (!registry.skills[name] || !await exists(path.join(vaultPath, 'skills', name, 'SKILL.md'))) {
+        throw new Error(`Skill not found in vault: ${name}`);
+      }
+    }
+    const device = await loadDevice(vaultPath, deviceId);
+    if (!names.length) return device;
+    const requestedTargets = targets?.length ? targets : Object.keys(device.targets);
+    const requested = await validateRequestedTargets(device, requestedTargets);
+    const global = new Set(device.global_installed);
+    let changed = false;
+    for (const name of names) {
+      const previousTargets = device.installed[name] || [];
+      const selectedTargets = [...new Set([...previousTargets, ...requested.selectedTargets])].sort();
+      changed ||= JSON.stringify(previousTargets) !== JSON.stringify(selectedTargets)
+        || (requested.wantsGlobalInstall && !global.has(name));
+      if (selectedTargets.length) device.installed[name] = selectedTargets;
+      else delete device.installed[name];
+      if (requested.wantsGlobalInstall) global.add(name);
+    }
+    device.global_installed = [...global].sort();
+    if (changed) bumpDesiredGeneration(device);
+    await persistDesiredDevice(vaultPath, device);
+    return device;
+  });
 }
 
 export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), skillName, targets }) {
@@ -901,31 +953,33 @@ export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), 
 export async function uninstallSkills({ vaultPath, deviceId = defaultDeviceId(), skillNames, targets }) {
   const names = [...new Set(skillNames)];
   for (const name of names) assertSafePathSegment(name, 'Skill name');
-  const device = await loadDevice(vaultPath, deviceId);
-  const global = new Set(device.global_installed);
-  const removeGlobal = !targets?.length || targets.some(isGlobalInstallTarget);
-  const removedTargets = new Set((targets || []).filter((target) => !isGlobalInstallTarget(target)));
-  let changed = false;
-  let hadAssignment = false;
-  for (const name of names) {
-    const previousTargets = device.installed[name] || [];
-    const previousGlobal = global.has(name);
-    if (!previousTargets.length && !previousGlobal) continue;
-    hadAssignment = true;
-    const nextTargets = targets?.length
-      ? previousTargets.filter((target) => !removedTargets.has(target))
-      : [];
-    if (nextTargets.length) device.installed[name] = nextTargets;
-    else delete device.installed[name];
-    if (removeGlobal) global.delete(name);
-    changed ||= JSON.stringify(previousTargets) !== JSON.stringify(nextTargets)
-      || previousGlobal !== global.has(name);
-  }
-  if (!hadAssignment) return device;
-  device.global_installed = [...global].sort();
-  if (changed) bumpDesiredGeneration(device);
-  await saveDesiredDevice(vaultPath, device);
-  return device;
+  return withVaultReferences(vaultPath, async () => {
+    const device = await loadDevice(vaultPath, deviceId);
+    const global = new Set(device.global_installed);
+    const removeGlobal = !targets?.length || targets.some(isGlobalInstallTarget);
+    const removedTargets = new Set((targets || []).filter((target) => !isGlobalInstallTarget(target)));
+    let changed = false;
+    let hadAssignment = false;
+    for (const name of names) {
+      const previousTargets = device.installed[name] || [];
+      const previousGlobal = global.has(name);
+      if (!previousTargets.length && !previousGlobal) continue;
+      hadAssignment = true;
+      const nextTargets = targets?.length
+        ? previousTargets.filter((target) => !removedTargets.has(target))
+        : [];
+      if (nextTargets.length) device.installed[name] = nextTargets;
+      else delete device.installed[name];
+      if (removeGlobal) global.delete(name);
+      changed ||= JSON.stringify(previousTargets) !== JSON.stringify(nextTargets)
+        || previousGlobal !== global.has(name);
+    }
+    if (!hadAssignment) return device;
+    device.global_installed = [...global].sort();
+    if (changed) bumpDesiredGeneration(device);
+    await persistDesiredDevice(vaultPath, device);
+    return device;
+  });
 }
 
 export async function skillAssignmentCount(vaultPath, skillName) {
@@ -954,10 +1008,14 @@ function presentSkillNames(devices) {
   return present;
 }
 
-export async function listUnusedSkills(vaultPath, { deviceId, detected } = {}) {
+export async function listUnusedSkills(vaultPath, { deviceId, detected, inventoryRevision } = {}) {
   const registry = await loadRegistry(vaultPath);
   const devices = await listDevices(vaultPath);
-  const inventory = detected === undefined ? devices : devices.map((device) => (
+  const currentRevision = await readInventoryRevision(vaultPath);
+  if (inventoryRevision !== undefined && currentRevision !== inventoryRevision) {
+    throw new Error('Device inventory changed during sync; retry');
+  }
+  const inventory = detected === undefined || inventoryRevision === undefined ? devices : devices.map((device) => (
     device.device_id === deviceId ? { ...device, detected } : device
   ));
   const present = presentSkillNames(inventory);
@@ -966,16 +1024,25 @@ export async function listUnusedSkills(vaultPath, { deviceId, detected } = {}) {
     .sort();
 }
 
-export async function sweepUnusedSkills({ vaultPath, requirePolicy = true, deviceId, detected }) {
+export async function sweepUnusedSkills({ vaultPath, requirePolicy = true, deviceId, detected, inventoryRevision }) {
   if (requirePolicy) {
     const config = await loadVaultConfig(vaultPath);
     if (!config.policies.delete_unassigned_skills) return [];
   }
-  const unused = await listUnusedSkills(vaultPath, { deviceId, detected });
+  const unused = await listUnusedSkills(vaultPath, { deviceId, detected, inventoryRevision });
+  const deleted = [];
   for (const skillName of unused) {
-    await deleteSkillFromVault({ vaultPath, skillName });
+    const committed = await deleteSkillFromVault({
+      vaultPath,
+      skillName,
+      eligible: async () => {
+        if (requirePolicy && !(await loadVaultConfig(vaultPath)).policies.delete_unassigned_skills) return false;
+        return (await listUnusedSkills(vaultPath, { deviceId, detected, inventoryRevision })).includes(skillName);
+      },
+    });
+    if (committed) deleted.push(skillName);
   }
-  return unused;
+  return deleted;
 }
 
 export async function uninstallSkillAndPrune(options) {
@@ -1221,14 +1288,22 @@ export async function rollbackLinks({
   });
 }
 
-export async function markDeviceApplied({ vaultPath, deviceId = defaultDeviceId(), detected, generation }) {
-  const device = await loadLocalDevice(vaultPath, deviceId);
-  const appliedGeneration = generation ?? device.desired_generation;
-  if (detected === undefined && device.applied_generation === appliedGeneration) return device;
-  if (detected !== undefined) device.detected = detected;
-  device.applied_generation = appliedGeneration;
-  await saveLocalReportedDevice(vaultPath, device);
-  return device;
+export async function markDeviceApplied({
+  vaultPath, deviceId = defaultDeviceId(), detected, generation, inventoryRevision,
+}) {
+  return withVaultReferences(vaultPath, async () => {
+    const currentRevision = await readInventoryRevision(vaultPath);
+    if (inventoryRevision !== undefined && currentRevision !== inventoryRevision) {
+      throw new Error('Device inventory changed during sync; retry');
+    }
+    const device = await loadLocalDevice(vaultPath, deviceId);
+    const appliedGeneration = generation ?? device.desired_generation;
+    if (detected === undefined && device.applied_generation === appliedGeneration) return device;
+    if (detected !== undefined) device.detected = detected;
+    device.applied_generation = appliedGeneration;
+    await persistLocalReportedDevice(vaultPath, device);
+    return device;
+  });
 }
 
 export async function managedProjections({ vaultPath, deviceId = defaultDeviceId() }) {
@@ -1406,10 +1481,11 @@ async function hasSymlinkBelowRoot(childPath, rootPath) {
 }
 
 export async function scanTargets({ vaultPath, deviceId = defaultDeviceId(), save = true }) {
+  const inventoryRevision = save ? await readInventoryRevision(vaultPath) : undefined;
   const device = await loadLocalDevice(vaultPath, deviceId);
   const detected = await detectTargets({ vaultPath, device });
   device.detected = detected;
-  if (save) await saveLocalReportedDevice(vaultPath, device);
+  if (save) await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   return device;
 }
 

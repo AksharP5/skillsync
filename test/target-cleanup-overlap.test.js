@@ -36,6 +36,7 @@ for (const action of ['remove', 'move', 'mode']) {
     const before = await loadLocalDevice(f.vaultPath, 'local');
     const first = path.join(f.targetPath, 'first');
     const marker = await fs.readFile(path.join(first, '.skillsync-owned.json'), 'utf8');
+    await installSkill({ ...f.options, skillName: 'second', targets: ['codex'] });
     const rename = fs.rename;
     const failure = Object.assign(new Error('Injected private state publication failure'), { code: 'EIO' });
     let publishing = false;
@@ -45,7 +46,10 @@ for (const action of ['remove', 'move', 'mode']) {
         publishing = true;
         await assert.rejects(() => fs.lstat(first), { code: 'ENOENT' });
         await fs.writeFile(path.join(f.vaultPath, 'skills', 'first', 'SKILL.md'), '# first v2\n');
-        await installSkill({ ...f.options, skillName: 'second', targets: ['codex'] });
+        await assert.rejects(
+          () => installSkill({ ...f.options, skillName: 'second', targets: ['codex'] }),
+          /Another SkillSync references update is already running/,
+        );
         await assert.rejects(() => syncVault(f.options), /Another SkillSync apply is already running/);
         const pending = await loadLocalDevice(f.vaultPath, 'local');
         assert.equal(pending.desired_generation, 2);
