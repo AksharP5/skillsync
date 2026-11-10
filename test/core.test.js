@@ -7,6 +7,7 @@ import {
   readFile,
   readlink,
   realpath,
+  rm,
   symlink,
   unlink,
   writeFile,
@@ -20,6 +21,7 @@ import {
   loadRegistry,
   loadVaultConfig,
   rebuildRegistry,
+  saveRegistry,
   setVaultPolicy,
 } from '../src/core/registry.js';
 import { checkVault } from '../src/core/check.js';
@@ -2183,6 +2185,45 @@ test('deleteSkillFromVault removes the skill from registry and every device mani
   const device = await loadDevice(vault, 'macbook');
   assert.equal(device.installed['bog-hyperframes'], undefined);
   assert.ok(device.desired_generation > device.applied_generation);
+});
+
+test('deleteSkillFromVault reports whether it removed a folder or registry entry', async () => {
+  const vault = path.join(await tempDir(), 'vault');
+  for (const name of ['registered-only', 'folder-only']) await makeSkill(path.join(vault, 'skills'), name);
+  await rebuildRegistry(vault);
+  await rm(path.join(vault, 'skills', 'registered-only'), { recursive: true });
+  const registry = await loadRegistry(vault);
+  delete registry.skills['folder-only'];
+  await saveRegistry(vault, registry);
+
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'registered-only' }), true);
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'folder-only' }), true);
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'folder-only' }), false);
+});
+
+test('deleteSkillFromVault leaves a folder whose name differs only by case', async (t) => {
+  const vault = path.join(await tempDir(), 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'demo');
+  await rebuildRegistry(vault);
+  // Runs where lookups ignore case, such as the default macOS filesystem.
+  if (!await lstat(path.join(vault, 'skills', 'Demo')).then(() => true, () => false)) {
+    t.skip('filesystem is case-sensitive');
+    return;
+  }
+
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'Demo' }), false);
+  assert.equal(await readFile(path.join(vault, 'skills', 'demo', 'SKILL.md'), 'utf8'), '# Skill\n');
+  assert.ok((await loadRegistry(vault)).skills.demo);
+});
+
+test('deleteSkillFromVault removes a folder listed in decomposed Unicode form', async () => {
+  const vault = path.join(await tempDir(), 'vault');
+  // macOS can list `café` as `cafe` plus a combining accent; the name to delete is composed.
+  const decomposed = 'café';
+  await makeSkill(path.join(vault, 'skills'), decomposed);
+
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'café' }), true);
+  await assert.rejects(() => lstat(path.join(vault, 'skills', decomposed)), { code: 'ENOENT' });
 });
 
 test('path-like skill names and device IDs are rejected before filesystem access', async () => {

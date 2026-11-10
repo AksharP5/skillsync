@@ -1906,12 +1906,15 @@ async function uninstall(rest) {
   // Removing a target the device doesn't have is a typo, not a no-op.
   const unknown = targets?.find((name) => !isGlobalInstallTarget(name) && !Object.hasOwn(device.targets, name));
   if (unknown) throw new Error(`Unknown target on ${deviceId}: ${unknown}`);
-  await uninstallSkillAndPrune({
+  const { removed } = await uninstallSkillAndPrune({
     vaultPath: config.repoPath,
     deviceId,
     skillName,
     targets,
   });
+  if (!removed) {
+    throw new Error(`No matching assignment for ${skillName} on ${deviceId}${targets ? ` (${targets.join(', ')})` : ''}`);
+  }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(deviceId === config.deviceId
     ? `Removed ${skillName} from this device.`
@@ -1933,7 +1936,9 @@ async function deleteSkill(rest) {
   }
   const config = await configured({ initialize: false });
   await syncVault({ vaultPath: config.repoPath, pushChanges: false });
-  await deleteSkillFromVault({ vaultPath: config.repoPath, skillName });
+  if (!await deleteSkillFromVault({ vaultPath: config.repoPath, skillName })) {
+    throw new Error(`Skill not found in vault: ${skillName}`);
+  }
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(`Deleted ${skillName} from the vault.`);
 }

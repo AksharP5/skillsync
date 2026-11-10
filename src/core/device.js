@@ -960,7 +960,12 @@ export async function uninstallSkill({ vaultPath, deviceId = defaultDeviceId(), 
   return uninstallSkills({ vaultPath, deviceId, skillNames: [skillName], targets });
 }
 
-export async function uninstallSkills({ vaultPath, deviceId = defaultDeviceId(), skillNames, targets }) {
+export async function uninstallSkills(options) {
+  return (await unassignSkills(options)).device;
+}
+
+// `removed` reports whether any assignment changed, decided under the vault reference lock.
+async function unassignSkills({ vaultPath, deviceId = defaultDeviceId(), skillNames, targets }) {
   const names = [...new Set(skillNames)];
   for (const name of names) assertSafePathSegment(name, 'Skill name');
   return withVaultReferences(vaultPath, async () => {
@@ -984,11 +989,11 @@ export async function uninstallSkills({ vaultPath, deviceId = defaultDeviceId(),
       changed ||= JSON.stringify(previousTargets) !== JSON.stringify(nextTargets)
         || previousGlobal !== global.has(name);
     }
-    if (!hadAssignment) return device;
+    if (!hadAssignment) return { device, removed: false };
     device.global_installed = [...global].sort();
     if (changed) bumpDesiredGeneration(device);
     await persistDesiredDevice(vaultPath, device);
-    return device;
+    return { device, removed: changed };
   });
 }
 
@@ -1055,9 +1060,9 @@ export async function sweepUnusedSkills({ vaultPath, requirePolicy = true, devic
   return deleted;
 }
 
-export async function uninstallSkillAndPrune(options) {
-  const device = await uninstallSkill(options);
-  return { device, pruned: false };
+export async function uninstallSkillAndPrune({ skillName, ...options }) {
+  const { device, removed } = await unassignSkills({ ...options, skillNames: [skillName] });
+  return { device, pruned: false, removed };
 }
 
 export async function removeTargetAndPrune(options) {

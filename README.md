@@ -487,7 +487,7 @@ Remove a skill from one device:
 skillsync uninstall my-skill
 ```
 
-With no destination options, uninstall removes all assignments for that skill on the current device, including global installs. Use `--device id` or `-d id` to select another device, `--target codex,claude` or `-t codex,claude` to select targets, or `--global` to remove only the global assignment. Value-taking options require a non-empty value rather than another flag, and an explicit target list must contain at least one name. Uninstall rejects missing values and empty target lists before vault initialization, sync, or removal.
+With no destination options, uninstall removes all assignments for that skill on the current device, including global installs. Use `--device id` or `-d id` to select another device, `--target codex,claude` or `-t codex,claude` to select targets, or `--global` to remove only the global assignment. Value-taking options require a non-empty value rather than another flag, and an explicit target list must contain at least one name. Uninstall rejects missing values and empty target lists before vault initialization, sync, or removal. If the selected device has no assignment matching the skill and destination options, uninstall fails with `No matching assignment for <skill> on <device>` and commits and pushes nothing. Uninstall still removes an assignment whose skill folder has already left the vault.
 
 Use **Sync selected from vault** in **Installed on this device** to update skills at `<install-folder>/<skill-name>`, including standalone folders left after a refused install. SkillSync asks for confirmation and retains a recoverable backup before replacement. Nested or differently named detected folders are reported as skipped and stay unchanged; confirmed uninstall still supports those folders.
 
@@ -503,7 +503,7 @@ Delete it from the vault and every device:
 skillsync delete my-skill
 ```
 
-After confirmation, deletion pulls the vault before removing the skill and its assignments, including assignments pushed by other devices since this checkout last synced. If the pull fails, deletion stops before removing the skill or changing assignments. Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
+After confirmation, deletion pulls the vault before removing the skill and its assignments, including assignments pushed by other devices since this checkout last synced. If the pull fails, deletion stops before removing the skill or changing assignments. If the vault has no folder, registry entry, or device assignment for the name, deletion fails with `Skill not found in vault` and commits and pushes nothing. A skill whose folder is already gone still deletes, clearing its assignments on every device. Deleting one skill preserves other skills' target and global assignments, including assignments in legacy device manifests.
 
 Vault deletion validates every desired device document before rewriting assignments. If a document is malformed, repair the reported file and retry.
 

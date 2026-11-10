@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { addTarget, applyLinks, devicePath, installSkill, loadLocalDevice } from '../src/core/device.js';
+import { addTarget, applyLinks, devicePath, installSkill, loadDevice, loadLocalDevice } from '../src/core/device.js';
 import { exists } from '../src/core/fs.js';
 import { git } from '../src/core/git.js';
 import { savePluginProfile } from '../src/core/plugins.js';
@@ -174,6 +174,10 @@ test('failures that depend on vault state commit and push nothing', async (t) =>
     ['install', 'demo', '--device', 'missing'],
     ['uninstall', 'demo', '--device', 'missing'],
     ['install', 'missing', '--device', 'remote'],
+    ['uninstall', 'missing'],
+    ['uninstall', 'missing', '--device', 'remote'],
+    ['uninstall', 'demo', '--device', 'remote', '--global'],
+    ['delete', 'missing', '--yes'],
     ['pack', 'install', 'missing'],
     ['plugins', 'use', 'shared', '--device', 'missing'],
     ['plugins', 'auto-adopt', 'missing', 'on'],
@@ -185,6 +189,57 @@ test('failures that depend on vault state commit and push nothing', async (t) =>
     assert.deepEqual(await snapshot().then((after) => [after.head, after.remote, after.device]), [head, remote, device], args.join(' '));
   }
   assert.match((await git(['status', '--porcelain'], vault)).stdout, /skills\/demo\/SKILL\.md/);
+});
+
+test('delete and uninstall clear assignments whose skill folder is already gone', async (t) => {
+  const { vault, run } = await fixture(t);
+  const remote = path.join(path.dirname(vault), 'remote.git');
+  await run(['install', 'demo', '--global']);
+  await rm(path.join(vault, 'skills', 'demo'), { recursive: true });
+  await rebuildRegistry(vault);
+  const assignments = async (deviceId) => {
+    const device = await loadDevice(vault, deviceId);
+    return [device.installed.demo, device.global_installed.includes('demo')];
+  };
+
+  await run(['uninstall', 'demo', '--global']);
+  assert.deepEqual(await assignments('local'), [['codex'], false]);
+  await run(['uninstall', 'demo', '--device', 'remote']);
+  assert.deepEqual(await assignments('remote'), [undefined, false]);
+  await run(['uninstall', 'demo']);
+  assert.deepEqual(await assignments('local'), [undefined, false]);
+  assert.doesNotMatch((await git(['show', 'main:devices/local.json'], remote)).stdout, /"demo"/);
+
+  const deleted = await fixture(t);
+  await rm(path.join(deleted.vault, 'skills', 'demo'), { recursive: true });
+  await rebuildRegistry(deleted.vault);
+  assert.match((await deleted.run(['delete', 'demo', '--yes'])).stdout, /Deleted demo from the vault\./);
+  for (const deviceId of ['local', 'remote']) {
+    const { stdout } = await git(['show', `main:devices/${deviceId}.json`], path.join(deleted.home, 'remote.git'));
+    assert.doesNotMatch(stdout, /"demo"/, deviceId);
+  }
+});
+
+test('an uninstall that removes nothing publishes nothing', async (t) => {
+  const { vault, run, snapshot } = await fixture(t);
+  await run(['uninstall', 'demo']);
+  // The folder is gone but the registry still lists demo, which is no longer assigned here.
+  await rm(path.join(vault, 'skills', 'demo'), { recursive: true });
+  await writeFile(path.join(vault, 'packs', 'pending.json'), JSON.stringify({ name: 'pending', skills: [] }));
+  const before = await snapshot();
+  for (const [args, message] of [
+    [['uninstall', 'demo'], 'No matching assignment for demo on local'],
+    [['uninstall', 'demo', '--global'], 'No matching assignment for demo on local (global)'],
+  ]) {
+    await assert.rejects(run(args), (error) => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stderr.trim(), `skillsync: ${message}`);
+      return true;
+    }, args.join(' '));
+  }
+  const after = await snapshot();
+  assert.deepEqual([after.head, after.remote], [before.head, before.remote]);
+  assert.match(after.status, /packs\/pending\.json/);
 });
 
 test('a remote edit publishes earlier pending edits along with its own change', async (t) => {

@@ -322,19 +322,26 @@ export async function deleteSkillFromVault({ vaultPath, skillName, eligible }) {
   assertSafePathSegment(skillName, 'Skill name');
   return withVaultReferences(vaultPath, async () => {
     if (eligible && !await eligible()) return false;
-    await deleteSkill(vaultPath, skillName);
-    return true;
+    return deleteSkill(vaultPath, skillName);
   });
 }
 
+// Returns whether anything was removed: the folder, the registry entry, or any assignment.
 async function deleteSkill(vaultPath, skillName) {
   await ensureVault(vaultPath);
   const registry = await loadRegistry(vaultPath);
-  const skillPath = path.join(vaultPath, 'skills', skillName);
-  const skill = await lstat(skillPath).catch((error) => {
-    if (error.code === 'ENOENT') return null;
+  const registered = Object.hasOwn(registry.skills, skillName);
+  let unassigned = false;
+  const skillsDir = path.join(vaultPath, 'skills');
+  // Match the listing case-sensitively, so a case-insensitive filesystem cannot resolve `Demo`
+  // to `demo`, but compare Unicode-normalized, since macOS may list `café` in decomposed form.
+  const folders = await readdir(skillsDir).catch((error) => {
+    if (error.code === 'ENOENT') return [];
     throw error;
   });
+  const folder = folders.find((entry) => entry.normalize('NFC') === skillName.normalize('NFC'));
+  const skillPath = path.join(skillsDir, folder ?? skillName);
+  const skill = folder === undefined ? null : await lstat(skillPath);
   let staging = null;
   let backupDirectory = null;
   let original = null;
@@ -363,7 +370,7 @@ async function deleteSkill(vaultPath, skillName) {
         });
       }
     }
-    await removeSkillAssignments(vaultPath, skillName);
+    unassigned = await removeSkillAssignments(vaultPath, skillName);
     delete registry.skills[skillName];
     await saveRegistry(vaultPath, registry);
   } catch (error) {
@@ -388,6 +395,7 @@ async function deleteSkill(vaultPath, skillName) {
   }
   // The private original is retained. Only the extra same-filesystem staging copy is disposable.
   if (backupDirectory) await removeDisposableDirectory(staging);
+  return Boolean(skill) || registered || unassigned;
 }
 
 async function removeSkillAssignments(vaultPath, skillName) {
@@ -399,11 +407,13 @@ async function removeSkillAssignments(vaultPath, skillName) {
     const filePath = path.join(devicesDir, file);
     devices.push({ file, filePath, device: await readDeviceState(filePath) });
   }
+  let removed = false;
   for (const { file, filePath, device } of devices) {
     const installed = normalizeInstalled(device?.installed);
     const globalInstalled = normalizeGlobalInstalled(device);
     const changed = Object.hasOwn(installed, skillName) || globalInstalled.includes(skillName);
     if (!changed) continue;
+    removed = true;
     delete installed[skillName];
     const deviceId = assertSafePathSegment(file.slice(0, -'.json'.length), 'Device ID');
     const statePath = path.join(vaultPath, 'state', file);
@@ -449,6 +459,7 @@ async function removeSkillAssignments(vaultPath, skillName) {
       global_installed: globalInstalled.filter((name) => name !== skillName),
     });
   }
+  return removed;
 }
 
 export async function listSkillFolders(vaultPath) {
