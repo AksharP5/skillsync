@@ -101,53 +101,255 @@ import { syncVault } from './core/sync.js';
 
 const args = process.argv.slice(2);
 
-main().catch((error) => {
+// Every command declares its operands and options here. runCommand() validates argv
+// against this table before a command can load, sync, or push the vault.
+const skillNameArg = segment('Skill name');
+const deviceIdArg = segment('Device ID');
+const targetNameArg = segment('Target name');
+const packNameArg = segment('Pack name');
+const pluginProfileArg = segment('Plugin profile');
+const instructionProfileArg = segment('Instruction profile');
+const onOff = oneOf('on', 'off', 'true', 'false');
+const deviceOptions = { '--device': deviceIdArg, '-d': deviceIdArg };
+const targetOptions = { '--target': text, '-t': text, '--global': true, '-g': true };
+const conflictOptions = { '--conflict': oneOf('skip', 'use-vault', 'overwrite-vault', 'rename'), '--as': skillNameArg };
+const instructionsSpec = {
+  run: instructionsCommand,
+  usage: 'skillsync instructions <status|profiles|import|use|use-device|fork|link|unlink|enable|disable>',
+  default: 'status',
+  subcommands: {
+    status: {},
+    profiles: {},
+    import: {
+      usage: 'skillsync instructions import [--name profile] [--from path] [--to path] [--separate]',
+      options: { '--name': instructionProfileArg, '--from': text, '--path': text, '--to': text, '--separate': true },
+    },
+    use: {
+      usage: 'skillsync instructions use <profile> [--device id] [--path path]',
+      operands: [instructionProfileArg],
+      options: { '--device': deviceIdArg, '--path': text },
+    },
+    'use-device': {
+      usage: 'skillsync instructions use-device <source-device> [--device target-device] [--path path]',
+      operands: [deviceIdArg],
+      options: { '--device': deviceIdArg, '--path': text },
+    },
+    fork: { usage: 'skillsync instructions fork [profile]', optional: [instructionProfileArg], options: { '--name': instructionProfileArg } },
+    link: { usage: 'skillsync instructions link <path>', operands: [pathArgument] },
+    unlink: { usage: 'skillsync instructions unlink <path>', operands: [pathArgument] },
+    enable: {
+      usage: 'skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]',
+      options: { '--profile': instructionProfileArg, '--path': text, '--from-local': true, '--use-vault': true },
+      exclusive: ['--from-local', '--use-vault'],
+    },
+    disable: { usage: 'skillsync instructions disable [--device id]', options: { '--device': deviceIdArg } },
+  },
+};
+const pluginsSpec = {
+  run: pluginsCommand,
+  usage: 'skillsync plugins status|profiles|show <profile>|import --name <profile>|use <profile> [--device id]|auto-adopt <profile> <on|off>',
+  default: 'status',
+  subcommands: {
+    status: {},
+    profiles: {},
+    show: { usage: 'skillsync plugins show <profile>', operands: [pluginProfileArg] },
+    import: {
+      usage: 'skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]',
+      optional: [pluginProfileArg],
+      options: { '--name': pluginProfileArg, '--plugin': text, '--plugins': text, '--auto-adopt': true, '--no-auto-adopt': true },
+      exclusive: ['--auto-adopt', '--no-auto-adopt'],
+    },
+    use: { usage: 'skillsync plugins use <profile> [--device id]', operands: [pluginProfileArg], options: deviceOptions },
+    'auto-adopt': { usage: 'skillsync plugins auto-adopt <profile> <on|off>', operands: [pluginProfileArg, onOff] },
+  },
+};
+const deviceSpec = {
+  run: deviceCommand,
+  usage: 'skillsync device list | skillsync device show <device-id>',
+  default: 'list',
+  subcommands: { list: {}, show: { usage: 'skillsync device show <device-id>', operands: [deviceIdArg] } },
+};
+const packSpec = {
+  run: packCommand,
+  usage: 'skillsync pack list|show <pack>|install <pack> [--target targets] [--global]',
+  default: 'list',
+  subcommands: {
+    list: {},
+    show: { usage: 'skillsync pack show <pack>', operands: [packNameArg] },
+    install: { usage: 'skillsync pack install <pack> [--target targets] [--global]', operands: [packNameArg], options: targetOptions },
+  },
+};
+const targetAutoAdopt = { usage: 'skillsync target auto-adopt <name> <on|off>', operands: [targetNameArg, oneOf('on', 'off')] };
+const commands = {
+  ui: { run: runUi },
+  setup: {
+    run: setup,
+    usage: 'skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]',
+    options: { '--name': text, '--repo': text, '--path': text, '--yes': true, '-y': true },
+  },
+  connect: { run: connect, usage: 'skillsync connect <owner/repo|url> [--path path]', operands: [pathArgument], options: { '--path': text } },
+  status: { run: status },
+  list: { run: listSkills },
+  installed: { run: installedCommand, usage: 'skillsync installed [--device id]', options: deviceOptions },
+  matrix: { run: matrixCommand, usage: 'skillsync matrix [--edit]', options: { '--edit': true } },
+  instructions: instructionsSpec,
+  agents: instructionsSpec,
+  plugin: pluginsSpec,
+  plugins: pluginsSpec,
+  device: deviceSpec,
+  devices: deviceSpec,
+  groups: { run: groupsCommand, usage: 'skillsync groups [--summary]', options: { '--summary': true } },
+  pack: packSpec,
+  packs: packSpec,
+  add: {
+    run: addSkill,
+    usage: 'skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]',
+    operands: [pathArgument],
+    options: {
+      ...targetOptions,
+      ...conflictOptions,
+      '--name': skillNameArg,
+      '--skill': text,
+      '-s': text,
+      '--list': true,
+      '-l': true,
+      '--full-depth': true,
+      '--all-targets': true,
+      '--no-install': true,
+      '--yes': true,
+      '-y': true,
+    },
+  },
+  import: {
+    run: importSkills,
+    usage: 'skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]',
+    operands: [text],
+    options: { ...conflictOptions, '--name': skillNameArg },
+  },
+  install: {
+    run: install,
+    usage: 'skillsync install <skill> [--device id] [--target targets] [--global]',
+    operands: [skillNameArg],
+    options: { ...deviceOptions, ...targetOptions },
+  },
+  uninstall: {
+    run: uninstall,
+    usage: 'skillsync uninstall <skill> [--device id] [--target targets] [--global]',
+    operands: [skillNameArg],
+    options: { ...deviceOptions, ...targetOptions },
+  },
+  delete: { run: deleteSkill, usage: 'skillsync delete <skill> [--yes]', operands: [skillNameArg], options: { '--yes': true, '-y': true } },
+  target: {
+    run: target,
+    usage: 'skillsync target add|remove|auto-adopt ...',
+    subcommands: {
+      add: {
+        usage: 'skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]',
+        operands: [targetNameArg, pathArgument],
+        options: { '--mode': oneOf('symlink', 'copy'), '--scan-path': text, '--no-auto-adopt': true, '--no-auto-import': true },
+      },
+      remove: { usage: 'skillsync target remove <name>', operands: [targetNameArg] },
+      'auto-adopt': targetAutoAdopt,
+      'auto-import': targetAutoAdopt,
+    },
+  },
+  'auto-adopt': { run: autoAdoptCommand, usage: 'skillsync auto-adopt [show|on|off]', optional: [oneOf('show', 'on', 'off', 'true', 'false')] },
+  policy: {
+    run: policyCommand,
+    usage: 'skillsync policy show | skillsync policy set delete-unassigned-skills <on|off>',
+    default: 'show',
+    subcommands: {
+      show: {},
+      set: { usage: 'skillsync policy set delete-unassigned-skills <on|off>', operands: [oneOf('delete-unassigned-skills'), onOff] },
+    },
+  },
+  sync: {
+    run: syncCommand,
+    usage: 'skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]',
+    options: { '--dry-run': true, '--no-pull': true, '--discard-local-changes': true },
+  },
+  scan: { run: scanCommand, usage: 'skillsync scan [--json]', options: { '--json': true } },
+  check: { run: checkCommand },
+  rollback: { run: rollbackCommand },
+  doctor: { run: doctor },
+  service: { run: service, usage: 'skillsync service install', subcommands: { install: {} } },
+  daemon: { run: daemon, usage: 'skillsync daemon [--interval seconds]', options: { '--interval': text } },
+  help: { run: help },
+  '--help': { run: help },
+  '-h': { run: help },
+};
+
+runCommand(args).catch((error) => {
   console.error(`\nskillsync: ${error.message}`);
   if (process.env.SKILLSYNC_DEBUG) console.error(error.stack);
   process.exit(1);
 });
 
-async function main() {
-  const [command = 'ui', ...rest] = args;
-  const commands = {
-    ui: runUi,
-    setup,
-    connect,
-    status,
-    list: listSkills,
-    installed: installedCommand,
-    matrix: matrixCommand,
-    instructions: instructionsCommand,
-    agents: instructionsCommand,
-    plugin: pluginsCommand,
-    plugins: pluginsCommand,
-    devices: deviceCommand,
-    device: deviceCommand,
-    groups: groupsCommand,
-    pack: packCommand,
-    packs: packCommand,
-    add: addSkill,
-    import: importSkills,
-    install,
-    uninstall,
-    delete: deleteSkill,
-    target,
-    'auto-adopt': autoAdoptCommand,
-    policy: policyCommand,
-    sync: syncCommand,
-    scan: scanCommand,
-    check: checkCommand,
-    rollback: rollbackCommand,
-    doctor,
-    service,
-    daemon,
-    help,
-    '--help': help,
-    '-h': help,
-  };
+// The CLI and the TUI both enter commands here, so every invocation is validated.
+async function runCommand([command = 'ui', ...rest]) {
   if (!Object.hasOwn(commands, command)) throw new Error(`Unknown command: ${command}. Run: skillsync help`);
-  if (rest.includes('--help') || rest.includes('-h')) return help();
-  return commands[command](rest);
+  const spec = commands[command];
+  if (spec.run === help || rest.includes('--help') || rest.includes('-h')) return help();
+  return spec.run(parseArguments(spec, rest, `skillsync ${command}`));
+}
+
+// Returns one entry per declared operand (undefined when an optional one is
+// absent), then the options, so commands can read operands by position.
+function parseArguments(spec, rest, name) {
+  const usage = `Usage: ${spec.usage ?? name}`;
+  if (spec.subcommands) {
+    const [subcommand = spec.default, ...tail] = rest;
+    if (!Object.hasOwn(spec.subcommands, subcommand)) throw new Error(usage);
+    return [subcommand, ...parseArguments(spec.subcommands[subcommand], tail, `${name} ${subcommand}`)];
+  }
+  const { operands = [], optional = [], options = {}, exclusive = [] } = spec;
+  const slots = [...operands, ...optional];
+  const positionals = [];
+  const flags = [];
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index];
+    const option = Object.hasOwn(options, token) ? options[token] : undefined;
+    if (option === true) {
+      flags.push(token);
+      continue;
+    }
+    if (option) {
+      const value = rest[index += 1];
+      if (!value?.trim() || value.startsWith('-')) throw new Error(`Missing value for ${token}. ${usage}`);
+      flags.push(token, option(value, usage));
+      continue;
+    }
+    const slot = slots[positionals.length];
+    // Path operands may start with a single dash, such as -skills.
+    if (token.startsWith(slot === pathArgument ? '--' : '-')) throw new Error(`Unknown option ${token}. ${usage}`);
+    if (!slot) throw new Error(`Unexpected argument ${token}. ${usage}`);
+    positionals.push(slot(token, usage));
+  }
+  if (positionals.length < operands.length) throw new Error(usage);
+  if (exclusive.length && exclusive.every((flag) => flags.includes(flag))) {
+    throw new Error(`Choose only one: ${exclusive.join(' or ')}`);
+  }
+  return [...slots.map((_, index) => positionals[index]), ...flags];
+}
+
+function segment(label) {
+  return (value) => assertSafePathSegment(value, label);
+}
+
+function oneOf(...values) {
+  return (value, usage) => {
+    if (values.includes(value)) return value;
+    throw new Error(`Expected ${values.join(', ')}; received ${value}. ${usage}`);
+  };
+}
+
+function text(value, usage) {
+  if (!value.trim()) throw new Error(usage);
+  return value;
+}
+
+function pathArgument(value, usage) {
+  return text(value, usage);
 }
 
 function flagValue(rest, flag, fallback = undefined) {
@@ -156,24 +358,6 @@ function flagValue(rest, flag, fallback = undefined) {
   const value = rest[index + 1];
   if (!value?.trim() || value.startsWith('-')) throw new Error(`Missing value for ${flag}`);
   return value;
-}
-
-function requireName(value, usage) {
-  if (!value) throw new Error(usage);
-  if (value.startsWith('-')) throw new Error(`Unexpected option ${value}. ${usage}`);
-  return value;
-}
-
-// Paths may start with a single dash, such as -skills, but never look like a long option.
-function requirePath(value, usage) {
-  if (!value) throw new Error(usage);
-  if (value.startsWith('--')) throw new Error(`Unexpected option ${value}. ${usage}`);
-  return value;
-}
-
-function rejectUnknownOptions(rest, allowed, usage) {
-  const unknown = rest.find((argument) => argument.startsWith('-') && !allowed.includes(argument));
-  if (unknown) throw new Error(`Unknown option ${unknown}. ${usage}`);
 }
 
 function flagList(rest, flags) {
@@ -366,7 +550,7 @@ async function setup(rest) {
 }
 
 async function connect(rest) {
-  const repoArg = requirePath(rest[0], 'Usage: skillsync connect <github-repo-or-url>');
+  const repoArg = rest[0];
   const repo = await resolveRepoCloneUrl(repoArg);
   const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
   const { repoPath, deviceId } = await identityForCheckout(selectedPath);
@@ -595,7 +779,8 @@ async function listPacks(config) {
 }
 
 async function packCommand(rest) {
-  const sub = rest[0] || 'list';
+  const sub = rest[0];
+  const targets = sub === 'install' ? parseTargets(rest.slice(2)) : undefined;
   const config = await configured({ initialize: sub !== 'list' });
   if (sub === 'list') {
     const packs = await listPacks(config);
@@ -606,7 +791,7 @@ async function packCommand(rest) {
     return;
   }
   if (sub === 'show') {
-    const packName = requireName(rest[1], 'Usage: skillsync pack show <pack>');
+    const packName = rest[1];
     const pack = await loadPack(config, packName);
     console.log(`${pack.title || pack.name} (${pack.skills.length} skills)`);
     if (pack.description) console.log(pack.description);
@@ -614,9 +799,7 @@ async function packCommand(rest) {
     return;
   }
   if (sub === 'install') {
-    const packName = requireName(rest[1], 'Usage: skillsync pack install <pack> [--target codex,claude] [--global]');
-    const pack = await loadPack(config, packName);
-    const targets = parseTargets(rest.slice(2));
+    const pack = await loadPack(config, rest[1]);
     if (pack.skills.length) {
       await installSkills({ vaultPath: config.repoPath, deviceId: config.deviceId, skillNames: pack.skills, targets });
     }
@@ -625,9 +808,7 @@ async function packCommand(rest) {
     }
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
     console.log(`Installed pack ${pack.name} (${pack.skills.length} skills).`);
-    return;
   }
-  throw new Error('Usage: skillsync pack list|show <pack>|install <pack> [--target codex,claude] [--global]');
 }
 
 function projectionDetailsBySkill(projections) {
@@ -673,12 +854,14 @@ function requestedDeviceId(config, rest) {
   return flagValue(rest, '--device', flagValue(rest, '-d', config.deviceId));
 }
 
+// Pulls without publishing, so an edit that then fails validation pushes nothing.
 async function pullBeforeRemoteEdit(config, deviceId) {
   if (deviceId === config.deviceId) return;
   await syncVault({
     vaultPath: config.repoPath,
     deviceId: config.deviceId,
     pull: true,
+    pushChanges: false,
   });
 }
 
@@ -743,7 +926,7 @@ async function pluginsCommand(rest = []) {
   }
 
   if (subcommand === 'show') {
-    const name = requireName(rest[1], 'Usage: skillsync plugins show <profile>');
+    const name = rest[1];
     const [storedProfile, assignments, states] = await Promise.all([
       loadPluginProfile(config.repoPath, name),
       listPluginAssignments(config.repoPath),
@@ -756,9 +939,9 @@ async function pluginsCommand(rest = []) {
   }
 
   if (subcommand === 'import') {
-    const name = requireName(flagValue(rest, '--name') || rest[1], 'Usage: skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]');
-    if (hasFlag(rest, '--auto-adopt') && hasFlag(rest, '--no-auto-adopt')) {
-      throw new Error('Choose either --auto-adopt or --no-auto-adopt');
+    const name = flagValue(rest, '--name') || rest[1];
+    if (!name) {
+      throw new Error('Usage: skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]');
     }
     const inspection = await inspectCodexPlugins();
     if (!inspection.available) throw new Error(inspection.error);
@@ -788,6 +971,7 @@ async function pluginsCommand(rest = []) {
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: true,
+      pushChanges: false,
     });
     const existing = await loadPluginProfile(config.repoPath, name).catch((error) => {
       if (error.message === `Plugin profile not found: ${name}`) return null;
@@ -817,7 +1001,7 @@ async function pluginsCommand(rest = []) {
   }
 
   if (subcommand === 'use') {
-    const profile = requireName(rest[1], 'Usage: skillsync plugins use <profile> [--device id]');
+    const profile = rest[1];
     const deviceId = requestedDeviceId(config, rest);
     await pullBeforeRemoteEdit(config, deviceId);
     await requireKnownDevice(config.repoPath, deviceId);
@@ -842,16 +1026,14 @@ async function pluginsCommand(rest = []) {
   }
 
   if (subcommand === 'auto-adopt') {
-    const name = requireName(rest[1], 'Usage: skillsync plugins auto-adopt <profile> <on|off>');
+    const name = rest[1];
     const value = rest[2];
-    if (!name || !value) {
-      throw new Error('Usage: skillsync plugins auto-adopt <profile> <on|off>');
-    }
     const enabled = parseOnOff(value);
     await syncVault({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
       pull: true,
+      pushChanges: false,
     });
     await setPluginProfileAutoAdopt({
       vaultPath: config.repoPath,
@@ -865,10 +1047,6 @@ async function pluginsCommand(rest = []) {
     });
     console.log(`Plugin auto-adoption for ${name}: ${enabled ? 'on' : 'off'}`);
     return;
-  }
-
-  if (subcommand !== 'status') {
-    throw new Error('Usage: skillsync plugins status|profiles|show <profile>|import --name <profile>|use <profile> [--device id]|auto-adopt <profile> <on|off>');
   }
 
   const [profiles, assignments, states, devices, localInspection] = await Promise.all([
@@ -962,35 +1140,15 @@ async function matrixCommand(rest = []) {
   }));
 }
 
-// Validates before the initial sync so a bad argument never publishes pending vault edits.
-function instructionOperand(subcommand, rest) {
-  const operands = {
-    use: { usage: 'Usage: skillsync instructions use <profile> [--device id] [--path path]', options: ['--device', '--path'] },
-    'use-device': { usage: 'Usage: skillsync instructions use-device <source-device> [--device target-device]', options: ['--device', '--path'] },
-    fork: { usage: 'Usage: skillsync instructions fork [profile]', options: ['--name'], optional: true },
-    link: { usage: 'Usage: skillsync instructions link <path>', options: [], path: true },
-    unlink: { usage: 'Usage: skillsync instructions unlink <path>', options: [], path: true },
-  };
-  if (!Object.hasOwn(operands, subcommand)) return undefined;
-  const { usage, options, optional, path: isPath } = operands[subcommand];
-  if (isPath) {
-    rejectUnknownOptions(rest.slice(2), options, usage);
-    return requirePath(rest[1], usage);
-  }
-  rejectUnknownOptions(rest.slice(1), options, usage);
-  for (const option of options) flagValue(rest, option);
-  if (optional && (!rest[1] || rest[1].startsWith('-'))) return undefined;
-  return requireName(rest[1], usage);
-}
-
 async function instructionsCommand(rest = []) {
   const subcommand = rest[0] || 'status';
-  const operand = instructionOperand(subcommand, rest);
+  if (subcommand === 'fork' && rest[1] && hasFlag(rest, '--name')) {
+    throw new Error('Give the fork profile either as an argument or with --name, not both');
+  }
   const config = await configured();
-  await syncInstructionChanges(config, {
-    pull: true,
-    apply: subcommand === 'status' || subcommand === 'profiles',
-  });
+  const report = subcommand === 'status' || subcommand === 'profiles';
+  // Changing commands publish only after they succeed.
+  await syncInstructionChanges(config, { pull: true, apply: report, pushChanges: report });
 
   if (subcommand === 'status' || subcommand === 'profiles') {
     const [profiles, reportedDevices, localDevice] = await Promise.all([
@@ -1100,11 +1258,12 @@ async function instructionsCommand(rest = []) {
   }
   if (subcommand === 'use' || subcommand === 'use-device') {
     const targetDeviceId = flagValue(rest, '--device', config.deviceId);
-    let profile = operand;
+    let profile = rest[1];
     if (subcommand === 'use-device') {
-      const sourceDevice = await requireKnownDevice(config.repoPath, operand);
+      const sourceDeviceId = rest[1];
+      const sourceDevice = await requireKnownDevice(config.repoPath, sourceDeviceId);
       profile = sourceDevice.instructions.agents?.profile;
-      if (!profile) throw new Error(`${operand} is not using a global instructions profile`);
+      if (!profile) throw new Error(`${sourceDeviceId} is not using a global instructions profile`);
     }
     await requireKnownDevice(config.repoPath, targetDeviceId);
     if (targetDeviceId === config.deviceId) {
@@ -1133,14 +1292,14 @@ async function instructionsCommand(rest = []) {
     const result = await forkGlobalInstructionsProfile({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
-      profile: flagValue(rest, '--name') ?? operand ?? config.deviceId,
+      profile: rest[1] || flagValue(rest, '--name', config.deviceId),
     });
     await syncInstructionChanges(config);
     console.log(`Forked global instructions into profile ${result.profile}.`);
     return;
   }
   if (subcommand === 'link') {
-    const targetPath = operand;
+    const targetPath = rest[1];
     const result = await addGlobalInstructionsPath({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
@@ -1154,7 +1313,7 @@ async function instructionsCommand(rest = []) {
     return;
   }
   if (subcommand === 'unlink') {
-    const targetPath = operand;
+    const targetPath = rest[1];
     const result = await removeGlobalInstructionsPath({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
@@ -1168,9 +1327,6 @@ async function instructionsCommand(rest = []) {
     const targetPath = flagValue(rest, '--path', DEFAULT_GLOBAL_INSTRUCTIONS_PATH);
     const fromLocal = hasFlag(rest, '--from-local');
     const useVault = hasFlag(rest, '--use-vault');
-    if (fromLocal && useVault) {
-      throw new Error('Choose only one: --from-local or --use-vault');
-    }
     const profiles = await listGlobalInstructionProfiles(config.repoPath);
     let strategy = fromLocal
       ? 'from-local'
@@ -1257,7 +1413,6 @@ async function instructionsCommand(rest = []) {
       : `Global AGENTS.md sync was not configured on ${targetDeviceId}.`);
     return;
   }
-  throw new Error('Usage: skillsync instructions <status|profiles|import|use|use-device|fork|link|unlink|enable|disable>');
 }
 
 function instructionSyncMessages(result) {
@@ -1289,22 +1444,15 @@ function printInstructionSyncMessages(result, prefix = '') {
   }
 }
 
-async function syncInstructionChanges(config, { pull = false, apply = true } = {}) {
+async function syncInstructionChanges(config, { pull = false, apply = true, pushChanges = true } = {}) {
   const result = await syncVault({
     vaultPath: config.repoPath,
     deviceId: apply ? config.deviceId : undefined,
     pull,
+    pushChanges,
   });
   printInstructionSyncMessages(result);
   return result;
-}
-
-function conflictAction(rest) {
-  const action = flagValue(rest, '--conflict');
-  if (!action) return undefined;
-  const allowed = ['skip', 'use-vault', 'overwrite-vault', 'rename'];
-  if (!allowed.includes(action)) throw new Error(`Unsupported conflict action: ${action}. Use one of: ${allowed.join(', ')}`);
-  return action;
 }
 
 async function diffSummary(leftPath, rightPath) {
@@ -1352,7 +1500,7 @@ async function installManagedSkill({ config, skillName, targets, sourcePath }) {
 }
 
 async function chooseConflictAction({ rest, skillName, canUseVault }) {
-  const explicit = conflictAction(rest);
+  const explicit = flagValue(rest, '--conflict');
   if (explicit) return explicit;
   if (!process.stdin.isTTY) return 'skip';
   const { select } = await import('@inquirer/prompts');
@@ -1457,7 +1605,7 @@ function resultSummary(result) {
 }
 
 async function addSkill(rest) {
-  const source = requirePath(rest[0], 'Usage: skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global]');
+  const source = rest[0];
   const config = await configured();
   const sourcePath = expandHome(source);
 
@@ -1609,14 +1757,13 @@ async function chooseImportSource() {
 }
 
 async function install(rest) {
-  const usage = 'Usage: skillsync install <skill> [--device id] [--target targets] [--global]';
-  rejectUnknownOptions(rest, ['--device', '-d', '--target', '-t', '--global', '-g'], usage);
-  const skillName = requireName(rest[0], usage);
-  const config = await configured();
+  const skillName = rest[0];
+  const config = await loadConfig();
   const deviceId = requestedDeviceId(config, rest);
+  const targets = parseTargets(rest);
+  await configured({ config });
   await pullBeforeRemoteEdit(config, deviceId);
   await requireKnownDevice(config.repoPath, deviceId);
-  const targets = parseTargets(rest);
   await installSkill({ vaultPath: config.repoPath, deviceId, skillName, targets });
   await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
   console.log(deviceId === config.deviceId
@@ -1625,9 +1772,7 @@ async function install(rest) {
 }
 
 async function uninstall(rest) {
-  const usage = 'Usage: skillsync uninstall <skill> [--device id] [--target targets] [--global]';
-  rejectUnknownOptions(rest, ['--device', '-d', '--target', '-t', '--global', '-g'], usage);
-  const skillName = requireName(rest[0], usage);
+  const skillName = rest[0];
   const config = await loadConfig();
   const deviceId = requestedDeviceId(config, rest);
   const targets = parseTargets(rest);
@@ -1647,9 +1792,7 @@ async function uninstall(rest) {
 }
 
 async function deleteSkill(rest) {
-  const usage = 'Usage: skillsync delete <skill> [--yes]';
-  rejectUnknownOptions(rest, ['--yes', '-y'], usage);
-  const skillName = requireName(rest[0], usage);
+  const skillName = rest[0];
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
   if (!yes && process.stdin.isTTY) {
     const { input } = await import('@inquirer/prompts');
@@ -1705,7 +1848,7 @@ async function chooseInstallTargets(config, rest) {
 
 async function deviceCommand(rest) {
   const config = await configured();
-  const sub = rest[0] || 'list';
+  const sub = rest[0];
   if (sub === 'list') {
     const devices = await listDevices(config.repoPath);
     for (const device of devices) {
@@ -1715,7 +1858,7 @@ async function deviceCommand(rest) {
     return;
   }
   if (sub === 'show') {
-    const deviceId = requireName(rest[1], 'Usage: skillsync device show <device-id>');
+    const deviceId = rest[1];
     const device = await requireKnownDevice(config.repoPath, deviceId);
     console.log(`Device: ${device.display_name} (${device.device_id})`);
     console.log(`State: ${deviceApplyState(device)}`);
@@ -1725,19 +1868,13 @@ async function deviceCommand(rest) {
       const location = targetConfig.path ? `: ${targetConfig.path} (${targetConfig.mode})` : '';
       console.log(`- ${name}${location} [auto-adopt ${targetConfig.auto_import ? 'on' : 'off'}]`);
     }
-    return;
   }
-  throw new Error('Usage: skillsync device list | skillsync device show <device-id>');
 }
 
 async function target(rest) {
   const sub = rest[0];
   if (sub === 'add') {
-    const usage = 'Usage: skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]';
-    const name = requireName(rest[1], usage);
-    const targetPath = requirePath(rest[2], usage);
-    rejectUnknownOptions(rest.slice(3), ['--mode', '--scan-path', '--no-auto-adopt', '--no-auto-import'], usage);
-    const mode = flagValue(rest, '--mode', 'symlink');
+    const [, name, targetPath] = rest;
     const scanPath = flagValue(rest, '--scan-path');
     const config = await configured();
     await addTarget({
@@ -1745,7 +1882,7 @@ async function target(rest) {
       deviceId: config.deviceId,
       name,
       targetPath: path.resolve(expandHome(targetPath)),
-      mode,
+      mode: flagValue(rest, '--mode', 'symlink'),
       scanPath: scanPath ? path.resolve(expandHome(scanPath)) : undefined,
       autoImport: hasFlag(rest, '--no-auto-adopt') || hasFlag(rest, '--no-auto-import')
         ? false
@@ -1756,9 +1893,7 @@ async function target(rest) {
     return;
   }
   if (sub === 'remove') {
-    const usage = 'Usage: skillsync target remove <name>';
-    rejectUnknownOptions(rest.slice(1), [], usage);
-    const name = requireName(rest[1], usage);
+    const [, name] = rest;
     const config = await configured();
     await removeTargetAndPrune({
       vaultPath: config.repoPath,
@@ -1770,10 +1905,7 @@ async function target(rest) {
     return;
   }
   if (sub === 'auto-adopt' || sub === 'auto-import') {
-    const usage = 'Usage: skillsync target auto-adopt <name> <on|off>';
-    const name = requireName(rest[1], usage);
-    const value = rest[2];
-    if (!['on', 'off'].includes(value)) throw new Error(usage);
+    const [, name, value] = rest;
     const config = await configured();
     await setTargetAutoImport({
       vaultPath: config.repoPath,
@@ -1783,9 +1915,7 @@ async function target(rest) {
     });
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
     console.log(`Auto-adoption for ${name}: ${value}`);
-    return;
   }
-  throw new Error('Usage: skillsync target add|remove|auto-adopt ...');
 }
 
 function deviceAutoAdoptState(device) {
@@ -1825,18 +1955,14 @@ function parseOnOff(value) {
 
 async function policyCommand(rest) {
   const config = await configured();
-  const sub = rest[0] || 'show';
+  const sub = rest[0];
   if (sub === 'show') {
     const vaultConfig = await loadVaultConfig(config.repoPath);
     console.log(`delete-unassigned-skills: ${vaultConfig.policies.delete_unassigned_skills ? 'on' : 'off'}`);
     return;
   }
   if (sub === 'set') {
-    const [, name, value] = rest;
-    if (name !== 'delete-unassigned-skills' || !value) {
-      throw new Error('Usage: skillsync policy set delete-unassigned-skills <on|off>');
-    }
-    const enabled = parseOnOff(value);
+    const enabled = parseOnOff(rest[2]);
     await setVaultPolicy({
       vaultPath: config.repoPath,
       name: 'delete_unassigned_skills',
@@ -1844,15 +1970,10 @@ async function policyCommand(rest) {
     });
     await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, pull: false });
     console.log(`delete-unassigned-skills: ${enabled ? 'on' : 'off'}`);
-    return;
   }
-  throw new Error('Usage: skillsync policy show | skillsync policy set delete-unassigned-skills <on|off>');
 }
 
 async function syncCommand(rest) {
-  const allowed = new Set(['--discard-local-changes', '--dry-run', '--no-pull']);
-  const unsupported = rest.find((argument) => !allowed.has(argument));
-  if (unsupported) throw new Error(`Unknown sync option: ${unsupported}`);
   const dryRun = hasFlag(rest, '--dry-run');
   const config = await configured({ initialize: !dryRun });
   const discardLocalChanges = hasFlag(rest, '--discard-local-changes');
@@ -1895,9 +2016,6 @@ async function syncCommand(rest) {
 }
 
 async function scanCommand(rest = []) {
-  const allowed = new Set(['--json']);
-  const unsupported = rest.find((argument) => !allowed.has(argument));
-  if (unsupported) throw new Error(`Unknown scan option: ${unsupported}`);
   const config = await configured({ initialize: false });
   await checkVault(config.repoPath, { verifyRegistry: false });
   const report = await inspectTargets({
@@ -1916,15 +2034,13 @@ async function scanCommand(rest = []) {
   }
 }
 
-async function checkCommand(rest = []) {
-  if (rest.length) throw new Error('Usage: skillsync check');
+async function checkCommand() {
   const config = await configured({ initialize: false });
   const result = await checkVault(config.repoPath);
   console.log(`Vault check passed: ${result.skills} skills, ${result.files} files.`);
 }
 
-async function rollbackCommand(rest = []) {
-  if (rest.length) throw new Error('Usage: skillsync rollback');
+async function rollbackCommand() {
   const config = await configured();
   const result = await rollbackLinks({
     vaultPath: config.repoPath,
@@ -1954,9 +2070,7 @@ async function doctor() {
   }
 }
 
-async function service(rest) {
-  const sub = rest[0];
-  if (sub !== 'install') throw new Error('Usage: skillsync service install');
+async function service() {
   const invocation = await daemonInvocation();
   if (platform() === 'darwin') {
     const plistDir = path.join(homedir(), 'Library', 'LaunchAgents');
@@ -2034,7 +2148,7 @@ async function runUi() {
   } catch {
     const shouldSetup = await confirm({ message: 'SkillSync is not set up. Run setup now?', default: true });
     if (!shouldSetup) return;
-    await setup([]);
+    await runCommand(['setup']);
     config = await configured();
   }
 
@@ -2066,13 +2180,13 @@ async function runUi() {
     if (choice === 'devices') await devicesScreen(config);
     if (choice === 'targets') await targetsScreen(config);
     if (choice === 'settings') await settingsScreen(config);
-    if (choice === 'add') await addSkill([await input({ message: 'Skill folder path:' })]);
+    if (choice === 'add') await runCommand(['add', await input({ message: 'Skill folder path:' })]);
     if (choice === 'import-local') {
       const source = await chooseImportSource();
-      if (source) await importSkills([source]);
+      if (source) await runCommand(['import', source]);
     }
     if (choice === 'scan') await scanCommand();
-    if (choice === 'sync') await syncCommand([]);
+    if (choice === 'sync') await runCommand(['sync']);
   }
 }
 
@@ -2887,7 +3001,8 @@ async function targetsScreen(config) {
       message: 'Automatically adopt new local skills created in this target?',
       default: true,
     });
-    await target([
+    await runCommand([
+      'target',
       'add',
       name,
       targetPath,
@@ -2910,11 +3025,11 @@ async function targetsScreen(config) {
       ],
     }));
     if (action === 'auto-adopt') {
-      await target(['auto-adopt', name, targetConfig.auto_import ? 'off' : 'on']);
+      await runCommand(['target', 'auto-adopt', name, targetConfig.auto_import ? 'off' : 'on']);
     }
     if (action === 'remove'
       && await confirm({ message: `Remove target ${name}?`, default: false })) {
-      await target(['remove', name]);
+      await runCommand(['target', 'remove', name]);
     }
   }
 }
@@ -3023,7 +3138,7 @@ async function instructionProfileSettingsScreen(config, device) {
   }), 'back');
   if (!choice || choice === 'back') return;
   if (choice.startsWith('use:')) {
-    await instructionsCommand(['use', choice.slice('use:'.length)]);
+    await runCommand(['instructions', 'use', choice.slice('use:'.length)]);
     return;
   }
   if (choice === 'import') {
@@ -3035,7 +3150,7 @@ async function instructionProfileSettingsScreen(config, device) {
       message: 'Profile name',
       default: config.deviceId,
     });
-    await instructionsCommand(['import', '--name', name, '--from', sourcePath]);
+    await runCommand(['instructions', 'import', '--name', name, '--from', sourcePath]);
     return;
   }
   if (choice === 'fork') {
@@ -3043,7 +3158,7 @@ async function instructionProfileSettingsScreen(config, device) {
       message: 'New independent profile name',
       default: `${config.deviceId}-personal`,
     });
-    await instructionsCommand(['fork', name]);
+    await runCommand(['instructions', 'fork', name]);
     return;
   }
   if (choice === 'link') {
@@ -3058,7 +3173,7 @@ async function instructionProfileSettingsScreen(config, device) {
       message: 'Additional global instructions path',
       default: suggestedPath,
     });
-    await instructionsCommand(['link', targetPath]);
+    await runCommand(['instructions', 'link', targetPath]);
     return;
   }
   if (choice === 'unlink') {
@@ -3069,7 +3184,7 @@ async function instructionProfileSettingsScreen(config, device) {
         value: candidate,
       })),
     });
-    await instructionsCommand(['unlink', targetPath]);
+    await runCommand(['instructions', 'unlink', targetPath]);
     return;
   }
   if (choice === 'disable'
@@ -3077,10 +3192,10 @@ async function instructionProfileSettingsScreen(config, device) {
       message: 'Disable global AGENTS.md sync and leave standalone local copies?',
       default: false,
     })) {
-    await instructionsCommand(['disable']);
+    await runCommand(['instructions', 'disable']);
   }
 }
 
 function help() {
-  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status\n  skillsync plugins profiles\n  skillsync plugins show <profile>\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]\n  skillsync plugins use <profile> [--device id]\n  skillsync plugins auto-adopt <profile> <on|off>\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan [--json]\n  skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]\n  skillsync rollback\n  skillsync check\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
+  console.log(`SkillSync\n\nUsage:\n  skillsync                 Open TUI\n  skillsync setup [--name skills] [--repo owner/repo|url] [--path path] [--yes]\n  skillsync connect <owner/repo|url> [--path path]\n  skillsync status\n  skillsync list\n  skillsync installed [--device id]\n  skillsync matrix [--edit]\n  skillsync instructions status\n  skillsync instructions profiles\n  skillsync instructions import [--name profile] [--from path] [--to path] [--separate]\n  skillsync instructions use <profile> [--device id] [--path path]\n  skillsync instructions use-device <source-device> [--device target-device] [--path path]\n  skillsync instructions fork [profile]\n  skillsync instructions link <path>\n  skillsync instructions unlink <path>\n  skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]\n  skillsync instructions disable [--device id]\n  skillsync plugins status\n  skillsync plugins profiles\n  skillsync plugins show <profile>\n  skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]\n  skillsync plugins use <profile> [--device id]\n  skillsync plugins auto-adopt <profile> <on|off>\n  skillsync device list\n  skillsync device show <id>\n  skillsync groups [--summary]\n  skillsync pack list\n  skillsync pack show <pack>\n  skillsync pack install <pack> [--target targets] [--global]\n  skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global] [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync import <hermes|codex|opencode> [--conflict skip|use-vault|overwrite-vault|rename]\n  skillsync install <skill> [--device id] [--target targets] [--global]\n  skillsync uninstall <skill> [--device id] [--target targets] [--global]\n  skillsync delete <skill> [--yes]\n  skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]\n  skillsync target remove <name>\n  skillsync target auto-adopt <name> <on|off>\n  skillsync auto-adopt [show|on|off]\n  skillsync policy show\n  skillsync policy set delete-unassigned-skills <on|off>\n  skillsync scan [--json]\n  skillsync sync [--dry-run] [--no-pull] [--discard-local-changes]\n  skillsync rollback\n  skillsync check\n  skillsync service install\n  skillsync doctor\n  skillsync daemon\n`);
 }
