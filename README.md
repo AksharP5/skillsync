@@ -592,7 +592,7 @@ SkillSync needs Node.js `^20.17.0 || ^22.13.0 || >=23.5.0`. Releases up to 0.14.
 
 The first sync after upgrading from 0.14.0 or older moves the private device state in `.git/skillsync/local/devices/<device>.json` to version 2. Older releases refuse it with `Unsupported local device path state version: 2` and change nothing. Upgraded versions also record a newer hash format in each managed copy's `.skillsync-owned.json`. Older releases read that as a local change and refuse to sync with `Managed copy has local changes`, so rolling back also replaces managed copies from the vault. Symlink targets are not affected. To roll back:
 
-1. With the new version still installed, run `skillsync sync`. If it stops with `Managed copy has local changes`, move those edits into the vault first, because step 4 replaces every managed copy.
+1. With the new version still installed, run `skillsync sync` and do not continue until it succeeds. Step 4 replaces every managed copy, so any edit still sitting in a copy would be lost. If sync stops with `Managed copy has local changes`, it names only the first edited copy: save that copy somewhere outside its target, apply its edits to the skill in the vault, then run `skillsync sync` again. Repeat until it succeeds. Never use `--discard-local-changes` in this step.
 2. Stop the service and reinstall the older version.
 3. Restore the backed-up `.git/skillsync` folder. Without a backup, set `"version"` in `.git/skillsync/local/devices/<device>.json` back to `1` instead.
 4. Run `skillsync sync --discard-local-changes`, then `skillsync sync`, which should report no changes.
