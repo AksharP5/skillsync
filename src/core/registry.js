@@ -332,13 +332,16 @@ async function deleteSkill(vaultPath, skillName) {
   const registry = await loadRegistry(vaultPath);
   const registered = Object.hasOwn(registry.skills, skillName);
   let unassigned = false;
-  const skillPath = path.join(vaultPath, 'skills', skillName);
-  // An exact listing match, so a case-insensitive filesystem cannot resolve `Demo` to `demo`.
-  const folders = await readdir(path.dirname(skillPath)).catch((error) => {
+  const skillsDir = path.join(vaultPath, 'skills');
+  // Match the listing case-sensitively, so a case-insensitive filesystem cannot resolve `Demo`
+  // to `demo`, but compare Unicode-normalized, since macOS may list `café` in decomposed form.
+  const folders = await readdir(skillsDir).catch((error) => {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
-  const skill = folders.includes(skillName) ? await lstat(skillPath) : null;
+  const folder = folders.find((entry) => entry.normalize('NFC') === skillName.normalize('NFC'));
+  const skillPath = path.join(skillsDir, folder ?? skillName);
+  const skill = folder === undefined ? null : await lstat(skillPath);
   let staging = null;
   let backupDirectory = null;
   let original = null;
