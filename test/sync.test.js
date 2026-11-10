@@ -87,3 +87,28 @@ test('sync rejects unsafe content outside skills before creating assigned projec
   );
   await assert.rejects(() => lstat(path.join(targetPath, 'example')), { code: 'ENOENT' });
 });
+
+test('a malformed plugin report from another device does not stop skill sync', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-sync-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const vaultPath = path.join(root, 'vault');
+  const targetPath = path.join(root, 'target');
+  const skillPath = path.join(vaultPath, 'skills', 'example');
+  const deviceId = 'test-device';
+  await mkdir(skillPath, { recursive: true });
+  await writeFile(path.join(skillPath, 'SKILL.md'), '# Example\n');
+  await rebuildRegistry(vaultPath);
+  await addTarget({ vaultPath, deviceId, name: 'codex', targetPath, mode: 'copy' });
+  await installSkill({ vaultPath, deviceId, skillName: 'example', targets: ['codex'] });
+  for (const directory of ['plugins/state', 'plugins/claude/state']) {
+    await mkdir(path.join(vaultPath, directory), { recursive: true });
+    await writeFile(path.join(vaultPath, directory, 'newer-client.json'), '{"version": 3, "installed": [');
+  }
+  await writeFile(path.join(vaultPath, 'plugins', 'profiles.json'), '{');
+
+  await assert.rejects(() => checkVault(vaultPath), /Invalid JSON: plugins\/profiles\.json/);
+  await rm(path.join(vaultPath, 'plugins', 'profiles.json'));
+  await syncVault({ vaultPath, deviceId, pull: false, pushChanges: false });
+
+  assert.equal(await readFile(path.join(targetPath, 'example', 'SKILL.md'), 'utf8'), '# Example\n');
+});

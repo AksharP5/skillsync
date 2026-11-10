@@ -1154,11 +1154,10 @@ async function pluginsCommand(rest = []) {
       deviceId: config.deviceId,
       pull: false,
     });
-    console.log(`Removed ${selector} from ${label} plugin profile ${removed.profile}. Devices running this skillsync version will not install it.`);
     // 0.14.0 syncs Codex profiles but knows nothing of removals, so its auto-adoption re-adds them.
-    if (agent === 'codex') {
-      console.log('Devices on skillsync 0.14.0 or older ignore removals and can add it back through auto-adoption until they upgrade.');
-    }
+    console.log(`Removed ${selector} from ${label} plugin profile ${removed.profile}. ${agent === 'codex'
+      ? 'Devices on skillsync 0.14.0 or older ignore removals and can add it back through auto-adoption until they upgrade; newer devices will not install it.'
+      : 'Devices will no longer install it.'}`);
     if (removed.installedOn.length) {
       console.log(`It is still installed on ${removed.installedOn.join(', ')}. To uninstall it, run this on each of them: ${uninstall} ${selector}`);
     }

@@ -970,7 +970,9 @@ printf '%s\\n' '{"installed":[]}'
   assert.doesNotMatch(synced.stderr + synced.stdout, /TOKEN-123/);
   assert.match(failedStatus.stdout, new RegExp(`macbook: shared \\(pending; 3 installed\\)\n  missing: ${stripe}\n  failed: ${stripe} \\(${reason}\\)\n`));
   assert.equal(removed.stdout, `Removed ${stripe} from Claude Code plugin profile shared. Devices will no longer install it.\n`);
+  assert.match(repaired.stdout, /- shared: 3 plugins \(auto-adopt on\)\n  removed: stripe@anthropic-plugin-directory\n/);
   assert.match(repaired.stdout, /macbook: shared \(applied; 3 installed\)\n$/);
+  assert.match((await cli('show', 'shared', '--agent', 'claude')).stdout, /\nremoved: stripe@anthropic-plugin-directory\n$/);
 });
 
 for (const scenario of [

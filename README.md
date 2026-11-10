@@ -278,13 +278,13 @@ skillsync plugins use shared --agent claude --device vps
 skillsync plugins status --agent claude
 ```
 
-With auto-adoption on, a plugin you install with `claude plugin install` or `/plugin` on one assigned device is installed on the others at their next sync. SkillSync imports user-scope plugins from `claude plugin list`. It skips project and local scope installs, plugins loaded from `~/.claude/skills` (`@skills-dir`), plugins synced from your claude.ai account, and plugins from marketplaces added from a local folder or file.
+With auto-adoption on, a plugin you install with `claude plugin install` or `/plugin` on one assigned device is installed on the others at their next sync. SkillSync imports user-scope plugins from `claude plugin list`. It skips project and local scope installs, plugins loaded from `~/.claude/skills` (`@skills-dir`), plugins synced from your claude.ai account, and plugins from marketplaces that another device couldn't add the same way: ones added from a local folder or file, and Git marketplaces that use a sparse checkout or a custom `marketplace.json` path.
 
 Claude Code keeps managing plugin files and versions; SkillSync never copies them into the vault. A Claude profile records where each third-party marketplace comes from, such as `hyperframes` from `heygen-com/hyperframes`. A device without that marketplace adds it with `claude plugin marketplace add` before installing. Anthropic's built-in directory needs no entry.
 
 A plugin installed on a device from a marketplace that was added there from a local folder or file is left alone, even if another device has a plugin with the same name. If such a local marketplace has the name of a marketplace in the profile, its plugins are not installed from it, and status shows the conflict.
 
-Claude Code auto-updates its official marketplaces, but third-party marketplaces stay off unless you turn auto-update on in `/plugin`. SkillSync never edits Claude Code's settings. Instead, at most once a day, each device with a Claude profile runs `claude plugin marketplace update` for the profile's third-party marketplaces and `claude plugin update` for the profile's installed plugins. If you prefer Claude Code's own auto-update, turn it on for a marketplace from the Marketplaces tab in `/plugin`; the daily update does no harm either way. Restart Claude Code to load updated plugins.
+Claude Code auto-updates its official marketplaces, but third-party marketplaces stay off unless you turn auto-update on in `/plugin`. SkillSync never edits Claude Code's settings. Instead, at most once a day, each device with a Claude profile runs `claude plugin marketplace update` for the profile's third-party marketplaces and `claude plugin update` for the profile's installed plugins. A sync that installs plugins counts as that day's update. If an update fails, `skillsync plugins status` shows the error until the next daily attempt. If you prefer Claude Code's own auto-update, turn it on for a marketplace from the Marketplaces tab in `/plugin`; the daily update does no harm either way. Restart Claude Code to load updated plugins.
 
 ### Failures and removals
 
@@ -296,7 +296,11 @@ To stop syncing a plugin:
 skillsync plugins remove hyperframes@hyperframes --agent claude
 ```
 
-This removes the plugin from this device's profile and records the removal under `plugins/removed/` (`plugins/claude/removed/` for Claude), so auto-adoption doesn't add it back while other devices still have it installed. SkillSync never uninstalls plugins. The command lists the devices that still report the plugin and the command to uninstall it on each one (`claude plugin uninstall` or `codex plugin remove`). Importing the plugin again with `plugins import` puts it back in the profile.
+This removes the plugin from this device's profile and records the removal under `plugins/removed/` (`plugins/claude/removed/` for Claude), so auto-adoption doesn't add it back while other devices still have it installed. `plugins show` and `plugins status` list removed plugins. SkillSync never uninstalls plugins. The command lists the devices that still report the plugin and the command to uninstall it on each one (`claude plugin uninstall` or `codex plugin remove`).
+
+Devices running SkillSync 0.14.0 or older don't know about removals. Until they upgrade, a removed Codex plugin that is still installed on one of them comes back through auto-adoption. Claude profiles aren't affected, because those versions don't sync Claude plugins.
+
+To bring a removed plugin back, import it again on a device that has it installed. `skillsync plugins import --name shared --auto-adopt` restores every plugin installed there. `--plugin x@y` replaces the profile's own plugin list, so list every plugin it should keep.
 
 ## Add and install skills
 

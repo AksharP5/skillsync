@@ -10,6 +10,7 @@ import {
   listPluginAssignments,
   listPluginProfiles,
   listPluginStates,
+  loadLocalPluginState,
   loadPluginProfile,
   loadPluginState,
   normalizeClaudePluginList,
@@ -124,7 +125,8 @@ test('a Claude plugin installed on one device reaches the others without touchin
   const vps = fakeClaude({ plugins: ['vercel@anthropic-plugin-directory'] });
   const state = await syncPlugins({ vaultPath, deviceId: 'vps', agent: 'claude', ...vps, claudeConfigDir });
 
-  assert.deepEqual(changes(vps.calls).filter((call) => !call.includes('update')), [
+  // Plugins installed by this sync are current, so the daily update waits.
+  assert.deepEqual(changes(vps.calls), [
     'plugin marketplace add heygen-com/hyperframes --json',
     'plugin install hyperframes@hyperframes --scope user --json',
     'plugin install remotion@anthropic-plugin-directory --scope user --json',
@@ -150,7 +152,7 @@ test('Claude plugins update through the claude CLI at most once a day and report
   const claude = fakeClaude({
     plugins: ['hyperframes@hyperframes', 'vercel@anthropic-plugin-directory'],
     marketplaces: JSON.parse(marketplaceOutput),
-    fail: (call) => (call === 'plugin update vercel@anthropic-plugin-directory --json'
+    fail: (call) => (call === 'plugin update vercel@anthropic-plugin-directory --scope user --json'
       ? new Error('network down')
       : null),
   });
@@ -167,13 +169,14 @@ test('Claude plugins update through the claude CLI at most once a day and report
 
   assert.deepEqual(firstCalls, [
     'plugin marketplace update hyperframes --json',
-    'plugin update hyperframes@hyperframes --json',
-    'plugin update vercel@anthropic-plugin-directory --json',
+    'plugin update hyperframes@hyperframes --scope user --json',
+    'plugin update vercel@anthropic-plugin-directory --scope user --json',
   ]);
   assert.equal(first.applied_profile, 'shared');
   assert.deepEqual(first.errors, ['Could not update vercel@anthropic-plugin-directory; update it from Claude Code /plugin']);
   assert.deepEqual(sameDayCalls, []);
   assert.deepEqual(sameDay.errors, []);
+  assert.deepEqual((await loadLocalPluginState(vaultPath, 'claude')).update_errors, first.errors);
   assert.deepEqual(changes(claude.calls), firstCalls);
 });
 
