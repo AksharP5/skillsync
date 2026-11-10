@@ -1,0 +1,47 @@
+[
+  {
+    "id": "hyperframes@hyperframes",
+    "version": "0.9.27",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/user/.claude/plugins/cache/hyperframes/hyperframes/0.9.27",
+    "installedAt": "2026-11-10T00:48:10.223Z",
+    "lastUpdated": "2026-11-10T00:48:10.223Z",
+    "notes": [
+      "The packages it lists were not installed, because its bun.lock does not list the plugin as its only workspace"
+    ],
+    "noteDetails": [
+      {
+        "type": "dependencies-refused",
+        "plugin": "hyperframes"
+      }
+    ],
+    "projectEnabled": false
+  },
+  {
+    "id": "remotion@anthropic-plugin-directory",
+    "version": "4.0.528-b54a19c1e244",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/user/.claude/plugins/cache/anthropic-plugin-directory/remotion/4.0.528-b54a19c1e244",
+    "installedAt": "2026-11-10T00:48:02.525Z",
+    "lastUpdated": "2026-11-10T00:48:02.525Z",
+    "projectEnabled": false
+  },
+  {
+    "id": "vercel@anthropic-plugin-directory",
+    "version": "0.49.2-9ca877014339",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/user/.claude/plugins/cache/anthropic-plugin-directory/vercel/0.49.2-9ca877014339",
+    "installedAt": "2026-11-10T00:47:56.833Z",
+    "lastUpdated": "2026-11-10T00:47:56.833Z",
+    "mcpServers": {
+      "vercel": {
+        "type": "http",
+        "url": "https://mcp.vercel.com"
+      }
+    },
+    "projectEnabled": false
+  }
+]

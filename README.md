@@ -1,8 +1,8 @@
 # SkillSync
 
-Keep the same AI agent skills and Codex plugins available across all of your devices.
+Keep the same AI agent skills and Codex and Claude Code plugins available across all of your devices.
 
-SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, Grok Bot, or any custom skill folder, and keeps every device in sync in the background. It can also apply named Codex plugin profiles across devices.
+SkillSync stores one canonical copy of each skill in a private GitHub repository, projects the skills you choose into Codex, Claude, OpenCode, Hermes, Grok Bot, or any custom skill folder, and keeps every device in sync in the background. It can also apply named Codex and Claude Code plugin profiles across devices.
 
 ## Start with an agent
 
@@ -16,7 +16,7 @@ Set up SkillSync completely on this device.
 3. Let setup detect my Codex, OpenCode, Claude Code, Hermes, and Grok Bot skill folders. Show me any existing standalone skills and ask which ones I want to import. Do not import or resolve differing skill content without asking me.
 4. Install the persistent CLI with `npm install -g @akshar5/skillsync@latest`, then run `skillsync service install`.
 5. Ask whether I want to sync global agent instructions. If I do, inspect my existing Codex, OpenCode, and Grok Bot AGENTS.md files, import the version I choose, and link each installed provider's global path to that profile. Only manage CLAUDE.md when Claude Code is installed. Preserve any differing unmanaged file. Grok Bot needs a separate always-apply skill to use the linked file.
-6. Ask whether I want to sync installed Codex plugins. If I want one universal profile, run `skillsync plugins import --name shared --auto-adopt`; every current and future enabled user-managed plugin on an assigned device will join it. If I want a selected profile instead, inspect `codex plugin list --json`, ask which plugins are portable, and pass those exact selectors with `--plugin PLUGIN@MARKETPLACE`. Assign the profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied.
+6. Ask whether I want to sync installed Codex plugins. If I want one universal profile, run `skillsync plugins import --name shared --auto-adopt`; every current and future enabled user-managed plugin on an assigned device will join it. If I want a selected profile instead, inspect `codex plugin list --json`, ask which plugins are portable, and pass those exact selectors with `--plugin PLUGIN@MARKETPLACE`. Assign the profile to the devices I choose. Explain that connector sign-ins are separate and must never be copied. If Claude Code is installed, offer the same for its plugins with `--agent claude`, inspecting `claude plugin list --json` for a selected profile.
 7. Verify `skillsync doctor`, `skillsync status`, `skillsync matrix`, `skillsync instructions status`, `skillsync plugins status`, and the background service. Report the vault, detected targets, auto-adoption settings, instruction and plugin profiles, service state, and anything that still needs my decision.
 ```
 
@@ -68,6 +68,8 @@ On Linux, the service unit goes in `$XDG_CONFIG_HOME/systemd/user` when `XDG_CON
 The service uses an executable `skillsync` from PATH, skipping same-named directories. If none is available, it uses the current Node executable and CLI file.
 
 Command availability checks use the running process's PATH rather than loading a login profile.
+
+The service saves your PATH when you run `skillsync service install`. If you install `codex` or `claude` later, or into a directory that was not on PATH then, run `skillsync service install` again so the service can find it. The service doesn't load your shell profile, so a `CLAUDE_CONFIG_DIR` set there doesn't apply to the plugin commands it runs.
 
 Repeat the install, existing-vault setup, and service steps on each device.
 
@@ -214,7 +216,7 @@ After a profile switch, the old profile remains available while any device still
 
 Unlinking a path leaves a standalone local copy unless another configured path reaches the same file through a directory symlink. In that case, the remaining path stays linked to the profile. If writing a standalone copy fails, the managed link is kept so the operation can be retried.
 
-## Sync Codex plugins
+## Sync Codex and Claude Code plugins
 
 Codex installs plugins per environment. SkillSync stores the selected plugin identifiers in a named profile, assigns that profile per device, and additively installs anything missing during sync.
 
@@ -260,11 +262,41 @@ skillsync plugins auto-adopt shared on
 skillsync plugins auto-adopt shared off
 ```
 
-Existing extra plugins remain installed, and SkillSync never removes plugins. Once an automatically adopted plugin propagates to other devices, it remains part of their reported inventories; disabling auto-adoption stops future additions but does not uninstall anything already present. A disabled desired plugin stays pending; enable it from Codex's `/plugins` interface. Profiles synchronize plugin selection, while Codex continues to manage bundle versions and upgrades. Start a new Codex session after plugins are installed.
+Existing extra plugins remain installed, and SkillSync never uninstalls plugins; to drop one from a profile, use `skillsync plugins remove` (see below). Once an automatically adopted plugin propagates to other devices, it remains part of their reported inventories; disabling auto-adoption stops future additions but does not uninstall anything already present. A disabled desired plugin stays pending; enable it from Codex's `/plugins` interface. Profiles synchronize plugin selection, while Codex continues to manage bundle versions and upgrades. Start a new Codex session after plugins are installed.
 
 Plugin installation and connector authorization are separate. For example, SkillSync can install the Gmail plugin on a VPS, but it does not copy the Mac's Google OAuth session, API keys, cookies, or other credentials. If both Codex environments use the same account or workspace, its connector authorization may already be available; otherwise Gmail requires sign-in there. Environments that cannot complete the connector's sign-in flow may have the plugin installed but still be unable to use Gmail.
 
 SkillSync imports durable, user-managed installs reported by `codex plugin list`. It ignores product-managed runtime plugins, marketplace caches, and plugins injected only into a hosted session. A T3 Code session may expose a plugin even when the machine's standalone Codex CLI does not consider it installed; that session provisioning is owned by the host and is not synchronized by SkillSync.
+
+### Claude Code plugins
+
+Add `--agent claude` to any `plugins` command to manage Claude Code plugins the same way. Without it, commands manage Codex plugins. Each agent has its own profiles and assignments, so a profile lists only that agent's plugins.
+
+```bash
+skillsync plugins import --agent claude --name shared --auto-adopt
+skillsync plugins use shared --agent claude --device vps
+skillsync plugins status --agent claude
+```
+
+With auto-adoption on, a plugin you install with `claude plugin install` or `/plugin` on one assigned device is installed on the others at their next sync. SkillSync imports user-scope plugins from `claude plugin list`. It skips project and local scope installs, plugins loaded from `~/.claude/skills` (`@skills-dir`), plugins synced from your claude.ai account, and plugins from marketplaces added from a local folder or file.
+
+Claude Code keeps managing plugin files and versions; SkillSync never copies them into the vault. A Claude profile records where each third-party marketplace comes from, such as `hyperframes` from `heygen-com/hyperframes`. A device without that marketplace adds it with `claude plugin marketplace add` before installing. Anthropic's built-in directory needs no entry.
+
+A plugin installed on a device from a marketplace that was added there from a local folder or file is left alone, even if another device has a plugin with the same name. If such a local marketplace has the name of a marketplace in the profile, its plugins are not installed from it, and status shows the conflict.
+
+Claude Code auto-updates its official marketplaces, but third-party marketplaces stay off unless you turn auto-update on in `/plugin`. SkillSync never edits Claude Code's settings. Instead, at most once a day, each device with a Claude profile runs `claude plugin marketplace update` for the profile's third-party marketplaces and `claude plugin update` for the profile's installed plugins. If you prefer Claude Code's own auto-update, turn it on for a marketplace from the Marketplaces tab in `/plugin`; the daily update does no harm either way. Restart Claude Code to load updated plugins.
+
+### Failures and removals
+
+When an install fails, `skillsync sync`, the service log, and `skillsync plugins use` show why, and `skillsync plugins status` lists it as failed with the reason, for example a plugin that needs approval in `/plugin`. The service does not retry that install until the profile changes. Run `skillsync sync` or `skillsync plugins use` to retry it now. A sync that cannot reach Codex or Claude Code reports it and keeps syncing skills.
+
+To stop syncing a plugin:
+
+```bash
+skillsync plugins remove hyperframes@hyperframes --agent claude
+```
+
+This removes the plugin from this device's profile and records the removal under `plugins/removed/` (`plugins/claude/removed/` for Claude), so auto-adoption doesn't add it back while other devices still have it installed. SkillSync never uninstalls plugins. The command lists the devices that still report the plugin and the command to uninstall it on each one (`claude plugin uninstall` or `codex plugin remove`). Importing the plugin again with `plugins import` puts it back in the profile.
 
 ## Add and install skills
 
@@ -423,6 +455,8 @@ globals/assignments/  each device's selected instruction profile
 plugins/profiles/  named Codex plugin selections
 plugins/assignments/  each device's selected plugin profile
 plugins/state/  installed, missing, disabled, and applied plugin state
+plugins/removed/  plugins removed from each profile, kept out of auto-adoption
+plugins/claude/  the same four folders for Claude Code plugins
 registry.json    generated skill index
 vault.json       vault-wide settings
 ```
@@ -624,12 +658,13 @@ skillsync instructions link <path>
 skillsync instructions unlink <path>
 skillsync instructions enable [--profile profile] [--path path] [--from-local|--use-vault]
 skillsync instructions disable [--device id]
-skillsync plugins status
-skillsync plugins profiles
-skillsync plugins show <profile>
-skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt]
-skillsync plugins use <profile> [--device id]
-skillsync plugins auto-adopt <profile> <on|off>
+skillsync plugins status [--agent codex|claude]
+skillsync plugins profiles [--agent codex|claude]
+skillsync plugins show <profile> [--agent codex|claude]
+skillsync plugins import --name <profile> [--plugin plugin@marketplace] [--auto-adopt|--no-auto-adopt] [--agent codex|claude]
+skillsync plugins use <profile> [--device id] [--agent codex|claude]
+skillsync plugins auto-adopt <profile> <on|off> [--agent codex|claude]
+skillsync plugins remove <plugin@marketplace> [--agent codex|claude]
 skillsync device list
 skillsync device show <id>
 skillsync groups [--summary]

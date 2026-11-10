@@ -65,7 +65,10 @@ export function run(command, args, options = {}) {
       clearTimers();
       if (settled) return;
       if (code !== 0) {
-        fail(new Error(`${command} ${args.join(' ')} failed (${code})\n${stderr || stdout}`));
+        fail(Object.assign(
+          new Error(`${command} ${args.join(' ')} failed (${code})\n${stderr || stdout}`),
+          { stdout, stderr },
+        ));
         return;
       }
       settled = true;

@@ -39,7 +39,7 @@ import {
   loadPluginAssignment,
   loadPluginState,
   savePluginProfile,
-  syncCodexPlugins,
+  syncPlugins,
 } from '../src/core/plugins.js';
 import { ensureVault, loadRegistry, rebuildRegistry, setVaultPolicy } from '../src/core/registry.js';
 
@@ -907,6 +907,72 @@ exit 1
   assert.equal(JSON.parse(await readFile(profilePath, 'utf8')).auto_adopt, false);
 });
 
+test('plugins --agent claude manages Claude Code profiles and reports failed installs', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const vault = path.join(home, '.skillsync', 'repo');
+  const bin = path.join(home, 'bin');
+  const fixtures = path.resolve('test', 'fixtures');
+  await writeConfig(home, vault, 'macbook');
+  await mkdir(bin);
+  await writeFile(path.join(bin, 'claude'), `#!/bin/sh
+if [ "$1 $2 $3" = "plugin list --json" ]; then cat '${fixtures}/claude-plugin-list.json'; exit 0; fi
+if [ "$1 $2 $3 $4" = "plugin marketplace list --json" ]; then cat '${fixtures}/claude-marketplace-list.json'; exit 0; fi
+if [ "$1 $2" = "plugin install" ]; then echo 'install failed: TOKEN-123' >&2; exit 1; fi
+exit 0
+`, { mode: 0o755 });
+  await writeFile(path.join(bin, 'codex'), `#!/bin/sh
+printf '%s\\n' '{"installed":[]}'
+`, { mode: 0o755 });
+  const skillsync = (...args) => execFileAsync(process.execPath, [path.resolve('src/cli.js'), ...args], {
+    cwd: path.resolve('.'),
+    env: {
+      ...cliEnv(home),
+      CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+    },
+  });
+  const cli = (...args) => skillsync('plugins', ...args);
+
+  const imported = await cli('import', '--agent', 'claude', '--name', 'shared', '--auto-adopt');
+  const shown = await cli('show', '--agent', 'claude', 'shared');
+  const claudeStatus = await cli('status', '--agent', 'claude');
+  const codexStatus = await cli('status');
+
+  assert.equal(imported.stdout, 'Imported 3 Claude Code plugins into shared, assigned it to macbook, and set auto-adopt on.\n');
+  assert.equal(shown.stdout, [
+    'shared (3 plugins; auto-adopt on)',
+    '- hyperframes@hyperframes (from heygen-com/hyperframes)',
+    '- remotion@anthropic-plugin-directory',
+    '- vercel@anthropic-plugin-directory',
+    '',
+  ].join('\n'));
+  assert.match(claudeStatus.stdout, /^Claude Code plugin profiles:\n- shared: 3 plugins \(auto-adopt on\)\nDevices:\n- macbook: shared \(applied; 3 installed\)\n$/);
+  assert.equal(codexStatus.stdout, 'Codex plugin profiles:\n- none\nDevices:\n- macbook: unmanaged (observed only; 0 installed)\n');
+  assert.equal(await exists(path.join(vault, 'plugins', 'profiles')), false);
+
+  const stripe = 'stripe@anthropic-plugin-directory';
+  await savePluginProfile({
+    vaultPath: vault,
+    name: 'shared',
+    plugins: [stripe],
+    marketplaces: { hyperframes: 'heygen-com/hyperframes' },
+    autoAdopt: true,
+    agent: 'claude',
+  });
+  const synced = await skillsync('sync');
+  const failedStatus = await cli('status', '--agent', 'claude');
+  const removed = await cli('remove', stripe, '--agent', 'claude');
+  const repaired = await cli('status', '--agent', 'claude');
+
+  const reason = 'install or authenticate it from Claude Code /plugin';
+  assert.match(synced.stderr, new RegExp(`Claude Code plugins: Could not install ${stripe}; ${reason}`));
+  assert.doesNotMatch(synced.stderr + synced.stdout, /TOKEN-123/);
+  assert.match(failedStatus.stdout, new RegExp(`macbook: shared \\(pending; 3 installed\\)\n  missing: ${stripe}\n  failed: ${stripe} \\(${reason}\\)\n`));
+  assert.equal(removed.stdout, `Removed ${stripe} from Claude Code plugin profile shared. Devices will no longer install it.\n`);
+  assert.match(repaired.stdout, /macbook: shared \(applied; 3 installed\)\n$/);
+});
+
 for (const scenario of [
   {
     name: 'disabled plugins stay pending without being enabled or reinstalled',
@@ -950,7 +1016,7 @@ for (const scenario of [
     await savePluginProfile({ vaultPath: vault, name: 'shared', plugins: ['gmail@openai-curated'] });
     if (scenario.unavailable) {
       await assignPluginProfile({ vaultPath: vault, deviceId, profile: 'shared' });
-      await syncCodexPlugins({
+      await syncPlugins({
         vaultPath: vault,
         deviceId,
         commandAvailable: async () => true,

@@ -3,6 +3,7 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assertSafePathSegment } from './fs.js';
+import { isPluginReportPath } from './plugins.js';
 import { git, hashSyncedDirectory, ignoredGitPaths, isGitRepo } from './git.js';
 
 const GIT_ENTRY = '.git';
@@ -71,6 +72,7 @@ function inspectAddedPatchLines(patch) {
 async function inspectTree(rootPath, {
   ignoreRootEntries = new Set(),
   rejectOwnershipMarkers = false,
+  untrustedJson = () => false,
 } = {}) {
   const errors = [];
   const files = [];
@@ -118,7 +120,7 @@ async function inspectTree(rootPath, {
     const content = json ? await readFile(file.path, 'utf8') : null;
     const secret = json ? secretType(content) : await detectedSecret(file.path);
     if (secret) errors.push(`Possible ${secret}: ${file.relative}`);
-    if (!json) continue;
+    if (!json || untrustedJson(file.relative)) continue;
     try {
       JSON.parse(content);
     } catch {
@@ -187,6 +189,8 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
   const inspected = await inspectTree(root, {
     ignoreRootEntries: new Set([GIT_ENTRY, LOCAL_STATE_ENTRY]),
     rejectOwnershipMarkers: true,
+    // One device's malformed plugin report must not stop every device's skill sync.
+    untrustedJson: isPluginReportPath,
   });
   const errors = [...inspected.errors];
   if (gitBacked && localState) {

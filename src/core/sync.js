@@ -27,7 +27,7 @@ import {
   applyGlobalInstructions,
   reconcileGlobalInstructionProviders,
 } from './instructions.js';
-import { syncCodexPlugins } from './plugins.js';
+import { syncPlugins } from './plugins.js';
 import { ensureVault, refreshChangedRegistryEntries } from './registry.js';
 
 async function pathInfo(filePath) {
@@ -181,6 +181,7 @@ async function sync({
   pull = true,
   discardLocalChanges = false,
   replaceUnmanagedPaths = [],
+  retryFailedPlugins = false,
 } = {}) {
   await assertNoGitConflicts(vaultPath);
   if (deviceId) {
@@ -220,10 +221,12 @@ async function sync({
     instructionProviderConflicts: [],
     instructionProviderBackups: [],
     plugins: null,
+    claudePlugins: null,
     projectionOperations: [],
     prunedInstructionProfiles: [],
     prunedSkills: [],
   };
+  let pluginsReconciled = false;
   async function reconcileLocalState() {
     await ensureVault(vaultPath);
     await checkVault(vaultPath, { verifyRegistry: false });
@@ -251,7 +254,12 @@ async function sync({
         result.instructionProviderBackups.push(...(instructionProviders.backups || []));
         const instructions = await applyGlobalInstructions({ vaultPath, deviceId });
         result.prunedInstructionProfiles.push(...(instructions.prunedProfiles || []));
-        result.plugins = await syncCodexPlugins({ vaultPath, deviceId });
+        // Agent CLI failures come back as errors; only invalid vault plugin files stop the apply.
+        // A sync that rebases reconciles twice; only its first pass retries failed installs.
+        const retryFailed = retryFailedPlugins && !pluginsReconciled;
+        pluginsReconciled = true;
+        result.plugins = await syncPlugins({ vaultPath, deviceId, agent: 'codex', retryFailed });
+        result.claudePlugins = await syncPlugins({ vaultPath, deviceId, agent: 'claude', retryFailed });
         const inventoryRevision = await readInventoryRevision(vaultPath);
         const scanned = await scanTargets({ vaultPath, deviceId, save: false });
         if (pull) {
