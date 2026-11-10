@@ -315,18 +315,18 @@ async function recoverInterrupted(root, allowedRoots) {
   await removePath(markerPath);
 }
 
-async function pruneBackups(root, deviceId) {
+async function pruneBackups(root, deviceId, activeBackupId) {
   const deviceRoot = path.join(root, 'backups', deviceId);
   const entries = await readdir(deviceRoot, { withFileTypes: true }).catch((error) => {
     if (error.code === 'ENOENT') return [];
     throw error;
   });
   const old = entries
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && entry.name !== activeBackupId)
     .map((entry) => entry.name)
     .sort()
     .reverse()
-    .slice(BACKUP_LIMIT);
+    .slice(BACKUP_LIMIT - 1);
   for (const name of old) await removeProjectionPath(path.join(deviceRoot, name));
 }
 
@@ -380,7 +380,7 @@ export async function applyFilesystemPlan({
       }
       await updateManifest(backupPath, manifest, 'applied');
       await removePath(markerPath);
-      await pruneBackups(root, deviceId);
+      await pruneBackups(root, deviceId, manifest.id);
       // Finish all fallible bookkeeping before reconciliation publishes its report.
       reconciling = true;
       await afterApply?.();
