@@ -109,6 +109,7 @@ main().catch((error) => {
 
 async function main() {
   const [command, ...rest] = args;
+  if (rest.includes('--help') || rest.includes('-h')) return help();
   switch (command) {
     case undefined:
     case 'ui':
@@ -183,6 +184,12 @@ function flagValue(rest, flag, fallback = undefined) {
   if (index === -1) return fallback;
   const value = rest[index + 1];
   if (!value?.trim() || value.startsWith('-')) throw new Error(`Missing value for ${flag}`);
+  return value;
+}
+
+function requireName(value, usage) {
+  if (!value) throw new Error(usage);
+  if (value.startsWith('-')) throw new Error(`Unexpected option ${value}. ${usage}`);
   return value;
 }
 
@@ -376,8 +383,7 @@ async function setup(rest) {
 }
 
 async function connect(rest) {
-  const repoArg = rest[0];
-  if (!repoArg) throw new Error('Usage: skillsync connect <github-repo-or-url>');
+  const repoArg = requireName(rest[0], 'Usage: skillsync connect <github-repo-or-url>');
   const repo = await resolveRepoCloneUrl(repoArg);
   const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
   const { repoPath, deviceId } = await identityForCheckout(selectedPath);
@@ -617,8 +623,7 @@ async function packCommand(rest) {
     return;
   }
   if (sub === 'show') {
-    const packName = rest[1];
-    if (!packName) throw new Error('Usage: skillsync pack show <pack>');
+    const packName = requireName(rest[1], 'Usage: skillsync pack show <pack>');
     const pack = await loadPack(config, packName);
     console.log(`${pack.title || pack.name} (${pack.skills.length} skills)`);
     if (pack.description) console.log(pack.description);
@@ -626,8 +631,7 @@ async function packCommand(rest) {
     return;
   }
   if (sub === 'install') {
-    const packName = rest[1];
-    if (!packName) throw new Error('Usage: skillsync pack install <pack> [--target codex,claude] [--global]');
+    const packName = requireName(rest[1], 'Usage: skillsync pack install <pack> [--target codex,claude] [--global]');
     const pack = await loadPack(config, packName);
     const targets = parseTargets(rest.slice(2));
     if (pack.skills.length) {
@@ -1098,10 +1102,7 @@ async function instructionsCommand(rest = []) {
     const targetDeviceId = flagValue(rest, '--device', config.deviceId);
     let profile = subcommand === 'use' ? rest[1] : null;
     if (subcommand === 'use-device') {
-      const sourceDeviceId = rest[1];
-      if (!sourceDeviceId) {
-        throw new Error('Usage: skillsync instructions use-device <source-device> [--device target-device]');
-      }
+      const sourceDeviceId = requireName(rest[1], 'Usage: skillsync instructions use-device <source-device> [--device target-device]');
       const sourceDevice = await requireKnownDevice(config.repoPath, sourceDeviceId);
       profile = sourceDevice.instructions.agents?.profile;
       if (!profile) throw new Error(`${sourceDeviceId} is not using a global instructions profile`);
@@ -1143,8 +1144,7 @@ async function instructionsCommand(rest = []) {
     return;
   }
   if (subcommand === 'link') {
-    const targetPath = rest[1];
-    if (!targetPath) throw new Error('Usage: skillsync instructions link <path>');
+    const targetPath = requireName(rest[1], 'Usage: skillsync instructions link <path>');
     const result = await addGlobalInstructionsPath({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
@@ -1158,8 +1158,7 @@ async function instructionsCommand(rest = []) {
     return;
   }
   if (subcommand === 'unlink') {
-    const targetPath = rest[1];
-    if (!targetPath) throw new Error('Usage: skillsync instructions unlink <path>');
+    const targetPath = requireName(rest[1], 'Usage: skillsync instructions unlink <path>');
     const result = await removeGlobalInstructionsPath({
       vaultPath: config.repoPath,
       deviceId: config.deviceId,
@@ -1462,8 +1461,7 @@ function resultSummary(result) {
 }
 
 async function addSkill(rest) {
-  const source = rest[0];
-  if (!source) throw new Error('Usage: skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global]');
+  const source = requireName(rest[0], 'Usage: skillsync add <skill-folder-or-git-url> [--name name] [--skill name] [--target targets] [--global]');
   const config = await configured();
   const sourcePath = expandHome(source);
 
@@ -1615,8 +1613,7 @@ async function chooseImportSource() {
 }
 
 async function install(rest) {
-  const skillName = rest[0];
-  if (!skillName) throw new Error('Usage: skillsync install <skill> [--device id] [--target codex,claude]');
+  const skillName = requireName(rest[0], 'Usage: skillsync install <skill> [--device id] [--target codex,claude]');
   const config = await configured();
   const deviceId = requestedDeviceId(config, rest);
   await pullBeforeRemoteEdit(config, deviceId);
@@ -1630,8 +1627,7 @@ async function install(rest) {
 }
 
 async function uninstall(rest) {
-  const skillName = rest[0];
-  if (!skillName) throw new Error('Usage: skillsync uninstall <skill> [--device id] [--target target]');
+  const skillName = requireName(rest[0], 'Usage: skillsync uninstall <skill> [--device id] [--target target]');
   const config = await loadConfig();
   const deviceId = requestedDeviceId(config, rest);
   const targets = parseTargets(rest);
@@ -1651,8 +1647,7 @@ async function uninstall(rest) {
 }
 
 async function deleteSkill(rest) {
-  const skillName = rest[0];
-  if (!skillName) throw new Error('Usage: skillsync delete <skill>');
+  const skillName = requireName(rest[0], 'Usage: skillsync delete <skill>');
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
   if (!yes && process.stdin.isTTY) {
     const { input } = await import('@inquirer/prompts');
@@ -1737,8 +1732,9 @@ async function deviceCommand(rest) {
 async function target(rest) {
   const sub = rest[0];
   if (sub === 'add') {
-    const [, name, targetPath] = rest;
-    if (!name || !targetPath) throw new Error('Usage: skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]');
+    const usage = 'Usage: skillsync target add <name> <path> [--mode symlink|copy] [--scan-path path] [--no-auto-adopt]';
+    const name = requireName(rest[1], usage);
+    const targetPath = requireName(rest[2], usage);
     const scanPath = flagValue(rest, '--scan-path');
     const config = await configured();
     await addTarget({
@@ -1757,8 +1753,7 @@ async function target(rest) {
     return;
   }
   if (sub === 'remove') {
-    const [, name] = rest;
-    if (!name) throw new Error('Usage: skillsync target remove <name>');
+    const name = requireName(rest[1], 'Usage: skillsync target remove <name>');
     const config = await configured();
     await removeTargetAndPrune({
       vaultPath: config.repoPath,
