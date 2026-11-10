@@ -333,10 +333,12 @@ async function deleteSkill(vaultPath, skillName) {
   const registered = Object.hasOwn(registry.skills, skillName);
   let unassigned = false;
   const skillPath = path.join(vaultPath, 'skills', skillName);
-  const skill = await lstat(skillPath).catch((error) => {
-    if (error.code === 'ENOENT') return null;
+  // An exact listing match, so a case-insensitive filesystem cannot resolve `Demo` to `demo`.
+  const folders = await readdir(path.dirname(skillPath)).catch((error) => {
+    if (error.code === 'ENOENT') return [];
     throw error;
   });
+  const skill = folders.includes(skillName) ? await lstat(skillPath) : null;
   let staging = null;
   let backupDirectory = null;
   let original = null;
