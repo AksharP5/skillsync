@@ -592,7 +592,7 @@ SkillSync needs Node.js `^20.17.0 || ^22.13.0 || >=23.5.0`. Releases up to 0.14.
 
 The first sync after upgrading from 0.14.0 or older moves the private device state in `.git/skillsync/local/devices/<device>.json` to version 2. Older releases refuse it with `Unsupported local device path state version: 2` and change nothing. To roll back, stop the service, reinstall the older version, restore the backed-up `.git/skillsync` folder, run `skillsync sync`, and start the service. Restoring the backup is the safe path; setting `"version"` in that device file back to `1` is only a fallback when no backup exists.
 
-Devices on 0.14.0 can keep sharing a vault with upgraded devices. Upgraded devices keep each unchanged skill's existing `sha256:` registry hash. A skill added or changed on an upgraded device gets a `sha256-v2:` hash, which an older device rewrites once to its own format. Once an upgraded device writes a `sha256-v2:` hash, it keeps that format.
+Devices on 0.14.0 can keep sharing a vault with upgraded devices. Upgraded devices keep each unchanged skill's existing `sha256:` registry hash. A skill added or changed on an upgraded device gets a `sha256-v2:` hash, which an older device rewrites once to its own format. Upgraded devices never convert a `sha256-v2:` entry back to `sha256:`. After a 0.14.0 device rewrites one, upgraded devices keep that `sha256:` hash.
 
 Right after an upgraded device pushes such a change, a 0.14.0 device that was pushing at the same time can fail one sync with `Registry hash is stale`. Its next cycle pulls, rewrites the entry, and succeeds.
 

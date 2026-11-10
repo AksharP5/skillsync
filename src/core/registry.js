@@ -243,7 +243,6 @@ export async function ensureSkillInRegistry(vaultPath, skillName) {
   const entry = await matchingLegacyEntry(vaultPath, skillName, previous, fingerprints.skills)
     ?? await registryEntryForSkill(vaultPath, skillName);
   if (previous?.path === entry.path && previous.hash === entry.hash && previous.updated_at) {
-    await saveFingerprints(vaultPath, fingerprints);
     return previous;
   }
   registry.skills[skillName] = entry;

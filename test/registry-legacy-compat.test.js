@@ -147,3 +147,24 @@ test('changed skills move to v2, stay v2, and settle after one 0.14.0 rewrite', 
   for (let round = 0; round < 3; round += 1) await sync(vaultPath);
   await assertUntouched(registryPath, rewritten);
 });
+
+test('an entry a 0.14.0 device rewrote after editing the skill is kept', async (t) => {
+  const { vaultPath, folder, registryPath } = await legacyVault(t, EXAMPLE, EXAMPLE_HASH);
+  await sync(vaultPath);
+
+  await writeFile(path.join(folder, 'SKILL.md'), '# Changed\n');
+  const edited = await writeLegacyRegistry(registryPath, CHANGED_HASH, '2026-02-01T00:00:00.000Z');
+  await sync(vaultPath);
+  await assertUntouched(registryPath, edited);
+});
+
+for (const [label, content] of [['truncated', '{'], ['empty', ''], ['an array', '[]']]) {
+  test(`sync treats a fingerprint cache that is ${label} as empty`, async (t) => {
+    const { vaultPath, registryPath, saved } = await legacyVault(t, EXAMPLE, EXAMPLE_HASH);
+    await mkdir(path.join(vaultPath, '.skillsync-local'), { recursive: true });
+    await writeFile(path.join(vaultPath, '.skillsync-local', 'registry-fingerprints.json'), content);
+
+    await sync(vaultPath);
+    await assertUntouched(registryPath, saved);
+  });
+}
