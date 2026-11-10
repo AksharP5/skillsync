@@ -521,6 +521,8 @@ async function localSkillEntries(device, registry, vaultPath) {
   for (const [targetName, skills] of Object.entries(device.detected || {})) {
     if (!Array.isArray(skills)) continue;
     for (const skill of skills) {
+      // Vendor skills belong to their plugin or Claude account sync; never offer to manage or remove them.
+      if (skill.vendor) continue;
       const entry = entryFor(skill.name);
       entry.inVault = entry.inVault || Boolean(skill.in_vault) || Boolean(registry.skills[skill.name]);
       entry.detectedTargets.push({
@@ -1550,7 +1552,7 @@ async function importSkills(rest) {
   const config = await configured();
   const device = await loadLocalDevice(config.repoPath, config.deviceId);
   const found = [];
-  for (const skill of await discoverSkillFolders(expandHome(importSource.root))) {
+  for (const skill of await discoverSkillFolders(expandHome(importSource.root), { skipVendor: true })) {
     const managed = await Promise.all(Object.keys(device.targets).map((targetName) => isManagedSkillPath({
       vaultPath: config.repoPath,
       device,
@@ -1908,7 +1910,7 @@ async function scanCommand(rest = []) {
   }
   console.log(`Detected ${report.skills.length} local skill${report.skills.length === 1 ? '' : 's'} on ${report.device_id}.`);
   for (const skill of report.skills) {
-    const state = skill.managed ? 'managed' : skill.in_vault ? 'in vault' : 'local only';
+    const state = skill.managed ? 'managed' : skill.vendor ? `${skill.vendor}, not offered` : skill.in_vault ? 'in vault' : 'local only';
     const discovered = skill.new ? ', new' : '';
     console.log(`- ${skill.name} [${skill.target}, ${state}${discovered}]`);
   }

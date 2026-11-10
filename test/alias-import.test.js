@@ -7,9 +7,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { saveConfig } from '../src/core/config.js';
-import { addTarget, applyLinks, installSkill, loadDevice } from '../src/core/device.js';
+import { addTarget, applyLinks, installSkill, loadDevice, scanTargets } from '../src/core/device.js';
 import { git } from '../src/core/git.js';
-import { addSkillToVault, ensureVault } from '../src/core/registry.js';
+import { addSkillToVault, ensureVault, loadRegistry } from '../src/core/registry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -94,6 +94,38 @@ for (const mode of ['symlink', 'copy']) {
     }
   });
 }
+
+async function makePluginBundle(targetPath) {
+  const bundle = path.join(targetPath, 'codex-plugin-github');
+  await mkdir(path.join(bundle, '.codex-plugin'), { recursive: true });
+  await writeFile(path.join(bundle, '.codex-plugin', 'plugin.json'), '{}\n');
+  await makeSkill(path.join(bundle, 'skills', 'gh-fix-ci'), '---\nname: gh-fix-ci\n---\n');
+}
+
+test('agent import skips skills inside plugin bundles', async (t) => {
+  const { targetPath, vaultPath, cli } = await fixture(t, { alias: false });
+  await makePluginBundle(targetPath);
+  await makeSkill(path.join(targetPath, 'demo'));
+
+  const { stdout } = await cli(['import', 'codex']);
+
+  assert.match(stdout, /demo: added to vault/);
+  assert.doesNotMatch(stdout, /gh-fix-ci/);
+  assert.deepEqual(Object.keys((await loadRegistry(vaultPath)).skills), ['demo']);
+});
+
+test('local skill lists and scans do not offer plugin skills as local copies', async (t) => {
+  const { root, targetPath, vaultPath, options, cli } = await fixture(t, { alias: false });
+  await makePluginBundle(targetPath);
+  await makeSkill(path.join(root, 'source', 'gh-fix-ci'), '---\nname: gh-fix-ci\n---\n');
+  await addSkillToVault({ vaultPath, sourcePath: path.join(root, 'source', 'gh-fix-ci'), name: 'gh-fix-ci' });
+  await scanTargets(options);
+
+  const { stdout } = await cli(['list']);
+
+  assert.match(stdout, /^○ gh-fix-ci$/m);
+  assert.match((await cli(['scan'])).stdout, /^- gh-fix-ci \[codex, plugin, not offered\]$/m);
+});
 
 for (const missing of ['leaf', 'root']) {
   test(`add installs an external source when the target ${missing} is missing`, async (t) => {
