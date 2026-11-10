@@ -581,6 +581,19 @@ Verify it on Linux:
 systemctl --user status skillsync.service --no-pager
 ```
 
+## Upgrade
+
+SkillSync needs Node.js `^20.17.0 || ^22.13.0 || >=23.5.0`. Upgrade one device at a time:
+
+1. Stop the background service so an older daemon never writes alongside the new version and its locks: `systemctl --user stop skillsync.service` on Linux, or `launchctl bootout gui/$(id -u)/dev.skillsync.daemon` on macOS.
+2. Back up this device's private state, for example `cp -a ~/.skillsync/repo/.git/skillsync ~/skillsync-private-backup` for the default vault path.
+3. Install the new version, then run `skillsync sync --dry-run` and `skillsync sync`.
+4. Start the service again with `systemctl --user start skillsync.service` on Linux, or `skillsync service install` on macOS.
+
+The first sync after upgrading from 0.14.0 or older moves the private device state in `.git/skillsync/local/devices/<device>.json` to version 2. Older releases refuse it with `Unsupported local device path state version: 2` and change nothing. To roll back, stop the service, reinstall the older version, restore the backed-up `.git/skillsync` folder (or set `"version"` in that device file back to `1`), run `skillsync sync`, and start the service.
+
+Devices on 0.14.0 can keep sharing a vault with upgraded devices. Upgraded devices keep each unchanged skill's existing `sha256:` registry hash. A skill added or changed on an upgraded device gets a `sha256-v2:` hash, which an older device rewrites once to its own format.
+
 ## Command reference
 
 ```text

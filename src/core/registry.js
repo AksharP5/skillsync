@@ -242,8 +242,9 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
 export async function ensureSkillInRegistry(vaultPath, skillName) {
   assertSafePathSegment(skillName, 'Skill name');
   const registry = await loadRegistry(vaultPath);
-  const entry = await registryEntryForSkill(vaultPath, skillName);
   const previous = registry.skills[skillName];
+  const entry = await matchingLegacyEntry(vaultPath, skillName, previous)
+    ?? await registryEntryForSkill(vaultPath, skillName);
   if (previous?.path === entry.path && previous.hash === entry.hash && previous.updated_at) {
     return previous;
   }
@@ -263,7 +264,19 @@ export async function registryEntryForSkill(vaultPath, skillName, ignoredPaths) 
   };
 }
 
-export async function buildRegistry(vaultPath) {
+// Releases up to 0.14.0 write legacy `sha256:` hashes and replace any other format. Keeping
+// a legacy hash that still matches lets mixed-version devices share a vault without rewriting
+// each other's entries on every sync.
+async function matchingLegacyEntry(vaultPath, skillName, previous, ignoredPaths) {
+  const relativePath = path.posix.join('skills', skillName);
+  if (previous?.path !== relativePath || !previous.updated_at
+    || typeof previous.hash !== 'string' || !previous.hash.startsWith('sha256:')) return null;
+  await validateSkillFolder(path.join(vaultPath, relativePath));
+  const hash = await hashSyncedDirectory(vaultPath, relativePath, ignoredPaths, { legacy: true });
+  return hash === previous.hash ? { path: relativePath, hash, updated_at: previous.updated_at } : null;
+}
+
+export async function buildRegistry(vaultPath, previousSkills = {}) {
   const skillsDir = path.join(vaultPath, 'skills');
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const registry = emptyRegistry();
@@ -272,7 +285,8 @@ export async function buildRegistry(vaultPath) {
     if (!entry.isDirectory()) continue;
     const skillName = assertSafePathSegment(entry.name, 'Skill name');
     if (!await exists(path.join(skillsDir, skillName, 'SKILL.md'))) continue;
-    registry.skills[skillName] = await registryEntryForSkill(vaultPath, skillName, ignoredPaths);
+    registry.skills[skillName] = await matchingLegacyEntry(vaultPath, skillName, previousSkills[skillName], ignoredPaths)
+      ?? await registryEntryForSkill(vaultPath, skillName, ignoredPaths);
   }
   return registry;
 }
@@ -287,7 +301,7 @@ export async function rebuildRegistry(vaultPath) {
 export async function refreshChangedRegistryEntries(vaultPath) {
   await ensureVault(vaultPath);
   const before = await readJson(path.join(vaultPath, REGISTRY_FILE), emptyRegistry());
-  const after = await buildRegistry(vaultPath);
+  const after = await buildRegistry(vaultPath, before?.skills ?? {});
   for (const [name, entry] of Object.entries(after.skills)) {
     const previous = before?.skills?.[name];
     if (previous?.hash === entry.hash && previous.updated_at) {
