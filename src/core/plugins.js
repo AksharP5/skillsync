@@ -5,7 +5,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { assertSafePathSegment, exists, readJson, writeJson, writePrivateJson } from './fs.js';
-import { commandExists, gitPrivatePath, run } from './git.js';
+import { commandExists, gitPrivatePath, run, withVaultReferences } from './git.js';
 import { acquireDirectoryLease } from './lease.js';
 
 const UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -38,14 +38,13 @@ const PROVIDERS = {
 };
 
 /**
- * The device whose plugin report lives at a vault path, or null for any other path. Each device
- * writes only its own report; another device's, possibly from a newer client, is untrusted input.
+ * Whether a vault path is a device's plugin report. A report from another device, possibly a newer
+ * client, is untrusted input: reads skip it when unreadable, and pushes never introduce a bad one.
  */
-export function pluginReportDevice(relative) {
+export function isPluginReportPath(relative) {
   const directory = path.posix.dirname(relative);
-  const isReport = relative.endsWith('.json') && Object.values(PROVIDERS)
+  return relative.endsWith('.json') && Object.values(PROVIDERS)
     .some((provider) => directory === path.posix.join('plugins', ...provider.directory, 'state'));
-  return isReport ? path.posix.basename(relative, '.json') : null;
 }
 
 export function pluginProvider(agent) {
@@ -730,13 +729,6 @@ export async function updatePlugins({
   if (!release) return null;
   try {
     const previous = await readUpdateState(root);
-    // A plugin installed by this sync is already the latest version.
-    if (targets.freshInstall) {
-      await writePrivateJson(path.join(root, 'state.json'), {
-        version: 1, ...previous, updated_at: new Date(now).toISOString(),
-      });
-      return null;
-    }
     // Also due when plugins were never updated, since the difference is then NaN.
     if (now - Date.parse(previous.updated_at) < UPDATE_INTERVAL_MS) return null;
     const errors = await provider.update({ ...targets, runCommand, deadline: Date.now() + deadlineMs });
@@ -799,23 +791,32 @@ function pluginReport({ agent, deviceId, assignment, profile, inspection }) {
   };
 }
 
-function unavailablePluginStatus({ agent, deviceId, assignment, profile, previousState }) {
-  const profileHash = profile ? pluginProfileHash(profile) : null;
+function unavailablePluginReport({ agent, deviceId, assignment = null, profile = null }) {
   return {
-    ...(previousState || {
-      version: 1,
-      device_id: assertSafePathSegment(deviceId, 'Device ID'),
-      provider: agent,
-      profile: assignment?.profile || null,
-      profile_hash: profileHash,
-      applied_profile: null,
-      applied_profile_hash: null,
-      installed: [],
-      missing: profile?.plugins || [],
-      disabled: [],
-    }),
-    available: false,
+    version: 1,
+    device_id: assertSafePathSegment(deviceId, 'Device ID'),
+    provider: agent,
+    profile: assignment?.profile || null,
+    profile_hash: profile ? pluginProfileHash(profile) : null,
+    applied_profile: null,
+    applied_profile_hash: null,
+    installed: [],
+    missing: profile?.plugins || [],
+    disabled: [],
   };
+}
+
+/**
+ * Writes this device's report under the references lease that other report writers hold,
+ * rereading the file under it. With `repairOnly`, writes only if the file is still unreadable.
+ */
+async function publishPluginReport(vaultPath, report, { repairOnly = false } = {}) {
+  const { device_id: deviceId, provider: agent } = report;
+  await withVaultReferences(vaultPath, async () => {
+    const current = await loadPluginState(vaultPath, deviceId, agent).then((state) => ({ state }), () => null);
+    if (repairOnly ? current : isDeepStrictEqual(current?.state, report)) return;
+    await writeJson(pluginStatePath(vaultPath, deviceId, agent), report);
+  });
 }
 
 /**
@@ -836,23 +837,19 @@ export async function syncPlugins({
 } = {}) {
   const provider = pluginProvider(agent);
   const warnings = [];
-  // Other devices, and 0.14.0 clients, reject a vault holding invalid JSON, so never publish an
-  // unreadable report of our own: drop it, and write a fresh one below when this device can.
+  // Older clients reject a vault holding invalid JSON, so an unreadable report of our own is
+  // replaced with a valid one: a fresh report, or the unavailable status when there is none.
   let ownReportUnreadable = false;
-  const previousState = await loadPluginState(vaultPath, deviceId, agent).catch(async () => {
-    await rm(pluginStatePath(vaultPath, deviceId, agent), { force: true });
+  const previousState = await loadPluginState(vaultPath, deviceId, agent).catch(() => {
     ownReportUnreadable = true;
     return null;
   });
+  const rewrote = `Rewrote this device's unreadable ${provider.label} plugin report`;
   const assignment = await loadPluginAssignment(vaultPath, deviceId, agent);
   if (!assignment) {
     if (!ownReportUnreadable) return null;
-    return {
-      provider: agent,
-      available: false,
-      errors: [`Removed this device's unreadable ${provider.label} plugin report`],
-      errorsChanged: true,
-    };
+    await publishPluginReport(vaultPath, unavailablePluginReport({ agent, deviceId }), { repairOnly: true });
+    return { provider: agent, available: false, errors: [rewrote], errorsChanged: true };
   }
   let profile = null;
   try {
@@ -884,7 +881,6 @@ export async function syncPlugins({
   const failed = new Map(Object.entries(local.failed)
     .filter(([selector, failure]) => failure?.profile_hash === profileHash && profile?.plugins.includes(selector)));
   const installErrors = [];
-  let freshInstall = false;
   if (profile && inspection.available) {
     const installed = new Set(inspection.installed.map((plugin) => plugin.selector));
     const missing = profile.plugins
@@ -896,16 +892,11 @@ export async function syncPlugins({
         failed.set(selector, { profile_hash: profileHash, reason });
         installErrors.push(`Could not install ${selector}; ${reason}`);
       }
-      freshInstall = true;
       inspection = await inspectPlugins({ agent, commandAvailable, runCommand, claudeConfigDir });
     }
   }
   for (const plugin of inspection.installed) failed.delete(plugin.selector);
-  if (ownReportUnreadable) {
-    warnings.push(inspection.available
-      ? `Rewrote this device's unreadable ${provider.label} plugin report`
-      : `Removed this device's unreadable ${provider.label} plugin report`);
-  }
+  if (ownReportUnreadable) warnings.push(rewrote);
 
   const nextLocal = {
     failed: Object.fromEntries(failed),
@@ -920,8 +911,12 @@ export async function syncPlugins({
     ...warnings,
   ])];
   if (!inspection.available) {
+    const unavailable = unavailablePluginReport({ agent, deviceId, assignment, profile });
+    // Keeps the last good report; only an unreadable one is replaced.
+    if (ownReportUnreadable) await publishPluginReport(vaultPath, unavailable, { repairOnly: true });
     return {
-      ...unavailablePluginStatus({ agent, deviceId, assignment, profile, previousState }),
+      ...(previousState || unavailable),
+      available: false,
       errors,
       failed: nextLocal.failed,
       errorsChanged,
@@ -935,9 +930,7 @@ export async function syncPlugins({
     profile,
     inspection,
   });
-  if (!isDeepStrictEqual(previousState, report)) {
-    await writeJson(pluginStatePath(vaultPath, deviceId, agent), report);
-  }
+  await publishPluginReport(vaultPath, report);
   const installed = new Set(inspection.installed.map(({ selector }) => selector));
   return {
     ...report,
@@ -950,7 +943,6 @@ export async function syncPlugins({
         marketplaces: Object.keys(profile.marketplaces)
           .filter((marketplace) => Object.hasOwn(inspection.marketplaces, marketplace)),
         plugins: profile.plugins.filter((selector) => installed.has(selector)),
-        freshInstall,
       },
     }),
   };

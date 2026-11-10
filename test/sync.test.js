@@ -107,12 +107,10 @@ test('malformed plugin reports from other devices do not stop skill sync, and ou
     await writeFile(file, '{"version": 3, "installed": [');
   }
 
-  await assert.rejects(() => checkVault(vaultPath, { deviceId }), /Invalid JSON: plugins\/state\/test-device\.json/);
   const result = await syncVault({ vaultPath, deviceId, pull: false, pushChanges: false });
 
   assert.equal(await readFile(path.join(targetPath, 'example', 'SKILL.md'), 'utf8'), '# Example\n');
-  assert.deepEqual(result.plugins.errors, ["Removed this device's unreadable Codex plugin report"]);
-  await assert.rejects(() => lstat(own), { code: 'ENOENT' });
+  assert.deepEqual(result.plugins.errors, ["Rewrote this device's unreadable Codex plugin report"]);
+  assert.equal(JSON.parse(await readFile(own, 'utf8')).device_id, deviceId);
   assert.equal(await readFile(foreign, 'utf8'), '{"version": 3, "installed": [');
-  await checkVault(vaultPath, { deviceId });
 });

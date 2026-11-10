@@ -919,6 +919,7 @@ test('plugins --agent claude manages Claude Code profiles and reports failed ins
 if [ "$1 $2 $3" = "plugin list --json" ]; then cat '${fixtures}/claude-plugin-list.json'; exit 0; fi
 if [ "$1 $2 $3 $4" = "plugin marketplace list --json" ]; then cat '${fixtures}/claude-marketplace-list.json'; exit 0; fi
 if [ "$1 $2" = "plugin install" ]; then echo 'install failed: TOKEN-123' >&2; exit 1; fi
+if [ "$1 $2 $3" = "plugin update vercel@anthropic-plugin-directory" ]; then exit 1; fi
 exit 0
 `, { mode: 0o755 });
   await writeFile(path.join(bin, 'codex'), `#!/bin/sh
@@ -967,11 +968,12 @@ printf '%s\\n' '{"installed":[]}'
 
   const reason = 'install or authenticate it from Claude Code /plugin';
   assert.match(synced.stderr, new RegExp(`Claude Code plugins: Could not install ${stripe}; ${reason}`));
+  assert.match(synced.stderr, /Claude Code plugins: Could not update vercel@anthropic-plugin-directory; update it from Claude Code \/plugin/);
   assert.doesNotMatch(synced.stderr + synced.stdout, /TOKEN-123/);
   assert.match(failedStatus.stdout, new RegExp(`macbook: shared \\(pending; 3 installed\\)\n  missing: ${stripe}\n  failed: ${stripe} \\(${reason}\\)\n`));
   assert.equal(removed.stdout, `Removed ${stripe} from Claude Code plugin profile shared. Devices will no longer install it.\n`);
   assert.match(repaired.stdout, /- shared: 3 plugins \(auto-adopt on\)\n  removed: stripe@anthropic-plugin-directory\n/);
-  assert.match(repaired.stdout, /macbook: shared \(applied; 3 installed\)\n$/);
+  assert.match(repaired.stdout, /macbook: shared \(applied; 3 installed\)\n  error: Could not update vercel@anthropic-plugin-directory/);
   assert.match((await cli('show', 'shared', '--agent', 'claude')).stdout, /\nremoved: stripe@anthropic-plugin-directory\n$/);
 
   // Reinstalling doesn't undo a removal; importing the plugin again does.

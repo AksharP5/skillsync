@@ -24,7 +24,7 @@ import { exists } from '../src/core/fs.js';
 import { commitAllIfChanged, git, gitPrivatePath, hashSyncedDirectory, ignoredGitPaths, pushWithPullRebaseRetry, run } from '../src/core/git.js';
 import { addSkillToVault, ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
-import { checkVault } from '../src/core/check.js';
+import { checkVault, checkVaultForPush } from '../src/core/check.js';
 import { assignPluginProfile, savePluginProfile } from '../src/core/plugins.js';
 
 async function tempDir() {
@@ -403,6 +403,29 @@ test('a sync that rebases keeps its plugin errors and tries a failed install onl
   assert.deepEqual(result.claudePlugins.errors, [
     `Could not install ${selector}; install or authenticate it from Claude Code /plugin`,
   ]);
+});
+
+test('a push never introduces an unreadable plugin report but tolerates one already upstream', async (t) => {
+  const root = await tempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const upstream = path.join(root, 'upstream');
+  const local = path.join(root, 'local');
+  const report = path.join('plugins', 'state', 'other.json');
+  await initializeVaultRepo(upstream);
+  await mkdir(path.join(upstream, 'plugins', 'state'), { recursive: true });
+  await writeFile(path.join(upstream, report), '{"installed": [');
+  await commitAllIfChanged(upstream, 'a newer client wrote this report');
+  await git(['clone', upstream, local]);
+  await configureUser(local);
+  await ensureVault(local);
+
+  await writeFile(path.join(local, 'notes.txt'), 'unrelated change\n');
+  await commitAllIfChanged(local, 'unrelated change');
+  await checkVaultForPush(local);
+
+  await writeFile(path.join(local, report), '{"installed": [{');
+  await commitAllIfChanged(local, 'damage the report');
+  await assert.rejects(() => checkVaultForPush(local), /Invalid JSON: plugins\/state\/other\.json/);
 });
 
 test('pushWithPullRebaseRetry stops after a second push rejection', async (t) => {

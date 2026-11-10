@@ -131,9 +131,7 @@ test('a Claude plugin installed on one device reaches the others without touchin
 
   const vps = fakeClaude({ plugins: ['vercel@anthropic-plugin-directory'] });
   const state = await syncPlugins({ vaultPath: vpsVault, deviceId: 'vps', agent: 'claude', ...vps, claudeConfigDir });
-  await updatePlugins({ vaultPath: vpsVault, agent: 'claude', targets: state.updateTargets, runCommand: vps.runCommand });
 
-  // Plugins installed by this sync are current, so the daily update waits.
   assert.deepEqual(changes(vps.calls), [
     'plugin marketplace add heygen-com/hyperframes --json',
     'plugin install hyperframes@hyperframes --scope user --json',
@@ -186,6 +184,22 @@ test('Claude plugins update through the claude CLI at most once a day and report
   assert.deepEqual(sameDay, { result: null, calls: [] });
   assert.deepEqual(errorsDuringTheDay, first.result.errors);
   assert.deepEqual(nextDay.calls, first.calls);
+});
+
+test('a plugin update stops at its time limit and never runs twice at once', async (t) => {
+  const vaultPath = await tempDir(t);
+  const targets = { marketplaces: ['hyperframes'], plugins: ['hyperframes@hyperframes'] };
+  let nested;
+  const runCommand = async () => {
+    nested ??= await updatePlugins({ vaultPath, agent: 'claude', targets, runCommand });
+    return { stdout: '{}' };
+  };
+
+  const timedOut = await updatePlugins({ vaultPath, agent: 'claude', targets, runCommand, deadlineMs: 0 });
+  await updatePlugins({ vaultPath, agent: 'claude', targets, runCommand, now: Date.now() + DAY });
+
+  assert.deepEqual(timedOut.errors, ['Stopped updating Claude Code plugins at the time limit; the rest update next time']);
+  assert.equal(nested, null);
 });
 
 test('installed plugins from local marketplaces are never reinstalled, and source conflicts are reported', async (t) => {
@@ -320,7 +334,10 @@ test('plugin updates run after skill sync releases the apply lock', async (t) =>
   const vaultPath = await tempDir(t);
   await savePluginProfile({ vaultPath, name: 'shared', plugins: ['vercel@anthropic-plugin-directory'], agent: 'claude' });
   await assignPluginProfile({ vaultPath, deviceId: 'vps', profile: 'shared', agent: 'claude' });
-  const claude = fakeClaude({ plugins: ['vercel@anthropic-plugin-directory'] });
+  const claude = fakeClaude({
+    plugins: ['vercel@anthropic-plugin-directory'],
+    fail: (call) => (call.startsWith('plugin update') ? new Error('network down') : null),
+  });
   let applyDuringUpdate;
   const runCommand = async (command, args) => {
     if (args[1] === 'update') {
@@ -331,7 +348,7 @@ test('plugin updates run after skill sync releases the apply lock', async (t) =>
     return claude.runCommand(command, args);
   };
 
-  await syncVault({
+  const sync = () => syncVault({
     vaultPath,
     deviceId: 'vps',
     pull: false,
@@ -340,7 +357,47 @@ test('plugin updates run after skill sync releases the apply lock', async (t) =>
     pluginCommands: { commandAvailable: async (command) => command === 'claude', runCommand },
   });
 
+  const result = await sync();
+  // The sync has already pushed by the time updates run, so a broken update step only reports.
+  await rm(path.join(vaultPath, '.skillsync-local', 'plugins', 'claude-update'), { recursive: true });
+  await writeFile(path.join(vaultPath, '.skillsync-local', 'plugins', 'claude-update'), 'not a directory');
+  const broken = await sync();
+
   assert.equal(applyDuringUpdate, 'ran');
+  assert.deepEqual(result.claudePlugins.errors, [
+    'Could not update vercel@anthropic-plugin-directory; update it from Claude Code /plugin',
+  ]);
+  assert.match(broken.claudePlugins.errors.join('\n'), /Could not run the daily plugin update/);
+});
+
+test("an unreadable report of this device's own is replaced through the report writer, never deleted", async (t) => {
+  const vaultPath = await tempDir(t);
+  await savePluginProfile({ vaultPath, name: 'shared', plugins: ['vercel@anthropic-plugin-directory'], agent: 'claude' });
+  await assignPluginProfile({ vaultPath, deviceId: 'vps', profile: 'shared', agent: 'claude' });
+  const reportPath = pluginStatePath(vaultPath, 'vps', 'claude');
+  const corrupt = () => mkdir(path.dirname(reportPath), { recursive: true }).then(() => writeFile(reportPath, '{'));
+  const sync = (options) => syncPlugins({ vaultPath, deviceId: 'vps', agent: 'claude', ...options });
+
+  await corrupt();
+  const unavailable = await sync({ commandAvailable: async () => false });
+  const unavailableReport = await loadPluginState(vaultPath, 'vps', 'claude');
+  await corrupt();
+  const replacement = { version: 1, device_id: 'vps', provider: 'claude', installed: [] };
+  // Another writer replaces the report after this sync read it.
+  await sync({ commandAvailable: async () => {
+    await writeFile(reportPath, JSON.stringify(replacement));
+    return false;
+  } });
+  const afterConcurrentWrite = await loadPluginState(vaultPath, 'vps', 'claude');
+  await corrupt();
+  const available = await sync(fakeClaude({ plugins: ['vercel@anthropic-plugin-directory'] }));
+
+  assert.deepEqual(unavailable.errors, ['Claude Code CLI is not installed', "Rewrote this device's unreadable Claude Code plugin report"]);
+  assert.deepEqual(unavailableReport.missing, ['vercel@anthropic-plugin-directory']);
+  assert.equal(unavailableReport.applied_profile, null);
+  assert.deepEqual(afterConcurrentWrite, replacement);
+  assert.equal(available.applied_profile, 'shared');
+  assert.equal((await loadPluginState(vaultPath, 'vps', 'claude')).applied_profile, 'shared');
 });
 
 test('Claude plugin sync never runs claude without an assignment or the claude binary', async (t) => {

@@ -3,7 +3,7 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assertSafePathSegment } from './fs.js';
-import { pluginReportDevice } from './plugins.js';
+import { isPluginReportPath } from './plugins.js';
 import { git, hashSyncedDirectory, ignoredGitPaths, isGitRepo } from './git.js';
 
 const GIT_ENTRY = '.git';
@@ -177,11 +177,7 @@ function validateNamedJsonFiles(entries, directory, label, errors) {
   }
 }
 
-/**
- * Pass `deviceId` to validate that device's own plugin reports too; other devices' reports are
- * never required to parse, since one bad report must not stop every device's sync.
- */
-export async function checkVault(vaultPath, { verifyRegistry = true, deviceId } = {}) {
+export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
   const root = path.resolve(vaultPath);
   const rootInfo = await pathInfo(root);
   if (!rootInfo?.isDirectory()) {
@@ -193,10 +189,9 @@ export async function checkVault(vaultPath, { verifyRegistry = true, deviceId } 
   const inspected = await inspectTree(root, {
     ignoreRootEntries: new Set([GIT_ENTRY, LOCAL_STATE_ENTRY]),
     rejectOwnershipMarkers: true,
-    untrustedJson: (relative) => {
-      const owner = pluginReportDevice(relative);
-      return owner !== null && owner !== deviceId;
-    },
+    // One device's malformed plugin report must not stop every device's sync.
+    // checkPendingGitHistory still keeps a push from introducing one.
+    untrustedJson: isPluginReportPath,
   });
   const errors = [...inspected.errors];
   if (gitBacked && localState) {
@@ -306,12 +301,25 @@ export async function checkPendingGitHistory(vaultPath) {
     '.',
   ], root);
   const errors = inspectAddedPatchLines(patch);
+  // Older clients reject a vault holding any invalid JSON. Reads tolerate a bad plugin report that
+  // is already upstream, but this push must not add or change one.
+  const { stdout: changed } = hasUpstream
+    ? await git(['diff', '--name-only', '--no-renames', '--diff-filter=d', '-z', '@{u}', 'HEAD', '--'], root)
+    : await git(['ls-tree', '-r', '--name-only', '-z', 'HEAD'], root);
+  for (const file of changed.split('\0').filter(isPluginReportPath)) {
+    const { stdout: content } = await git(['show', `HEAD:${file}`], root);
+    try {
+      JSON.parse(content);
+    } catch {
+      errors.push(`Invalid JSON: ${file}`);
+    }
+  }
   if (errors.length) throw validationError('Pending Git history check', errors);
   return { commits };
 }
 
-export async function checkVaultForPush(vaultPath, { deviceId } = {}) {
-  const vault = await checkVault(vaultPath, { deviceId });
+export async function checkVaultForPush(vaultPath) {
+  const vault = await checkVault(vaultPath);
   const history = await checkPendingGitHistory(vaultPath);
   return { ...vault, pendingCommits: history.commits };
 }

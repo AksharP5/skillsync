@@ -289,7 +289,7 @@ async function sync({
             vaultPath, deviceId, detected: scanned.detected, inventoryRevision,
           }));
         }
-        await checkVault(vaultPath, { deviceId });
+        await checkVault(vaultPath);
         await markDeviceApplied({
           vaultPath, deviceId, detected: scanned.detected, generation: preparedPlan.generation, inventoryRevision,
         });
@@ -302,7 +302,7 @@ async function sync({
   let pushed = false;
   let rebasedBeforePush = false;
   if (pushChanges && await isGitRepo(vaultPath)) {
-    await checkVault(vaultPath, { deviceId });
+    await checkVault(vaultPath);
     const commitMessage = `sync: update skills from ${deviceId || 'device'}`;
     committed = await commitAllIfChanged(vaultPath, commitMessage);
     if (committed || await hasLocalCommitsToPush(vaultPath)) {
@@ -313,17 +313,18 @@ async function sync({
           await reconcileLocalState();
           committed = await commitAllIfChanged(vaultPath, commitMessage) || committed;
         },
-        beforePush: () => checkVaultForPush(vaultPath, { deviceId }),
+        beforePush: () => checkVaultForPush(vaultPath),
       });
       pushed = pushResult.pushed;
       rebasedBeforePush = pushResult.rebased;
     }
   }
   // Plugin updates can take minutes, so they run after skill sync has released the apply lock.
+  // The sync has already pushed, so an update failure is reported, never thrown.
   for (const [key, agent] of runPluginUpdates && deviceId ? PLUGIN_RESULTS : []) {
     const update = await updatePlugins({
       vaultPath, agent, targets: result[key]?.updateTargets, runCommand: pluginCommands.runCommand,
-    });
+    }).catch((error) => ({ errors: [`Could not run the daily plugin update: ${error.message}`], errorsChanged: true }));
     if (update) result[key] = mergePluginResults(result[key], { ...result[key], ...update });
   }
   return {
