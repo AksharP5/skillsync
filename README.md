@@ -521,7 +521,7 @@ SkillSync checks every destination before applying the plan. It backs up changed
 skillsync sync --discard-local-changes
 ```
 
-Directory hashes include file lengths so binary content cannot be mistaken for file boundaries. The next sync upgrades registry hashes and refreshes unchanged copies once. Existing copy hashes are verified before replacement, preserving their recorded content and executable-permission protection. Copies predating permission tracking retain only content protection during this refresh, which applies the vault's executable bits. Upgrade every device to prevent older versions from restoring old hashes.
+Directory hashes include file lengths so binary content cannot be mistaken for file boundaries. Registry entries move to these hashes when a skill changes; unchanged entries keep their existing hash, as described in [Upgrade](#upgrade). The next sync refreshes unchanged copies once. Existing copy hashes are verified before replacement, preserving their recorded content and executable-permission protection. Copies predating permission tracking retain only content protection during this refresh, which applies the vault's executable bits.
 
 Copy-mode updates, removal, and rollback support read-only skill directories, including the skill root. Deployed copies and retained backups preserve their directory modes.
 
@@ -580,6 +580,29 @@ Verify it on Linux:
 ```bash
 systemctl --user status skillsync.service --no-pager
 ```
+
+## Upgrade
+
+SkillSync needs Node.js `^20.17.0 || ^22.13.0 || >=23.5.0`. Releases up to 0.14.0 accepted any Node.js 20 or newer, so check `node --version` on older devices before upgrading them. Upgrade one device at a time:
+
+1. Stop the background service so an older daemon never writes alongside the new version and its locks: `systemctl --user stop skillsync.service` on Linux, or `launchctl bootout gui/$(id -u)/dev.skillsync.daemon` on macOS.
+2. Back up this device's private state, for example `cp -a ~/.skillsync/repo/.git/skillsync ~/skillsync-private-backup` for the default vault path.
+3. Install the new version, then run `skillsync sync --dry-run` and `skillsync sync`.
+4. Start the service again with `systemctl --user start skillsync.service` on Linux, or `skillsync service install` on macOS.
+
+The first sync after upgrading from 0.14.0 or older moves the private device state in `.git/skillsync/local/devices/<device>.json` to version 2. Older releases refuse it with `Unsupported local device path state version: 2` and change nothing. Upgraded versions also record a newer hash format in each managed copy's `.skillsync-owned.json`. Older releases read that as a local change and refuse to sync with `Managed copy has local changes`, so rolling back also replaces managed copies from the vault. Symlink targets are not affected. To roll back:
+
+1. With the new version still installed, run `skillsync sync` and do not continue until it succeeds. Step 4 replaces every managed copy, so any edit still sitting in a copy would be lost. If sync stops with `Managed copy has local changes`, it names only the first edited copy: save that copy somewhere outside its target, apply its edits to the skill in the vault, then run `skillsync sync` again. Repeat until it succeeds. Never use `--discard-local-changes` in this step.
+2. Stop the service and reinstall the older version.
+3. Restore the backed-up `.git/skillsync` folder. Without a backup, set `"version"` in `.git/skillsync/local/devices/<device>.json` back to `1` instead.
+4. Run `skillsync sync --discard-local-changes`, then `skillsync sync`, which should report no changes.
+5. Start the service again.
+
+Devices on 0.14.0 can keep sharing a vault with upgraded devices. Upgraded devices keep each unchanged skill's existing `sha256:` registry hash. A skill added or changed on an upgraded device gets a `sha256-v2:` hash, which an older device rewrites once to its own format. Upgraded devices never convert a `sha256-v2:` entry back to `sha256:`. After a 0.14.0 device rewrites one, upgraded devices keep that `sha256:` hash.
+
+Right after an upgraded device pushes such a change, a 0.14.0 device that was pushing at the same time can fail one sync with `Registry hash is stale`. Its next cycle pulls, rewrites the entry, and succeeds.
+
+An upgraded device trusts a `sha256:` entry while the skill's legacy hash still matches, which is the same guarantee 0.14.0 gives. That hash cannot tell a NUL byte inside a file from a boundary between two files, so a specially crafted change to files containing NUL bytes can keep an old registry hash. On upgraded devices this affects only `skillsync check` and the registry timestamp, never what gets synced or installed: skill files travel through Git, and managed copies are compared using the current hash format. A 0.14.0 device compares its own managed copies with the old format, so such a change can leave its copy stale until the skill changes again, as it could before this release.
 
 ## Command reference
 
