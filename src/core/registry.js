@@ -16,7 +16,6 @@ import {
   readSkillName,
   removePath,
   writeJson,
-  writePrivateJson,
 } from './fs.js';
 
 export const REGISTRY_FILE = 'registry.json';
@@ -238,16 +237,14 @@ export async function addSkillToVault({ vaultPath, sourcePath, name, overwrite =
 export async function ensureSkillInRegistry(vaultPath, skillName) {
   assertSafePathSegment(skillName, 'Skill name');
   const registry = await loadRegistry(vaultPath);
-  const fingerprints = await loadFingerprints(vaultPath);
   const previous = registry.skills[skillName];
-  const entry = await matchingLegacyEntry(vaultPath, skillName, previous, fingerprints.skills)
+  const entry = await matchingLegacyEntry(vaultPath, skillName, previous)
     ?? await registryEntryForSkill(vaultPath, skillName);
   if (previous?.path === entry.path && previous.hash === entry.hash && previous.updated_at) {
     return previous;
   }
   registry.skills[skillName] = entry;
   await saveRegistry(vaultPath, registry);
-  await saveFingerprints(vaultPath, fingerprints);
   return registry.skills[skillName];
 }
 
@@ -262,51 +259,20 @@ export async function registryEntryForSkill(vaultPath, skillName, ignoredPaths) 
   };
 }
 
-async function fingerprintsPath(vaultPath) {
-  return await gitPrivatePath(vaultPath, 'registry-fingerprints.json')
-    || path.join(vaultPath, '.skillsync-local', 'registry-fingerprints.json');
-}
-
-// This device's last observed {legacy, v2} hashes per skill. It is private and never synced.
-async function loadFingerprints(vaultPath) {
-  const saved = await readJson(await fingerprintsPath(vaultPath), null).catch((error) => {
-    // A damaged cache only means every legacy entry is observed again for the first time.
-    if (error instanceof SyntaxError) return null;
-    throw error;
-  });
-  const skills = saved?.version === 1 && saved.skills && typeof saved.skills === 'object'
-    && !Array.isArray(saved.skills) ? saved.skills : {};
-  return { saved: skills, skills: { ...skills } };
-}
-
-// Save only after the registry, so a failed registry write cannot hide a detected change.
-async function saveFingerprints(vaultPath, fingerprints) {
-  if (isDeepStrictEqual(fingerprints.saved, fingerprints.skills)) return;
-  await writePrivateJson(await fingerprintsPath(vaultPath), { version: 1, skills: fingerprints.skills });
-}
-
-// Releases up to 0.14.0 write legacy `sha256:` hashes and replace any other format, so an
-// upgraded device keeps a legacy entry while its content is unchanged. Legacy hashes cannot
-// tell NUL bytes from file boundaries, so the entry is also replaced when the v2 hash this device
-// last saw for the same legacy hash has changed. A collision made before this device first
-// observes the skill stays undetected, as it does on 0.14.0.
-async function matchingLegacyEntry(vaultPath, skillName, previous, fingerprints, ignoredPaths) {
+// Releases up to 0.14.0 write legacy `sha256:` hashes and replace any other format. Keeping a
+// legacy entry while its legacy hash still matches lets mixed-version devices share a vault
+// without rewriting each other's entries. Like 0.14.0, this trusts the legacy hash, which cannot
+// tell NUL bytes inside a file from a boundary between two files.
+async function matchingLegacyEntry(vaultPath, skillName, previous, ignoredPaths) {
   const relativePath = path.posix.join('skills', skillName);
   if (previous?.path !== relativePath || !previous.updated_at
     || typeof previous.hash !== 'string' || !previous.hash.startsWith('sha256:')) return null;
   await validateSkillFolder(path.join(vaultPath, relativePath));
-  const ignored = ignoredPaths ?? await ignoredGitPaths(vaultPath);
-  const [legacy, current] = await Promise.all([
-    hashSyncedDirectory(vaultPath, relativePath, ignored, { legacy: true }),
-    hashSyncedDirectory(vaultPath, relativePath, ignored),
-  ]);
-  const seen = fingerprints[skillName];
-  fingerprints[skillName] = { legacy, v2: current };
-  if (legacy !== previous.hash || (seen?.legacy === legacy && seen.v2 !== current)) return null;
-  return { path: relativePath, hash: legacy, updated_at: previous.updated_at };
+  const hash = await hashSyncedDirectory(vaultPath, relativePath, ignoredPaths, { legacy: true });
+  return hash === previous.hash ? { path: relativePath, hash, updated_at: previous.updated_at } : null;
 }
 
-export async function buildRegistry(vaultPath, previousSkills = {}, fingerprints = {}) {
+export async function buildRegistry(vaultPath, previousSkills = {}) {
   const skillsDir = path.join(vaultPath, 'skills');
   const entries = await readdir(skillsDir, { withFileTypes: true });
   const registry = emptyRegistry();
@@ -315,26 +281,21 @@ export async function buildRegistry(vaultPath, previousSkills = {}, fingerprints
     if (!entry.isDirectory()) continue;
     const skillName = assertSafePathSegment(entry.name, 'Skill name');
     if (!await exists(path.join(skillsDir, skillName, 'SKILL.md'))) continue;
-    registry.skills[skillName] = await matchingLegacyEntry(
-      vaultPath, skillName, previousSkills[skillName], fingerprints, ignoredPaths,
-    ) ?? await registryEntryForSkill(vaultPath, skillName, ignoredPaths);
-  }
-  for (const name of Object.keys(fingerprints)) {
-    if (!Object.hasOwn(registry.skills, name)) delete fingerprints[name];
+    registry.skills[skillName] = await matchingLegacyEntry(vaultPath, skillName, previousSkills[skillName], ignoredPaths)
+      ?? await registryEntryForSkill(vaultPath, skillName, ignoredPaths);
   }
   return registry;
 }
 
-async function buildFromExisting(vaultPath, before) {
-  const fingerprints = await loadFingerprints(vaultPath);
-  const after = await buildRegistry(vaultPath, before?.skills ?? {}, fingerprints.skills);
+async function buildFromPrevious(vaultPath, before) {
+  const after = await buildRegistry(vaultPath, before?.skills ?? {});
   for (const [name, entry] of Object.entries(after.skills)) {
     const previous = before?.skills?.[name];
     if (previous?.hash === entry.hash && previous.updated_at) {
       after.skills[name].updated_at = previous.updated_at;
     }
   }
-  return { after, fingerprints };
+  return after;
 }
 
 export async function rebuildRegistry(vaultPath) {
@@ -344,18 +305,16 @@ export async function rebuildRegistry(vaultPath) {
     if (error instanceof SyntaxError) return null;
     throw error;
   });
-  const { after, fingerprints } = await buildFromExisting(vaultPath, before);
-  await saveRegistry(vaultPath, after);
-  await saveFingerprints(vaultPath, fingerprints);
-  return after;
+  const registry = await buildFromPrevious(vaultPath, before);
+  await saveRegistry(vaultPath, registry);
+  return registry;
 }
 
 export async function refreshChangedRegistryEntries(vaultPath) {
   await ensureVault(vaultPath);
   const before = await readJson(path.join(vaultPath, REGISTRY_FILE), emptyRegistry());
-  const { after, fingerprints } = await buildFromExisting(vaultPath, before);
+  const after = await buildFromPrevious(vaultPath, before);
   if (!isDeepStrictEqual(before, after)) await saveRegistry(vaultPath, after);
-  await saveFingerprints(vaultPath, fingerprints);
   return after;
 }
 

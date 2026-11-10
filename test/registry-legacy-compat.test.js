@@ -111,22 +111,17 @@ test('repeated identical adds and rebuilds leave a committed 0.14.0 registry cle
   assert.equal((await git('status', '--porcelain')).stdout, '');
 });
 
-test('a legacy hash collision is written as v2 by sync and settles after one 0.14.0 rewrite', async (t) => {
+// Accepted trade-off, documented in the README: like 0.14.0, a matching legacy hash is trusted.
+// Changing this needs a design decision, not a drive-by fix.
+test('a NUL-framing collision keeps the legacy entry, as on 0.14.0', async (t) => {
   const { vaultPath, folder, registryPath, saved } = await legacyVault(t, JOINED, JOINED_HASH);
   await sync(vaultPath);
-  await assertUntouched(registryPath, saved);
 
   await writeFile(path.join(folder, 'a'), 'x');
   await writeFile(path.join(folder, 'b'), 'y');
-  assert.equal(await hashDirectory(folder, { legacy: true }), JOINED_HASH);
   await sync(vaultPath);
-  const upgraded = (await readJson(registryPath)).skills.example;
-  assert.match(upgraded.hash, /^sha256-v2:/);
-  assert.notEqual(upgraded.updated_at, '2026-01-01T00:00:00.000Z');
-
-  const rewritten = await writeLegacyRegistry(registryPath, JOINED_HASH, '2026-02-01T00:00:00.000Z');
-  for (let round = 0; round < 3; round += 1) await sync(vaultPath);
-  await assertUntouched(registryPath, rewritten);
+  await checkVault(vaultPath);
+  await assertUntouched(registryPath, saved);
 });
 
 test('changed skills move to v2, stay v2, and settle after one 0.14.0 rewrite', async (t) => {
@@ -157,14 +152,3 @@ test('an entry a 0.14.0 device rewrote after editing the skill is kept', async (
   await sync(vaultPath);
   await assertUntouched(registryPath, edited);
 });
-
-for (const [label, content] of [['truncated', '{'], ['empty', ''], ['an array', '[]']]) {
-  test(`sync treats a fingerprint cache that is ${label} as empty`, async (t) => {
-    const { vaultPath, registryPath, saved } = await legacyVault(t, EXAMPLE, EXAMPLE_HASH);
-    await mkdir(path.join(vaultPath, '.skillsync-local'), { recursive: true });
-    await writeFile(path.join(vaultPath, '.skillsync-local', 'registry-fingerprints.json'), content);
-
-    await sync(vaultPath);
-    await assertUntouched(registryPath, saved);
-  });
-}

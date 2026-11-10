@@ -596,7 +596,7 @@ Devices on 0.14.0 can keep sharing a vault with upgraded devices. Upgraded devic
 
 Right after an upgraded device pushes such a change, a 0.14.0 device that was pushing at the same time can fail one sync with `Registry hash is stale`. Its next cycle pulls, rewrites the entry, and succeeds.
 
-`sha256:` hashes cannot tell a NUL byte inside a file from a boundary between two files. Each upgraded device remembers the `sha256-v2:` hash it last saw for every `sha256:` entry, in private Git metadata that is never synced, and writes `sha256-v2:` when that changes behind an unchanged `sha256:` hash. A change made before a device first sees the skill, for example while every device ran 0.14.0, stays undetected until the skill changes again, as it does on 0.14.0.
+An upgraded device trusts a `sha256:` entry while the skill's legacy hash still matches, which is the same guarantee 0.14.0 gives. That hash cannot tell a NUL byte inside a file from a boundary between two files, so a specially crafted change to files containing NUL bytes can keep an old registry hash. This affects only `skillsync check` and the registry timestamp, never what gets synced or installed: skill files travel through Git, and copies are compared using the current hash format.
 
 ## Command reference
 
