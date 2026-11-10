@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { exists, readSkillName } from './fs.js';
 import { git } from './git.js';
+import { vendorOfFolder } from './vendor.js';
 
 const OWNER_REPO = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*(?:#.+)?$/;
 
@@ -69,7 +70,7 @@ export async function cloneSkillSource(rawSource) {
   }
 }
 
-export async function discoverSkillFolders(root, { fullDepth = false } = {}) {
+export async function discoverSkillFolders(root, { fullDepth = false, skipVendor = false } = {}) {
   const results = [];
 
   async function walk(dir, relative = '.') {
@@ -83,6 +84,7 @@ export async function discoverSkillFolders(root, { fullDepth = false } = {}) {
       if (error.code === 'ENOENT') return [];
       throw error;
     });
+    if (skipVendor && relative !== '.' && vendorOfFolder(dir, entries)) return;
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       await walk(path.join(dir, entry.name), relative === '.' ? entry.name : path.posix.join(relative, entry.name));

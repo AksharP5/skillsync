@@ -38,6 +38,7 @@ import {
   rollbackFilesystemBackup,
   rollbackLatestFilesystemBackup,
 } from './transaction.js';
+import { VENDORS, vendorOfFolder } from './vendor.js';
 
 const LOCAL_PATH_STATE_VERSION = 2;
 const OWNERSHIP_MARKER = '.skillsync-owned.json';
@@ -129,6 +130,7 @@ function normalizeLocalDetected(detected) {
         name: skill.name,
         path: skill.path,
         in_vault: Boolean(skill.in_vault),
+        ...(VENDORS.has(skill.vendor) ? { vendor: skill.vendor } : {}),
       };
     });
   }
@@ -1424,7 +1426,7 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
     const canonicalInstallRoot = await realpath(installRoot).catch(() => installRoot);
 
     for (const skill of skills) {
-      if (previousKeys.has(detectedSkillKey(skill))) continue;
+      if (skill.vendor || previousKeys.has(detectedSkillKey(skill))) continue;
       const scannedPath = path.resolve(scanRoot, skill.path || '.');
       const physicalScanPath = path.resolve(canonicalScanRoot, skill.path || '.');
       const sourcePath = path.join(installRoot, skill.name);
@@ -1527,6 +1529,7 @@ export async function inspectTargets({ vaultPath, deviceId = defaultDeviceId() }
         in_vault: skill.in_vault,
         managed: await isManagedSkillPath({ vaultPath, device, targetName, skill }),
         new: !previous.has(detectedSkillKey(skill)),
+        ...(skill.vendor ? { vendor: skill.vendor } : {}),
       });
     }
   }
@@ -1549,7 +1552,8 @@ async function findLocalSkills(scanPath, vaultPath) {
   const ancestors = new Set();
   const skills = [];
 
-  async function walk(current) {
+  // `vendor` is inherited from the nearest plugin bundle or Claude sync bucket above `current`.
+  async function walk(current, vendor) {
     let canonical;
     try {
       canonical = await realpath(current);
@@ -1559,19 +1563,17 @@ async function findLocalSkills(scanPath, vaultPath) {
     if (ancestors.has(canonical)) return;
 
     if (await exists(path.join(current, 'SKILL.md'))) {
-      let name;
-      if (path.dirname(canonical) === vaultSkills) {
-        name = path.basename(canonical);
-      } else {
-        const marker = (await lstat(current)).isDirectory()
-          ? await ownedCopyMarker(current, vaultPath)
-          : null;
-        name = marker?.skill || await readSkillName(current);
-      }
+      const linked = path.dirname(canonical) === vaultSkills;
+      const marker = !linked && (await lstat(current)).isDirectory()
+        ? await ownedCopyMarker(current, vaultPath)
+        : null;
+      const name = linked ? path.basename(canonical) : marker?.skill || await readSkillName(current);
       assertSafePathSegment(name, `Detected skill name at ${current}`);
       skills.push({
         name,
         path: path.relative(root, current).split(path.sep).join(path.posix.sep) || '.',
+        // SkillSync's own projections are never vendor skills, wherever they live.
+        ...(vendor && !linked && !marker ? { vendor } : {}),
       });
       return;
     }
@@ -1579,11 +1581,12 @@ async function findLocalSkills(scanPath, vaultPath) {
     // Stop cycles without hiding distinct paths to the same skill.
     ancestors.add(canonical);
     const entries = await readdir(current, { withFileTypes: true });
+    const childVendor = vendor ?? (current === root ? undefined : vendorOfFolder(current, entries));
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       const child = path.join(current, entry.name);
       if (entry.isDirectory() || await symlinkedDirectory(child, entry)) {
-        await walk(child);
+        await walk(child, childVendor);
       }
     }
     ancestors.delete(canonical);

@@ -319,6 +319,13 @@ Repeating `add` for unchanged content with the same targets preserves its regist
 
 Managed links and copies are detected by their vault name, even when `SKILL.md` retains the source name. Unmanaged folders still use `SKILL.md` frontmatter when present.
 
+Some skills in agent folders belong to the agent itself. SkillSync still detects them, so a vault copy of one stays protected from unassigned-skill cleanup, but it never offers to import, adopt, replace or remove them. `skillsync scan` labels them as not offered. Vendor skills are those below one of these folders:
+
+- A plugin bundle: a folder without its own `SKILL.md` that contains a `.claude-plugin` or `.codex-plugin` directory. A folder with `SKILL.md` is always an ordinary skill, and the scan path itself is never treated as a bundle.
+- A Claude Code account-sync bucket: a folder named `<uuid>_<uuid>` inside a folder named `synced`, holding a `manifest.json` file.
+
+SkillSync's own links and copies are never vendor skills. Adding a Git source with `skillsync add` still finds skills inside plugin bundles.
+
 Detected names must satisfy the vault's skill-name rules. An invalid name stops the scan before it replaces the last valid inventory. Correct the reported folder name or `SKILL.md` name, then scan again.
 
 ## Automatic skill adoption
