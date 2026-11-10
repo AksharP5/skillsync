@@ -201,4 +201,6 @@ test('agent imports skip vendor skills while Git sources still see them', async 
   assert.deepEqual(names(await discoverSkillFolders(claudeSkills)), [
     'claude-plugin-skill', 'codex-plugin-skill', 'nested', 'personal', 'single', 'synced-skill',
   ]);
+  await makePluginManifest(claudeSkills, 'claude', 'marketplace.json');
+  assert.deepEqual(names(await discoverSkillFolders(claudeSkills, { skipVendor: true })), ['nested', 'personal', 'single']);
 });

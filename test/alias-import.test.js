@@ -114,7 +114,7 @@ test('agent import skips skills inside plugin bundles', async (t) => {
   assert.deepEqual(Object.keys((await loadRegistry(vaultPath)).skills), ['demo']);
 });
 
-test('local skill lists do not offer plugin skills as local copies', async (t) => {
+test('local skill lists and scans do not offer plugin skills as local copies', async (t) => {
   const { root, targetPath, vaultPath, options, cli } = await fixture(t, { alias: false });
   await makePluginBundle(targetPath);
   await makeSkill(path.join(root, 'source', 'gh-fix-ci'), '---\nname: gh-fix-ci\n---\n');
@@ -124,6 +124,7 @@ test('local skill lists do not offer plugin skills as local copies', async (t) =
   const { stdout } = await cli(['list']);
 
   assert.match(stdout, /^○ gh-fix-ci$/m);
+  assert.match((await cli(['scan'])).stdout, /^- gh-fix-ci \[codex, plugin, not offered\]$/m);
 });
 
 for (const missing of ['leaf', 'root']) {
