@@ -2201,6 +2201,21 @@ test('deleteSkillFromVault reports whether it removed a folder or registry entry
   assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'folder-only' }), false);
 });
 
+test('deleteSkillFromVault leaves a folder whose name differs only by case', async (t) => {
+  const vault = path.join(await tempDir(), 'vault');
+  await makeSkill(path.join(vault, 'skills'), 'demo');
+  await rebuildRegistry(vault);
+  // Runs where lookups ignore case, such as the default macOS filesystem.
+  if (!await lstat(path.join(vault, 'skills', 'Demo')).then(() => true, () => false)) {
+    t.skip('filesystem is case-sensitive');
+    return;
+  }
+
+  assert.equal(await deleteSkillFromVault({ vaultPath: vault, skillName: 'Demo' }), false);
+  assert.equal(await readFile(path.join(vault, 'skills', 'demo', 'SKILL.md'), 'utf8'), '# Skill\n');
+  assert.ok((await loadRegistry(vault)).skills.demo);
+});
+
 test('path-like skill names and device IDs are rejected before filesystem access', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
