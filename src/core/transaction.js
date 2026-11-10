@@ -101,8 +101,27 @@ function validateOperations(operations, roots) {
   }
 }
 
-function backupId() {
-  return `${new Date().toISOString().replace(/[-:.TZ]/g, '')}-${randomUUID()}`;
+async function readBackupIds(deviceRoot) {
+  const entries = await readdir(deviceRoot, { withFileTypes: true }).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+async function backupId(deviceRoot) {
+  let time = Date.now();
+  for (const id of await readBackupIds(deviceRoot)) {
+    const parts = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3})-/.exec(id);
+    if (!parts) continue;
+    const [, year, month, day, hour, minute, second, millisecond] = parts;
+    const previous = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}Z`);
+    if (Number.isFinite(previous)) time = Math.max(time, previous + 1);
+  }
+  // Keep creation order even when the wall clock moves backward.
+  const timestamp = new Date(time).toISOString().replace(/[-:.TZ]/g, '');
+  if (timestamp.length !== 17) throw new Error('Backup history timestamps cannot be advanced');
+  return `${timestamp}-${randomUUID()}`;
 }
 
 async function captureEntry(destination, backupPath, index) {
@@ -129,8 +148,8 @@ async function captureEntry(destination, backupPath, index) {
 }
 
 async function createBackup(root, deviceId, roots, operations) {
-  const id = backupId();
   const deviceRoot = path.join(root, 'backups', assertSafePathSegment(deviceId, 'Device ID'));
+  const id = await backupId(deviceRoot);
   const backupPath = path.join(deviceRoot, id);
   await mkdir(backupPath, { recursive: true, mode: 0o700 });
   const entries = [];
@@ -317,13 +336,8 @@ async function recoverInterrupted(root, allowedRoots) {
 
 async function pruneBackups(root, deviceId, activeBackupId) {
   const deviceRoot = path.join(root, 'backups', deviceId);
-  const entries = await readdir(deviceRoot, { withFileTypes: true }).catch((error) => {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  });
-  const old = entries
-    .filter((entry) => entry.isDirectory() && entry.name !== activeBackupId)
-    .map((entry) => entry.name)
+  const old = (await readBackupIds(deviceRoot))
+    .filter((id) => id !== activeBackupId)
     .sort()
     .reverse()
     .slice(BACKUP_LIMIT - 1);
@@ -451,28 +465,23 @@ export async function rollbackLatestFilesystemBackup({ vaultPath, deviceId, root
   const root = await transactionRoot(vaultPath);
   return withLock(root, allowedRoots, async () => {
     const deviceRoot = path.join(root, 'backups', assertSafePathSegment(deviceId, 'Device ID'));
-    const entries = await readdir(deviceRoot, { withFileTypes: true }).catch((error) => {
-      if (error.code === 'ENOENT') return [];
-      throw error;
-    });
-    for (const entry of entries
-      .filter((candidate) => candidate.isDirectory())
-      .sort((left, right) => right.name.localeCompare(left.name))) {
+    const ids = await readBackupIds(deviceRoot);
+    for (const id of ids.sort((left, right) => right.localeCompare(left))) {
       const manifest = await readJson(
-        path.join(deviceRoot, entry.name, 'manifest.json'),
+        path.join(deviceRoot, id, 'manifest.json'),
         null,
       ).catch(() => null);
       if (manifest?.state !== 'applied') continue;
       if (!Array.isArray(manifest.roots)
         || manifest.roots.some((root) => typeof root !== 'string')) {
-        throw new Error(`Invalid projection backup manifest: ${entry.name}`);
+        throw new Error(`Invalid projection backup manifest: ${id}`);
       }
       // Local-only backups retain roots that were device-approved when captured.
       return rollbackBackup({
         vaultPath,
         deviceId,
         allowedRoots: normalizeRoots([...allowedRoots, ...manifest.roots]),
-        backupId: entry.name,
+        backupId: id,
       });
     }
     throw new Error('No projection backup is available to roll back');

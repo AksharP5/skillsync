@@ -66,6 +66,14 @@ for (const phase of ['manifest', 'marker removal', 'backup pruning']) {
         : phase === 'marker removal' ? args[0] === markerPath
           : args[0] === path.join(transactions, 'backups', 'local');
       if (!injected && matches) {
+        if (phase === 'backup pruning') {
+          // ID allocation also reads history, before any projection is deployed.
+          const deployed = await fs.lstat(destination).catch((error) => {
+            if (error.code === 'ENOENT') return null;
+            throw error;
+          });
+          if (!deployed) return original(...args);
+        }
         injected = true;
         throw new Error(`Finalization ${phase} failed`);
       }
