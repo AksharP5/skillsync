@@ -3,7 +3,7 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assertSafePathSegment } from './fs.js';
-import { isPluginReportPath } from './plugins.js';
+import { pluginReportDevice } from './plugins.js';
 import { git, hashSyncedDirectory, ignoredGitPaths, isGitRepo } from './git.js';
 
 const GIT_ENTRY = '.git';
@@ -177,7 +177,11 @@ function validateNamedJsonFiles(entries, directory, label, errors) {
   }
 }
 
-export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
+/**
+ * Pass `deviceId` to validate that device's own plugin reports too; other devices' reports are
+ * never required to parse, since one bad report must not stop every device's sync.
+ */
+export async function checkVault(vaultPath, { verifyRegistry = true, deviceId } = {}) {
   const root = path.resolve(vaultPath);
   const rootInfo = await pathInfo(root);
   if (!rootInfo?.isDirectory()) {
@@ -189,8 +193,10 @@ export async function checkVault(vaultPath, { verifyRegistry = true } = {}) {
   const inspected = await inspectTree(root, {
     ignoreRootEntries: new Set([GIT_ENTRY, LOCAL_STATE_ENTRY]),
     rejectOwnershipMarkers: true,
-    // One device's malformed plugin report must not stop every device's skill sync.
-    untrustedJson: isPluginReportPath,
+    untrustedJson: (relative) => {
+      const owner = pluginReportDevice(relative);
+      return owner !== null && owner !== deviceId;
+    },
   });
   const errors = [...inspected.errors];
   if (gitBacked && localState) {
@@ -304,8 +310,8 @@ export async function checkPendingGitHistory(vaultPath) {
   return { commits };
 }
 
-export async function checkVaultForPush(vaultPath) {
-  const vault = await checkVault(vaultPath);
+export async function checkVaultForPush(vaultPath, { deviceId } = {}) {
+  const vault = await checkVault(vaultPath, { deviceId });
   const history = await checkPendingGitHistory(vaultPath);
   return { ...vault, pendingCommits: history.commits };
 }

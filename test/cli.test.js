@@ -973,6 +973,14 @@ printf '%s\\n' '{"installed":[]}'
   assert.match(repaired.stdout, /- shared: 3 plugins \(auto-adopt on\)\n  removed: stripe@anthropic-plugin-directory\n/);
   assert.match(repaired.stdout, /macbook: shared \(applied; 3 installed\)\n$/);
   assert.match((await cli('show', 'shared', '--agent', 'claude')).stdout, /\nremoved: stripe@anthropic-plugin-directory\n$/);
+
+  // Reinstalling doesn't undo a removal; importing the plugin again does.
+  await cli('remove', 'hyperframes@hyperframes', '--agent', 'claude');
+  assert.match((await cli('show', 'shared', '--agent', 'claude')).stdout, /removed: hyperframes@hyperframes, stripe@anthropic-plugin-directory\n$/);
+  await cli('import', '--agent', 'claude', '--name', 'shared', '--auto-adopt');
+  const restored = await cli('show', 'shared', '--agent', 'claude');
+  assert.match(restored.stdout, /- hyperframes@hyperframes \(from heygen-com\/hyperframes\)\n/);
+  assert.match(restored.stdout, /\nremoved: stripe@anthropic-plugin-directory\n$/);
 });
 
 for (const scenario of [

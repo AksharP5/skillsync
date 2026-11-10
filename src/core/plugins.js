@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { assertSafePathSegment, exists, readJson, writeJson, writePrivateJson } from './fs.js';
 import { commandExists, gitPrivatePath, run } from './git.js';
+import { acquireDirectoryLease } from './lease.js';
 
 const UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -37,13 +38,14 @@ const PROVIDERS = {
 };
 
 /**
- * Whether a vault path is one device's plugin report. Each device writes only its own; a report
- * from another device, or from a newer client, is untrusted input that sync skips when unreadable.
+ * The device whose plugin report lives at a vault path, or null for any other path. Each device
+ * writes only its own report; another device's, possibly from a newer client, is untrusted input.
  */
-export function isPluginReportPath(relative) {
+export function pluginReportDevice(relative) {
   const directory = path.posix.dirname(relative);
-  return relative.endsWith('.json') && Object.values(PROVIDERS)
+  const isReport = relative.endsWith('.json') && Object.values(PROVIDERS)
     .some((provider) => directory === path.posix.join('plugins', ...provider.directory, 'state'));
+  return isReport ? path.posix.basename(relative, '.json') : null;
 }
 
 export function pluginProvider(agent) {
@@ -385,8 +387,8 @@ function reportedMarketplaces(plugins, marketplaces, agent) {
 
 /**
  * The profile a device should apply: its stored plugins, plus, with auto-adoption, every portable
- * plugin that an assigned device reports, minus removed plugins. Invalid entries in other devices'
- * reports are skipped and described in `warnings`.
+ * plugin that an assigned device reports, minus removed plugins. `states` come from
+ * `listPluginStates`, which has already validated them.
  */
 export function effectivePluginProfile(profile, {
   assignments = [],
@@ -395,42 +397,23 @@ export function effectivePluginProfile(profile, {
   installed = null,
   marketplaces = {},
   removed = [],
-  warnings = [],
 } = {}) {
   const agent = profile.provider || 'codex';
-  const { label } = pluginProvider(agent);
   const normalized = normalizeProfile(profile, profile.name, agent);
   const plugins = new Set(normalized.plugins);
   const sources = new Map(Object.entries(normalized.marketplaces || {}));
   const stateByDevice = new Map(states.map((state) => [state.device_id, state]));
   for (const assignment of normalized.auto_adopt ? assignments : []) {
     if (assignment.profile !== normalized.name) continue;
-    const local = assignment.device_id === deviceId && Array.isArray(installed);
-    const report = local ? { installed, marketplaces } : stateByDevice.get(assignment.device_id);
-    if (!report) continue;
-    if (!Array.isArray(report.installed)) {
-      warnings.push(`Skipped the invalid ${label} plugin report from ${assignment.device_id}`);
-      continue;
-    }
-    for (const entry of report.installed) {
-      let plugin;
-      try {
-        plugin = { ...normalizeInstalledPlugin(entry, label), portable: entry.portable };
-      } catch {
-        warnings.push(`Skipped an invalid plugin in the ${label} plugin report from ${assignment.device_id}`);
-        continue;
-      }
+    const report = assignment.device_id === deviceId && Array.isArray(installed)
+      ? { installed, marketplaces }
+      : stateByDevice.get(assignment.device_id);
+    for (const plugin of report?.installed || []) {
       if (plugin.enabled && isPortable(plugin, agent)) plugins.add(plugin.selector);
     }
-    for (const [name, source] of Object.entries(report.marketplaces || {})) {
-      if (sources.has(name) || (local && source === null)) continue;
-      try {
-        assertSafePathSegment(name, 'Plugin marketplace');
-        if (!isMarketplaceSource(source)) throw new Error('Invalid source');
-        sources.set(name, source);
-      } catch {
-        warnings.push(`Skipped an invalid marketplace in the ${label} plugin report from ${assignment.device_id}`);
-      }
+    for (const [name, source] of Object.entries(report?.marketplaces || {})) {
+      // A local inspection maps local-folder marketplaces to null.
+      if (isMarketplaceSource(source) && !sources.has(name)) sources.set(name, source);
     }
   }
   for (const selector of removed) plugins.delete(selector);
@@ -442,8 +425,9 @@ export function effectivePluginProfile(profile, {
 }
 
 /**
- * Reports from other devices are best effort: an unreadable report is skipped and described in
- * `warnings` so one bad file cannot stop this device's sync.
+ * Reads every device's plugin report and validates its structure once, so callers get well-typed
+ * reports. A report from another device may be malformed or come from a newer client: an unreadable
+ * report is skipped and an invalid field is dropped, each described in `warnings`.
  */
 export async function listPluginStates(vaultPath, agent = 'codex', warnings = []) {
   const directory = path.join(pluginRoot(vaultPath, agent), 'state');
@@ -452,13 +436,75 @@ export async function listPluginStates(vaultPath, agent = 'codex', warnings = []
   const states = [];
   for (const file of files.filter((name) => name.endsWith('.json')).sort()) {
     const deviceId = file.slice(0, -'.json'.length);
-    const state = await loadPluginState(vaultPath, deviceId, agent).catch(() => {
-      warnings.push(`Skipped the unreadable ${pluginProvider(agent).label} plugin report for ${deviceId}`);
-      return null;
-    });
+    const raw = await readJson(path.join(directory, file)).catch(() => undefined);
+    const state = parsePluginReport(raw, deviceId, agent, warnings);
     if (state) states.push(state);
   }
   return states;
+}
+
+function parsePluginReport(raw, deviceId, agent, warnings) {
+  const { label } = pluginProvider(agent);
+  if (!isPlainObject(raw) || raw.device_id !== deviceId) {
+    warnings.push(`Skipped the unreadable ${label} plugin report for ${deviceId}`);
+    return null;
+  }
+  const ignore = (field) => warnings.push(`Ignored invalid ${field} in the ${label} plugin report for ${deviceId}`);
+  const text = (field) => {
+    if (raw[field] == null || typeof raw[field] === 'string') return raw[field] ?? null;
+    ignore(field);
+    return null;
+  };
+  const list = (field, parse) => {
+    if (raw[field] == null) return [];
+    if (!Array.isArray(raw[field])) {
+      ignore(field);
+      return [];
+    }
+    return raw[field].flatMap((entry) => {
+      try {
+        return [parse(entry)];
+      } catch {
+        ignore(`${field} entry`);
+        return [];
+      }
+    });
+  };
+  const marketplaces = isPlainObject(raw.marketplaces ?? {}) ? Object.entries(raw.marketplaces ?? {}) : [];
+  if (!isPlainObject(raw.marketplaces ?? {})) ignore('marketplaces');
+  return {
+    version: 1,
+    device_id: deviceId,
+    provider: agent,
+    profile: text('profile'),
+    profile_hash: text('profile_hash'),
+    applied_profile: text('applied_profile'),
+    applied_profile_hash: text('applied_profile_hash'),
+    installed: list('installed', (entry) => {
+      const { selector, name, marketplace, enabled } = normalizeInstalledPlugin(entry, label);
+      return { selector, name, marketplace, enabled };
+    }),
+    marketplaces: Object.fromEntries(marketplaces.filter(([name, source]) => {
+      const valid = isMarketplaceSource(source) && isSafeSegment(name);
+      if (!valid) ignore('marketplaces entry');
+      return valid;
+    })),
+    missing: list('missing', normalizePluginSelector),
+    disabled: list('disabled', normalizePluginSelector),
+  };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isSafeSegment(value) {
+  try {
+    assertSafePathSegment(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function loadPluginState(vaultPath, deviceId, agent = 'codex') {
@@ -491,6 +537,13 @@ export async function removePluginFromProfile({ vaultPath, deviceId, selector, a
   if (!effectivePluginProfile(profile, { assignments, states, removed }).plugins.includes(target)) {
     throw new Error(`${target} is not in the ${profile.name} ${label} plugin profile`);
   }
+  const assigned = new Set(assignments
+    .filter((entry) => entry.profile === profile.name)
+    .map((entry) => entry.device_id));
+  const installedOn = states
+    .filter((state) => assigned.has(state.device_id)
+      && state.installed.some((plugin) => plugin.selector === target))
+    .map((state) => state.device_id);
   await savePluginProfile({
     vaultPath,
     name: profile.name,
@@ -500,16 +553,7 @@ export async function removePluginFromProfile({ vaultPath, deviceId, selector, a
     agent,
   });
   await saveRemovedPlugins({ vaultPath, profile: profile.name, plugins: [...removed, target], agent });
-  const assigned = new Set(assignments
-    .filter((entry) => entry.profile === profile.name)
-    .map((entry) => entry.device_id));
-  return {
-    profile: profile.name,
-    installedOn: states
-      .filter((state) => assigned.has(state.device_id)
-        && state.installed?.some((plugin) => plugin?.selector === target))
-      .map((state) => state.device_id),
-  };
+  return { profile: profile.name, installedOn };
 }
 
 async function listCodexPlugins(runCommand) {
@@ -622,27 +666,87 @@ async function installClaudePlugins({ missing, profile, inspection, runCommand }
 
 // Third-party marketplaces do not auto-update unless the user opts in from /plugin, so refresh the
 // profile's marketplaces and update its plugins through Claude Code's own CLI.
-async function updateClaudePlugins({ profile, inspection, runCommand }) {
+async function updateClaudePlugins({ marketplaces, plugins, runCommand, deadline }) {
   const errors = [];
-  for (const marketplace of Object.keys(profile.marketplaces)) {
-    if (!Object.hasOwn(inspection.marketplaces, marketplace)) continue;
-    await runCommand(
-      'claude',
-      ['plugin', 'marketplace', 'update', marketplace, '--json'],
-      { timeoutMs: 120_000 },
-    ).catch(() => errors.push(`Could not refresh the ${marketplace} plugin marketplace`));
-  }
-  const installed = new Set(inspection.installed.map(({ selector }) => selector));
-  for (const selector of profile.plugins.filter((plugin) => installed.has(plugin))) {
-    await runCommand(
-      'claude',
-      ['plugin', 'update', selector, '--scope', 'user', '--json'],
-      { timeoutMs: 120_000 },
-    ).catch((error) => errors.push(`Could not update ${selector}; ${needsApproval(error)
-      ? 'it needs approval in Claude Code /plugin'
-      : 'update it from Claude Code /plugin'}`));
+  const commands = [
+    ...marketplaces.map((marketplace) => ({
+      args: ['plugin', 'marketplace', 'update', marketplace, '--json'],
+      failure: () => `Could not refresh the ${marketplace} plugin marketplace`,
+    })),
+    ...plugins.map((selector) => ({
+      args: ['plugin', 'update', selector, '--scope', 'user', '--json'],
+      failure: (error) => `Could not update ${selector}; ${needsApproval(error)
+        ? 'it needs approval in Claude Code /plugin'
+        : 'update it from Claude Code /plugin'}`,
+    })),
+  ];
+  for (const { args, failure } of commands) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      errors.push('Stopped updating Claude Code plugins at the time limit; the rest update next time');
+      break;
+    }
+    await runCommand('claude', args, { timeoutMs: Math.min(120_000, remaining) })
+      .catch((error) => errors.push(failure(error)));
   }
   return errors;
+}
+
+async function pluginUpdateRoot(vaultPath, agent) {
+  const directory = `${pluginProvider(agent).command}-update`;
+  return await gitPrivatePath(vaultPath, 'plugins', directory)
+    || path.join(vaultPath, '.skillsync-local', 'plugins', directory);
+}
+
+async function readUpdateState(root) {
+  const state = await readJson(path.join(root, 'state.json'), null).catch(() => null);
+  return {
+    updated_at: typeof state?.updated_at === 'string' ? state.updated_at : null,
+    update_errors: Array.isArray(state?.update_errors) ? state.update_errors : [],
+  };
+}
+
+/**
+ * Keeps this device's plugins current, at most once a day. Runs after a sync has released the
+ * apply lock, under its own lease so that two syncs do not update at once, and within `deadlineMs`.
+ * `targets` comes from `syncPlugins`. Returns null when nothing ran.
+ */
+export async function updatePlugins({
+  vaultPath,
+  agent,
+  targets,
+  runCommand = run,
+  now = Date.now(),
+  deadlineMs = 10 * 60 * 1000,
+}) {
+  const provider = pluginProvider(agent);
+  if (!provider.update || !targets) return null;
+  const root = await pluginUpdateRoot(vaultPath, agent);
+  const release = await acquireDirectoryLease(root, { label: `${provider.label} plugin update` })
+    .catch((error) => {
+      if (/already (running|starting)/.test(error.message)) return null;
+      throw error;
+    });
+  if (!release) return null;
+  try {
+    const previous = await readUpdateState(root);
+    // A plugin installed by this sync is already the latest version.
+    if (targets.freshInstall) {
+      await writePrivateJson(path.join(root, 'state.json'), {
+        version: 1, ...previous, updated_at: new Date(now).toISOString(),
+      });
+      return null;
+    }
+    // Also due when plugins were never updated, since the difference is then NaN.
+    if (now - Date.parse(previous.updated_at) < UPDATE_INTERVAL_MS) return null;
+    const errors = await provider.update({ ...targets, runCommand, deadline: Date.now() + deadlineMs });
+    await writePrivateJson(path.join(root, 'state.json'), {
+      version: 1, updated_at: new Date(now).toISOString(), update_errors: errors,
+    });
+    return { errors, errorsChanged: !isDeepStrictEqual(errors, previous.update_errors) };
+  } finally {
+    await release();
+  }
 }
 
 async function localPluginStatePath(vaultPath, agent) {
@@ -656,16 +760,18 @@ async function localPluginStatePath(vaultPath, agent) {
  * the warnings from the last sync, and when plugins were last updated and what failed then.
  */
 export async function loadLocalPluginState(vaultPath, agent = 'codex') {
-  return readLocalPluginState(await localPluginStatePath(vaultPath, agent));
+  const [local, update] = await Promise.all([
+    readLocalPluginState(await localPluginStatePath(vaultPath, agent)),
+    readUpdateState(await pluginUpdateRoot(vaultPath, agent)),
+  ]);
+  return { ...local, ...update };
 }
 
 async function readLocalPluginState(filePath) {
   const state = await readJson(filePath, null).catch(() => null);
   return {
-    failed: state?.failed && typeof state.failed === 'object' ? state.failed : {},
+    failed: isPlainObject(state?.failed) ? state.failed : {},
     warnings: Array.isArray(state?.warnings) ? state.warnings : [],
-    update_errors: Array.isArray(state?.update_errors) ? state.update_errors : [],
-    updated_at: typeof state?.updated_at === 'string' ? state.updated_at : null,
   };
 }
 
@@ -716,7 +822,8 @@ function unavailablePluginStatus({ agent, deviceId, assignment, profile, previou
  * Installs the plugins missing from this device's assigned profile, then publishes the device's
  * report. Never uninstalls. Returns null without running the agent CLI when the device is unassigned.
  * An install that failed for the current profile is only retried when `retryFailed` is set, so the
- * daemon does not repeat it every cycle while a manual sync still can.
+ * daemon does not repeat it every cycle while a manual sync still can. Updates are not run here:
+ * pass the returned `updateTargets` to `updatePlugins` once the apply lock is released.
  */
 export async function syncPlugins({
   vaultPath,
@@ -726,12 +833,27 @@ export async function syncPlugins({
   commandAvailable = commandExists,
   runCommand = run,
   claudeConfigDir,
-  now = Date.now(),
 } = {}) {
-  const assignment = await loadPluginAssignment(vaultPath, deviceId, agent);
-  if (!assignment) return null;
   const provider = pluginProvider(agent);
   const warnings = [];
+  // Other devices, and 0.14.0 clients, reject a vault holding invalid JSON, so never publish an
+  // unreadable report of our own: drop it, and write a fresh one below when this device can.
+  let ownReportUnreadable = false;
+  const previousState = await loadPluginState(vaultPath, deviceId, agent).catch(async () => {
+    await rm(pluginStatePath(vaultPath, deviceId, agent), { force: true });
+    ownReportUnreadable = true;
+    return null;
+  });
+  const assignment = await loadPluginAssignment(vaultPath, deviceId, agent);
+  if (!assignment) {
+    if (!ownReportUnreadable) return null;
+    return {
+      provider: agent,
+      available: false,
+      errors: [`Removed this device's unreadable ${provider.label} plugin report`],
+      errorsChanged: true,
+    };
+  }
   let profile = null;
   try {
     profile = await loadPluginProfile(vaultPath, assignment.profile, agent);
@@ -741,11 +863,7 @@ export async function syncPlugins({
 
   let inspection = await inspectPlugins({ agent, commandAvailable, runCommand, claudeConfigDir });
   warnings.push(...inspection.warnings || []);
-  const [previousState, localPath] = await Promise.all([
-    // An unreadable report of our own is replaced below.
-    loadPluginState(vaultPath, deviceId, agent).catch(() => null),
-    localPluginStatePath(vaultPath, agent),
-  ]);
+  const localPath = await localPluginStatePath(vaultPath, agent);
   const local = await readLocalPluginState(localPath);
   if (profile) {
     const [assignments, states, removed] = await Promise.all([
@@ -760,16 +878,13 @@ export async function syncPlugins({
       installed: inspection.available ? inspection.installed : null,
       marketplaces: inspection.marketplaces,
       removed,
-      warnings,
     });
   }
   const profileHash = profile ? pluginProfileHash(profile) : null;
   const failed = new Map(Object.entries(local.failed)
     .filter(([selector, failure]) => failure?.profile_hash === profileHash && profile?.plugins.includes(selector)));
   const installErrors = [];
-  let updatedAt = local.updated_at;
-  let updateErrors = local.update_errors;
-  let updated = false;
+  let freshInstall = false;
   if (profile && inspection.available) {
     const installed = new Set(inspection.installed.map((plugin) => plugin.selector));
     const missing = profile.plugins
@@ -781,38 +896,28 @@ export async function syncPlugins({
         failed.set(selector, { profile_hash: profileHash, reason });
         installErrors.push(`Could not install ${selector}; ${reason}`);
       }
+      freshInstall = true;
       inspection = await inspectPlugins({ agent, commandAvailable, runCommand, claudeConfigDir });
-      // A fresh install is already the latest version, so it restarts the update clock.
-      if (provider.update) updatedAt = new Date(now).toISOString();
-    }
-    // Also due when plugins were never updated, since the difference is then NaN.
-    const updateDue = !(now - Date.parse(updatedAt) < UPDATE_INTERVAL_MS);
-    if (provider.update && inspection.available && updateDue) {
-      updateErrors = await provider.update({ profile, inspection, runCommand });
-      updatedAt = new Date(now).toISOString();
-      updated = true;
     }
   }
   for (const plugin of inspection.installed) failed.delete(plugin.selector);
+  if (ownReportUnreadable) {
+    warnings.push(inspection.available
+      ? `Rewrote this device's unreadable ${provider.label} plugin report`
+      : `Removed this device's unreadable ${provider.label} plugin report`);
+  }
 
   const nextLocal = {
     failed: Object.fromEntries(failed),
     warnings: [...new Set([...(inspection.error ? [inspection.error] : []), ...warnings])],
-    // Kept until the next update attempt, so status shows them all day.
-    update_errors: updateErrors,
-    updated_at: updatedAt,
   };
   // Lets the daemon log a problem once instead of every cycle.
-  const errorsChanged = !isDeepStrictEqual(
-    { failed: nextLocal.failed, warnings: nextLocal.warnings, update_errors: nextLocal.update_errors },
-    { failed: local.failed, warnings: local.warnings, update_errors: local.update_errors },
-  );
-  if (!isDeepStrictEqual(nextLocal, local)) await writePrivateJson(localPath, { version: 1, ...nextLocal });
+  const errorsChanged = !isDeepStrictEqual(nextLocal, local);
+  if (errorsChanged) await writePrivateJson(localPath, { version: 1, ...nextLocal });
   const errors = [...new Set([
     ...(inspection.error ? [inspection.error] : []),
     ...installErrors,
     ...warnings,
-    ...(updated ? updateErrors : []),
   ])];
   if (!inspection.available) {
     return {
@@ -833,11 +938,20 @@ export async function syncPlugins({
   if (!isDeepStrictEqual(previousState, report)) {
     await writeJson(pluginStatePath(vaultPath, deviceId, agent), report);
   }
+  const installed = new Set(inspection.installed.map(({ selector }) => selector));
   return {
     ...report,
     available: true,
     errors,
     failed: nextLocal.failed,
     errorsChanged,
+    ...(provider.update && profile && {
+      updateTargets: {
+        marketplaces: Object.keys(profile.marketplaces)
+          .filter((marketplace) => Object.hasOwn(inspection.marketplaces, marketplace)),
+        plugins: profile.plugins.filter((selector) => installed.has(selector)),
+        freshInstall,
+      },
+    }),
   };
 }

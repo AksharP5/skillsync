@@ -25,6 +25,7 @@ import { commitAllIfChanged, git, gitPrivatePath, hashSyncedDirectory, ignoredGi
 import { addSkillToVault, ensureVault, loadRegistry, rebuildRegistry } from '../src/core/registry.js';
 import { syncVault } from '../src/core/sync.js';
 import { checkVault } from '../src/core/check.js';
+import { assignPluginProfile, savePluginProfile } from '../src/core/plugins.js';
 
 async function tempDir() {
   return mkdtemp(path.join(tmpdir(), 'skillsync-git-test-'));
@@ -376,6 +377,32 @@ test('syncVault rolls back retry projections when a later reconciliation step fa
   assert.equal((await git(['rev-parse', 'refs/heads/main'], remote)).stdout,
     (await git(['rev-parse', 'HEAD'], other)).stdout);
   assert.equal(await readFile(path.join(root, 'push-attempts'), 'utf8'), 'push\n');
+});
+
+test('a sync that rebases keeps its plugin errors and tries a failed install only once', async (t) => {
+  const { options, other } = await pushRaceFixture(t);
+  await commitAllIfChanged(other, 'remote content update');
+  const selector = 'deploy@anthropic-plugin-directory';
+  await savePluginProfile({ vaultPath: options.vaultPath, name: 'shared', plugins: [selector], agent: 'claude' });
+  await assignPluginProfile({ vaultPath: options.vaultPath, deviceId: options.deviceId, profile: 'shared', agent: 'claude' });
+  let installs = 0;
+  const runCommand = async (_command, args) => {
+    if (args[1] !== 'install') return { stdout: '[]' };
+    installs += 1;
+    throw new Error('install failed');
+  };
+
+  const result = await syncVault({
+    ...options,
+    retryFailedPlugins: true,
+    pluginCommands: { commandAvailable: async (command) => command === 'claude', runCommand },
+  });
+
+  assert.equal(result.rebasedBeforePush, true);
+  assert.equal(installs, 1);
+  assert.deepEqual(result.claudePlugins.errors, [
+    `Could not install ${selector}; install or authenticate it from Claude Code /plugin`,
+  ]);
 });
 
 test('pushWithPullRebaseRetry stops after a second push rejection', async (t) => {

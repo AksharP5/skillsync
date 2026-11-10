@@ -27,7 +27,7 @@ import {
   applyGlobalInstructions,
   reconcileGlobalInstructionProviders,
 } from './instructions.js';
-import { syncPlugins } from './plugins.js';
+import { syncPlugins, updatePlugins } from './plugins.js';
 import { ensureVault, refreshChangedRegistryEntries } from './registry.js';
 
 async function pathInfo(filePath) {
@@ -170,6 +170,23 @@ async function preserveRemoteDeletionRemnants(vaultPath, pending) {
   }
 }
 
+const PLUGIN_RESULTS = [['plugins', 'codex'], ['claudePlugins', 'claude']];
+
+// A sync that rebases reconciles twice; keep what each pass reported.
+function mergePluginResults(previous, next) {
+  if (!previous || !next) return next ?? previous;
+  return {
+    ...next,
+    errors: [...new Set([...previous.errors || [], ...next.errors || []])],
+    errorsChanged: Boolean(previous.errorsChanged || next.errorsChanged),
+  };
+}
+
+/**
+ * `retryFailedPlugins` retries plugin installs that failed before, for a sync a person asked for.
+ * `updatePlugins` runs the daily plugin update after the apply lock is released.
+ * `pluginCommands` replaces `commandAvailable` and `runCommand` for the agent CLIs in tests.
+ */
 export function syncVault(options = {}) {
   return withGitPrivatePathCache(() => sync(options));
 }
@@ -182,6 +199,8 @@ async function sync({
   discardLocalChanges = false,
   replaceUnmanagedPaths = [],
   retryFailedPlugins = false,
+  updatePlugins: runPluginUpdates = false,
+  pluginCommands = {},
 } = {}) {
   await assertNoGitConflicts(vaultPath);
   if (deviceId) {
@@ -258,8 +277,11 @@ async function sync({
         // A sync that rebases reconciles twice; only its first pass retries failed installs.
         const retryFailed = retryFailedPlugins && !pluginsReconciled;
         pluginsReconciled = true;
-        result.plugins = await syncPlugins({ vaultPath, deviceId, agent: 'codex', retryFailed });
-        result.claudePlugins = await syncPlugins({ vaultPath, deviceId, agent: 'claude', retryFailed });
+        for (const [key, agent] of PLUGIN_RESULTS) {
+          result[key] = mergePluginResults(result[key], await syncPlugins({
+            vaultPath, deviceId, agent, retryFailed, ...pluginCommands,
+          }));
+        }
         const inventoryRevision = await readInventoryRevision(vaultPath);
         const scanned = await scanTargets({ vaultPath, deviceId, save: false });
         if (pull) {
@@ -267,7 +289,7 @@ async function sync({
             vaultPath, deviceId, detected: scanned.detected, inventoryRevision,
           }));
         }
-        await checkVault(vaultPath);
+        await checkVault(vaultPath, { deviceId });
         await markDeviceApplied({
           vaultPath, deviceId, detected: scanned.detected, generation: preparedPlan.generation, inventoryRevision,
         });
@@ -280,7 +302,7 @@ async function sync({
   let pushed = false;
   let rebasedBeforePush = false;
   if (pushChanges && await isGitRepo(vaultPath)) {
-    await checkVault(vaultPath);
+    await checkVault(vaultPath, { deviceId });
     const commitMessage = `sync: update skills from ${deviceId || 'device'}`;
     committed = await commitAllIfChanged(vaultPath, commitMessage);
     if (committed || await hasLocalCommitsToPush(vaultPath)) {
@@ -291,11 +313,18 @@ async function sync({
           await reconcileLocalState();
           committed = await commitAllIfChanged(vaultPath, commitMessage) || committed;
         },
-        beforePush: () => checkVaultForPush(vaultPath),
+        beforePush: () => checkVaultForPush(vaultPath, { deviceId }),
       });
       pushed = pushResult.pushed;
       rebasedBeforePush = pushResult.rebased;
     }
+  }
+  // Plugin updates can take minutes, so they run after skill sync has released the apply lock.
+  for (const [key, agent] of runPluginUpdates && deviceId ? PLUGIN_RESULTS : []) {
+    const update = await updatePlugins({
+      vaultPath, agent, targets: result[key]?.updateTargets, runCommand: pluginCommands.runCommand,
+    });
+    if (update) result[key] = mergePluginResults(result[key], { ...result[key], ...update });
   }
   return {
     committed,

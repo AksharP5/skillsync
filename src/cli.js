@@ -1178,7 +1178,6 @@ async function pluginsCommand(rest = []) {
     deviceId: config.deviceId,
     installed: localInspection.available ? localInspection.installed : null,
     marketplaces: localInspection.marketplaces,
-    warnings,
   });
   const profileByName = new Map(profiles.map(({ profile }) => [profile.name, profile]));
   const assignmentByDevice = new Map(assignments.map((assignment) => [assignment.device_id, assignment]));
@@ -2130,6 +2129,7 @@ async function syncCommand(rest) {
     pull: !hasFlag(rest, '--no-pull'),
     discardLocalChanges,
     retryFailedPlugins: true,
+    updatePlugins: true,
   });
   for (const adopted of result.autoImported || []) {
     console.log(`Auto-adopted ${adopted.name} from ${adopted.target}.`);
@@ -2250,7 +2250,7 @@ async function daemon(rest) {
   while (true) {
     try {
       const config = await configured();
-      const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId });
+      const result = await syncVault({ vaultPath: config.repoPath, deviceId: config.deviceId, updatePlugins: true });
       for (const adopted of result.autoImported || []) {
         console.log(`[${new Date().toISOString()}] auto-adopted ${adopted.name} from ${adopted.target}`);
       }

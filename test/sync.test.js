@@ -88,7 +88,7 @@ test('sync rejects unsafe content outside skills before creating assigned projec
   await assert.rejects(() => lstat(path.join(targetPath, 'example')), { code: 'ENOENT' });
 });
 
-test('a malformed plugin report from another device does not stop skill sync', async (t) => {
+test('malformed plugin reports from other devices do not stop skill sync, and ours is never published', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'skillsync-sync-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const vaultPath = path.join(root, 'vault');
@@ -100,15 +100,19 @@ test('a malformed plugin report from another device does not stop skill sync', a
   await rebuildRegistry(vaultPath);
   await addTarget({ vaultPath, deviceId, name: 'codex', targetPath, mode: 'copy' });
   await installSkill({ vaultPath, deviceId, skillName: 'example', targets: ['codex'] });
-  for (const directory of ['plugins/state', 'plugins/claude/state']) {
-    await mkdir(path.join(vaultPath, directory), { recursive: true });
-    await writeFile(path.join(vaultPath, directory, 'newer-client.json'), '{"version": 3, "installed": [');
+  const foreign = path.join(vaultPath, 'plugins', 'claude', 'state', 'newer-client.json');
+  const own = path.join(vaultPath, 'plugins', 'state', `${deviceId}.json`);
+  for (const file of [foreign, own]) {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, '{"version": 3, "installed": [');
   }
-  await writeFile(path.join(vaultPath, 'plugins', 'profiles.json'), '{');
 
-  await assert.rejects(() => checkVault(vaultPath), /Invalid JSON: plugins\/profiles\.json/);
-  await rm(path.join(vaultPath, 'plugins', 'profiles.json'));
-  await syncVault({ vaultPath, deviceId, pull: false, pushChanges: false });
+  await assert.rejects(() => checkVault(vaultPath, { deviceId }), /Invalid JSON: plugins\/state\/test-device\.json/);
+  const result = await syncVault({ vaultPath, deviceId, pull: false, pushChanges: false });
 
   assert.equal(await readFile(path.join(targetPath, 'example', 'SKILL.md'), 'utf8'), '# Example\n');
+  assert.deepEqual(result.plugins.errors, ["Removed this device's unreadable Codex plugin report"]);
+  await assert.rejects(() => lstat(own), { code: 'ENOENT' });
+  assert.equal(await readFile(foreign, 'utf8'), '{"version": 3, "installed": [');
+  await checkVault(vaultPath, { deviceId });
 });
