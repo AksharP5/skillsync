@@ -595,7 +595,7 @@ skillsync instructions status
 skillsync instructions profiles
 skillsync instructions import [--name profile] [--from path] [--to path] [--separate]
 skillsync instructions use <profile> [--device id] [--path path]
-skillsync instructions use-device <source-device> [--device target-device]
+skillsync instructions use-device <source-device> [--device target-device] [--path path]
 skillsync instructions fork [profile]
 skillsync instructions link <path>
 skillsync instructions unlink <path>
