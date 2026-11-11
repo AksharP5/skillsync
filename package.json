@@ -1,6 +1,6 @@
 {
   "name": "@akshar5/skillsync",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Local-first GitHub-backed sync for AI agent skills, instructions, and Codex and Claude Code plugins.",
   "type": "module",
   "repository": {

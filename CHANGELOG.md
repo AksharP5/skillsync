@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/AksharP5/skillsync/compare/v0.15.0...v0.15.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* refuse to delete a skill that isn't in the vault ([#251](https://github.com/AksharP5/skillsync/issues/251)) ([a7220fe](https://github.com/AksharP5/skillsync/commit/a7220fe70d0eae874d56b7de60ff1153aa9e36d2))
+
 ## [0.15.0](https://github.com/AksharP5/skillsync/compare/v0.14.0...v0.15.0) (2026-11-10)
 
 
