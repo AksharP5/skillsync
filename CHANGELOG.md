@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.2](https://github.com/AksharP5/skillsync/compare/v0.15.1...v0.15.2) (2026-11-23)
+
+
+### Bug Fixes
+
+* honor repeated CLI list options ([#255](https://github.com/AksharP5/skillsync/issues/255)) ([0d90885](https://github.com/AksharP5/skillsync/commit/0d90885a24c7482119b14b09346b2c49c1294ed9))
+
 ## [0.15.1](https://github.com/AksharP5/skillsync/compare/v0.15.0...v0.15.1) (2026-11-10)
 
 
