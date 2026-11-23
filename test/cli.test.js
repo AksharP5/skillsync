@@ -321,7 +321,8 @@ test('relative instruction paths stay anchored through sync, unlink, and disable
   });
 
   await cli(['instructions', 'import', '--name', 'workstation', '--from', './AGENTS.md',
-    '--to', './codex/AGENTS.md,./opencode/AGENTS.md'], original);
+    '--to', './codex/AGENTS.md', '--to', './codex/AGENTS.md,./opencode/AGENTS.md'], original);
+  assert.equal(await readFile(path.join(original, 'opencode', 'AGENTS.md'), 'utf8'), '# Local instructions\n');
   await cli(['sync', '--no-pull'], elsewhere);
 
   assert.equal(await exists(path.join(elsewhere, 'codex', 'AGENTS.md')), false);
@@ -615,6 +616,7 @@ for (const { args, deviceId = 'local', targets, global = true } of [
   { args: [], targets: [], global: false },
   { args: ['--device', 'local', '--target', 'codex'], targets: ['claude'] },
   { args: ['-d', 'local', '-t', ' codex, claude, codex '], targets: [] },
+  { args: ['--target', 'codex', '--target', 'claude'], targets: [] },
   { args: ['--global'], targets: ['claude', 'codex'], global: false },
   { args: ['-d', 'remote', '-t', 'codex'], deviceId: 'remote', targets: ['claude'] },
 ]) {

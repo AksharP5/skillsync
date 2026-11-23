@@ -414,9 +414,9 @@ function flagValue(rest, flag, fallback = undefined) {
 
 function flagList(rest, flags) {
   const values = [];
-  for (const flag of flags) {
-    const value = flagValue(rest, flag);
-    if (value) values.push(...value.split(',').map((item) => item.trim()).filter(Boolean));
+  for (const [index, token] of rest.entries()) {
+    if (!flags.includes(token)) continue;
+    values.push(...rest[index + 1].split(',').map((item) => item.trim()).filter(Boolean));
   }
   return [...new Set(values)];
 }
@@ -1944,16 +1944,8 @@ async function deleteSkill(rest) {
 }
 
 function parseTargets(rest) {
-  const targets = [];
-  if (hasFlag(rest, '--global') || hasFlag(rest, '-g')) targets.push('global');
-  const [longTargets, shortTargets] = ['--target', '-t'].map((flag) => {
-    const raw = flagValue(rest, flag);
-    if (raw === undefined) return [];
-    const names = raw.split(',').map((item) => item.trim()).filter(Boolean);
-    if (!names.length) throw new Error(`Expected at least one target for ${flag}`);
-    return names;
-  });
-  targets.push(...(longTargets.length ? longTargets : shortTargets));
+  const targets = flagList(rest, [hasFlag(rest, '--target') ? '--target' : '-t']);
+  if (hasFlag(rest, '--global') || hasFlag(rest, '-g')) targets.unshift('global');
   return targets.length ? [...new Set(targets)] : undefined;
 }
 
