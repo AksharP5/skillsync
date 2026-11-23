@@ -210,6 +210,8 @@ If a fork fails before any device selects or reports its new profile, SkillSync 
 
 Disabling instructions on another device queues the change for its next sync. Status shows the pending disable and its last applied profile until that device applies the change.
 
+Repeat `--to` to import instructions to several destinations, or pass a comma-separated list. The same forms work for `--target`, `--skill`, and `--plugin` when selecting multiple items.
+
 Instruction destinations are saved as absolute paths when you import, select, enable, or link a profile, so later commands keep using the same files from any directory. For a relative destination saved by an older version, reselect its profile from the original directory to anchor the existing paths.
 
 After a profile switch, the old profile remains available while any device still selects it or reports it as applied. SkillSync removes it only after every affected device reports the replacement was successfully applied. Disabling leaves standalone local copies, including links left by an interrupted profile switch. Replacing managed paths with an explicit `--path` or `--from` also leaves the old linked files as standalone copies. Project-specific `AGENTS.md` and `CLAUDE.md` files are not affected.
