@@ -165,21 +165,21 @@ function profileFromVaultPath(vaultPath, source) {
   return profileId(profile);
 }
 
+// Ownership follows only this link's own target, so a link to another managed link
+// (such as CLAUDE.md -> AGENTS.md) is not mistaken for a profile link.
 async function ownedProfileAt(destination, vaultPath) {
   const info = await pathInfo(destination);
   if (!info?.isSymbolicLink()) return null;
-  const resolved = await optionalRealpath(destination);
-  const canonicalVault = await optionalRealpath(vaultPath);
-  if (resolved) {
-    return profileFromVaultPath(canonicalVault || vaultPath, resolved);
-  }
-  const [link, parent] = await Promise.all([
+  const [link, parent, canonicalVault] = await Promise.all([
     readlink(destination),
     realpath(path.dirname(destination)),
+    optionalRealpath(vaultPath),
   ]);
+  const target = path.resolve(parent, link);
+  const targetParent = await optionalRealpath(path.dirname(target));
   return profileFromVaultPath(
     canonicalVault || vaultPath,
-    path.resolve(parent, link),
+    targetParent ? path.join(targetParent, path.basename(target)) : target,
   );
 }
 
