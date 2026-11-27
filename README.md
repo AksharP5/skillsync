@@ -585,7 +585,7 @@ Restore the most recent successful local projection apply in an emergency:
 skillsync rollback
 ```
 
-Rollback restores files only. It does not change assignments or target settings.
+Rollback restores files only. It does not change assignments or target settings. Folders it replaces, including copies edited after the apply, are kept in the backup's `replaced` folder, and the command prints that location.
 
 Validate vault structure, registry hashes, JSON files, symlinks, and common credential formats without changing the vault:
 

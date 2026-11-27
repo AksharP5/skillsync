@@ -2174,6 +2174,7 @@ async function rollbackCommand() {
     deviceId: config.deviceId,
   });
   console.log(`Restored ${result.restored} skill projection${result.restored === 1 ? '' : 's'} from ${result.backupId}.`);
+  if (result.replacedPath) console.log(`Copies of the replaced folders are in ${result.replacedPath}.`);
   console.log('Rollback restores files only; it does not change assignments or target settings.');
 }
 
