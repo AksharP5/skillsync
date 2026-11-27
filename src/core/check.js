@@ -131,7 +131,10 @@ async function inspectTree(rootPath, {
 }
 
 function validationError(label, errors) {
-  return new Error(`${label} failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
+  return Object.assign(
+    new Error(`${label} failed:\n${errors.map((error) => `- ${error}`).join('\n')}`),
+    { code: 'SKILLSYNC_CHECK_FAILED' },
+  );
 }
 
 export async function checkSkillFolder(sourcePath) {
