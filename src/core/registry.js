@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { checkSkillFolder } from './check.js';
 import { normalizeGlobalInstalled, normalizeInstalled, readDeviceState } from './device-assignments.js';
-import { beginInventoryUpdate, gitPrivatePath, hashSyncedDirectory, ignoredGitPaths, recordInventoryPublication, withVaultReferences } from './git.js';
+import { beginInventoryUpdate, git, gitPrivatePath, hashSyncedDirectory, ignoredGitPaths, recordInventoryPublication, withVaultReferences } from './git.js';
 import {
   assertSafePathSegment,
   copyDir,
@@ -308,6 +308,14 @@ export async function rebuildRegistry(vaultPath) {
   const registry = await buildFromPrevious(vaultPath, before);
   await saveRegistry(vaultPath, registry);
   return registry;
+}
+
+// Rebuilds a registry that both sides of a rebase changed, keeping timestamps of unchanged skills.
+export async function mergeRegistryConflict(vaultPath) {
+  const sides = await Promise.all([2, 3].map((stage) => git(['show', `:${stage}:${REGISTRY_FILE}`], vaultPath)
+    .then(({ stdout }) => JSON.parse(stdout).skills)
+    .catch(() => ({}))));
+  await saveRegistry(vaultPath, await buildFromPrevious(vaultPath, { skills: { ...sides[0], ...sides[1] } }));
 }
 
 export async function refreshChangedRegistryEntries(vaultPath) {
