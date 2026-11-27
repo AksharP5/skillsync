@@ -1477,3 +1477,15 @@ register('./loader.mjs',import.meta.url); process.stdin.isTTY=true;`);
     });
   });
 }
+
+test('doctor exits 1 when a check fails', async () => {
+  const home = await tempDir();
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'doctor'], { env: cliEnv(home) }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stdout, /✗ config\/vault/);
+      return true;
+    },
+  );
+});
