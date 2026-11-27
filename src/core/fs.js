@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, open, readFile, readlink, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -111,8 +111,8 @@ export async function readSkillName(skillDir) {
     const nameLine = frontmatter[1].split(/\r?\n/).find((line) => /^name\s*:/i.test(line));
     if (nameLine) {
       const [, value] = nameLine.split(/:(.*)/s);
-      const cleaned = value?.trim().replace(/^['"]|['"]$/g, '');
-      if (cleaned) return slugifySkillName(cleaned);
+      const slug = slugifySkillName(value?.trim().replace(/^['"]|['"]$/g, '') ?? '');
+      if (slug) return slug;
     }
   }
   return slugifySkillName(path.basename(skillDir));
@@ -142,6 +142,11 @@ export async function hashDirectory(dirPath, { exclude = [], includeExecutableBi
     const filePath = path.join(dirPath, relativePath);
     hash.update(relativePath);
     hash.update('\0');
+    // A link to a directory or a missing path has no file content to hash; hash where it points instead.
+    if ((await lstat(filePath)).isSymbolicLink() && !(await stat(filePath).catch(() => null))?.isFile()) {
+      hash.update(`symlink\0${await readlink(filePath)}\0`);
+      continue;
+    }
     const info = includeExecutableBits ? await stat(filePath) : null;
     if (info) hash.update(`${info.mode & 0o111}\0`);
     if (info?.size > 1024 * 1024) {
