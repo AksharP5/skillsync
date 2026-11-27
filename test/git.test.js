@@ -509,6 +509,75 @@ test('sync preserves unresolved autostash conflicts until the user resolves them
   );
 });
 
+test('sync merges registry conflicts from skills added on two devices at once', async () => {
+  const root = await tempDir();
+  const remote = path.join(root, 'remote.git');
+  const local = path.join(root, 'local');
+  const other = path.join(root, 'other');
+  const addSkill = async (vaultPath, name) => {
+    await mkdir(path.join(vaultPath, 'skills', name), { recursive: true });
+    await writeFile(path.join(vaultPath, 'skills', name, 'SKILL.md'), `# ${name}\n`);
+    await rebuildRegistry(vaultPath);
+    await commitAllIfChanged(vaultPath, `add ${name}`);
+  };
+
+  await git(['init', '--bare', remote]);
+  await git(['clone', remote, local]);
+  await git(['checkout', '-b', 'main'], local);
+  await configureUser(local);
+  await ensureVault(local);
+  await addSkill(local, 'alpha');
+  await git(['push', '-u', 'origin', 'main'], local);
+  await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
+  await git(['clone', remote, other]);
+  await configureUser(other);
+  await addSkill(other, 'beta');
+  await git(['push'], other);
+  const { updated_at: alphaUpdated } = JSON.parse(await readFile(path.join(local, 'registry.json'), 'utf8')).skills.alpha;
+  await addSkill(local, 'gamma');
+
+  const result = await syncVault({ vaultPath: local, pull: false });
+
+  assert.equal(result.pushed, true);
+  assert.equal((await git(['status', '--porcelain', '--branch'], local)).stdout.trim(), '## main...origin/main');
+  const registry = JSON.parse((await git(['show', 'main:registry.json'], remote)).stdout);
+  assert.deepEqual(Object.keys(registry.skills), ['alpha', 'beta', 'gamma']);
+  assert.equal(registry.skills.alpha.updated_at, alphaUpdated);
+});
+
+test('sync aborts a rebase it cannot resolve and leaves the branch usable', async () => {
+  const root = await tempDir();
+  const remote = path.join(root, 'remote.git');
+  const local = path.join(root, 'local');
+  const other = path.join(root, 'other');
+  const skillPath = path.join('skills', 'demo', 'SKILL.md');
+
+  await git(['init', '--bare', remote]);
+  await git(['clone', remote, local]);
+  await git(['checkout', '-b', 'main'], local);
+  await configureUser(local);
+  await ensureVault(local);
+  await mkdir(path.dirname(path.join(local, skillPath)), { recursive: true });
+  await writeFile(path.join(local, skillPath), '# Demo\nOriginal\n');
+  await rebuildRegistry(local);
+  await commitAllIfChanged(local, 'initial vault');
+  await git(['push', '-u', 'origin', 'main'], local);
+  await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], remote);
+  await git(['clone', remote, other]);
+  await configureUser(other);
+  await commitFile(other, skillPath, '# Demo\nRemote\n', 'remote edit');
+  await git(['push'], other);
+  await commitFile(local, skillPath, '# Demo\nLocal\n', 'local edit');
+  const localHead = (await git(['rev-parse', 'HEAD'], local)).stdout;
+
+  await assert.rejects(syncVault({ vaultPath: local, pull: false }), /skills\/demo\/SKILL\.md/);
+
+  assert.equal((await git(['symbolic-ref', '--short', 'HEAD'], local)).stdout.trim(), 'main');
+  await git(['merge-base', '--is-ancestor', localHead.trim(), 'HEAD'], local);
+  assert.equal((await git(['ls-files', '--unmerged'], local)).stdout, '');
+  assert.equal(await readFile(path.join(local, skillPath), 'utf8'), '# Demo\nLocal\n');
+});
+
 test('sync refuses pending commits that contain a removed credential', async () => {
   const root = await tempDir();
   const remote = path.join(root, 'remote.git');
