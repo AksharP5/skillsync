@@ -260,6 +260,27 @@ test('applyLinks repairs skill links through a symlinked target directory', asyn
   assert.equal(projection.status, 'ok');
 });
 
+test('a dangling projection behind a symlinked target directory is removed after its skill is deleted', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'home', '.skillsync', 'repo');
+  const physicalTarget = path.join(root, 'dotfiles-skills');
+  const target = path.join(root, 'home', '.claude', 'skills');
+  await mkdir(physicalTarget, { recursive: true });
+  await mkdir(path.dirname(target), { recursive: true });
+  await symlink(physicalTarget, target, 'dir');
+  await makeSkill(path.join(vault, 'skills'), 'foo');
+  await rebuildRegistry(vault);
+  const deviceId = 'laptop';
+  await addTarget({ vaultPath: vault, deviceId, name: 'claude', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'foo', targets: ['claude'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await deleteSkillFromVault({ vaultPath: vault, skillName: 'foo' });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await assert.rejects(() => lstat(path.join(target, 'foo')), { code: 'ENOENT' });
+});
+
 test('projection plans reject overlapping target roots', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
@@ -391,6 +412,10 @@ test('removing a target cleans SkillSync-owned projections but preserves unmanag
     await readFile(path.join(target, 'local-only', 'SKILL.md'), 'utf8'),
     '# Local\n',
   );
+  await assert.rejects(
+    removeTargetAndPrune({ vaultPath: vault, deviceId: 'macbook', name: 'codx' }),
+    /Unknown target on this device: codx/,
+  );
 });
 
 test('scanTargets records unmanaged local skills from a separate scan path', async () => {
@@ -425,6 +450,21 @@ test('scanTargets records unmanaged local skills from a separate scan path', asy
     ],
   );
   assert.deepEqual(device.installed['bog-hyperframes'], ['hermes']);
+});
+
+test('scanTargets falls back to the folder name when the frontmatter name has no slug characters', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'claude-skills');
+  await mkdir(path.join(vault, 'skills'), { recursive: true });
+  await rebuildRegistry(vault);
+  await makeSkill(target, 'translate-ja', '---\nname: 日本語翻訳\n---\n# Translate\n');
+  const deviceId = 'laptop';
+  await addTarget({ vaultPath: vault, deviceId, name: 'claude', targetPath: target });
+
+  const device = await scanTargets({ vaultPath: vault, deviceId });
+
+  assert.deepEqual(device.detected.claude.map((skill) => skill.name), ['translate-ja']);
 });
 
 test('scanTargets preserves duplicate local paths and deduplicates shared reports by name', async () => {
