@@ -233,7 +233,7 @@ for (const writer of ['global', 'codex']) {
     await fs.mkdir(other);
     await fs.writeFile(path.join(other, 'SKILL.md'), '# Other skill\n');
     await rebuildRegistry(f.vaultPath);
-    await addTarget({ ...f.options, name: 'retained', targetPath: path.join(f.targetPath, 'retained'), autoImport: false });
+    await addTarget({ ...f.options, name: 'retained', targetPath: `${f.targetPath}-retained`, autoImport: false });
     await installSkill({ ...f.options, skillName: 'victim', targets: ['codex'] });
     let injected = false;
     const device = await scopedMock(t, 'rename', async (rename, from, to) => {
@@ -262,7 +262,7 @@ test('report publication from a legacy snapshot cannot overwrite a newer modern 
       assert.deepEqual(await child(f, 'install'), { ok: true });
     }
     return rename(from, to);
-  }, () => addTarget({ ...f.options, name: 'second', targetPath: path.join(f.targetPath, 'second'), autoImport: false }));
+  }, () => addTarget({ ...f.options, name: 'second', targetPath: `${f.targetPath}-second`, autoImport: false }));
   assert.equal(injected, true);
   assert.deepEqual((await loadDevice(f.vaultPath, 'local')).global_installed, ['victim']);
   assert.equal((await loadDevice(f.vaultPath, 'local')).desired_generation, 1);
@@ -522,7 +522,7 @@ for (const action of ['instructions', 'target', 'target-adoption', 'device-adopt
     await scanTargets(f.options);
     const operation = () => {
       if (action === 'instructions') return configureGlobalInstructions({ ...f.options, targetPaths: [] });
-      if (action === 'target') return addTarget({ ...f.options, name: 'second', targetPath: path.join(f.targetPath, 'second') });
+      if (action === 'target') return addTarget({ ...f.options, name: 'second', targetPath: `${f.targetPath}-second` });
       if (action === 'target-adoption') return setTargetAutoImport({ ...f.options, name: 'codex', enabled: true });
       return setDeviceAutoImport({ ...f.options, enabled: true });
     };
