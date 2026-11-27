@@ -187,3 +187,20 @@ test('a CLAUDE.md that links to AGENTS.md is relinked to the profile so AGENTS.m
   assert.equal(await readFile(codex, 'utf8'), content);
   assert.equal(await realpath(claude), profile);
 });
+
+for (const manual of [false, true]) {
+  test(`installed Claude follows a profile selected for other paths when ${manual ? 'explicitly' : 'automatically'} linked`, async (t) => {
+    const { home, vault, codex, claude, cli } = await fixture(t, { manual });
+    const other = path.join(home, 'other', 'AGENTS.md');
+    await mkdir(path.dirname(other), { recursive: true });
+    await writeFile(other, '# Other instructions\n');
+
+    await cli(['instructions', 'import', '--name', 'other', '--from', other, '--to', codex]);
+    const { stdout } = await cli(['sync']);
+
+    const profile = await realpath(path.join(vault, 'globals', 'agents', 'other.md'));
+    assert.equal(await realpath(codex), profile);
+    assert.equal(await realpath(claude), profile);
+    assert.doesNotMatch(stdout, /Claude instructions differ/);
+  });
+}

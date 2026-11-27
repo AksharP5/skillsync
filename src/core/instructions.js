@@ -517,11 +517,17 @@ export async function selectGlobalInstructionsProfile({
   const selected = await requireProfile(vaultPath, profile);
   await initializeLocalPathState({ vaultPath, deviceId });
   const device = await loadLocalDevice(vaultPath, deviceId);
+  const configured = device.instructions.agents?.paths || [];
+  // While Claude Code is installed, CLAUDE.md follows the selected profile even when other paths are given.
+  const claude = resolvedDestination(DEFAULT_CLAUDE_INSTRUCTIONS_PATH);
+  const keepClaude = Boolean(targetPaths?.length)
+    && configured.some((targetPath) => resolvedDestination(targetPath) === claude)
+    && await deviceHasClaude();
   const paths = [...new Set((
     targetPaths?.length
-      ? targetPaths
-      : device.instructions.agents?.paths?.length
-        ? device.instructions.agents.paths
+      ? [...targetPaths, ...(keepClaude ? [claude] : [])]
+      : configured.length
+        ? configured
         : [DEFAULT_GLOBAL_INSTRUCTIONS_PATH]
   ).map(resolvedDestination))];
   const destinations = new Set(await Promise.all(paths.map(canonicalDestination)));
