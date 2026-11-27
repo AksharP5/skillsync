@@ -617,6 +617,7 @@ for (const { args, deviceId = 'local', targets, global = true } of [
   { args: ['--device', 'local', '--target', 'codex'], targets: ['claude'] },
   { args: ['-d', 'local', '-t', ' codex, claude, codex '], targets: [] },
   { args: ['--target', 'codex', '--target', 'claude'], targets: [] },
+  { args: ['--target', 'codex', '-t', 'claude'], targets: [] },
   { args: ['--global'], targets: ['claude', 'codex'], global: false },
   { args: ['-d', 'remote', '-t', 'codex'], deviceId: 'remote', targets: ['claude'] },
 ]) {
