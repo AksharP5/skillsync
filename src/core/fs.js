@@ -111,8 +111,8 @@ export async function readSkillName(skillDir) {
     const nameLine = frontmatter[1].split(/\r?\n/).find((line) => /^name\s*:/i.test(line));
     if (nameLine) {
       const [, value] = nameLine.split(/:(.*)/s);
-      const cleaned = value?.trim().replace(/^['"]|['"]$/g, '');
-      if (cleaned) return slugifySkillName(cleaned);
+      const slug = slugifySkillName(value?.trim().replace(/^['"]|['"]$/g, '') ?? '');
+      if (slug) return slug;
     }
   }
   return slugifySkillName(path.basename(skillDir));
