@@ -332,7 +332,10 @@ async function runCommand([command = 'ui', ...rest]) {
 function parseArguments(spec, rest, name) {
   const usage = `Usage: ${spec.usage ?? name}`;
   if (spec.subcommands) {
-    const [subcommand = spec.default, ...tail] = rest;
+    // Options alone, as in `plugins --agent claude`, apply to the default subcommand.
+    const [subcommand, ...tail] = spec.default && (!rest.length || rest[0].startsWith('-'))
+      ? [spec.default, ...rest]
+      : rest;
     if (!Object.hasOwn(spec.subcommands, subcommand)) throw new Error(usage);
     return [subcommand, ...parseArguments(spec.subcommands[subcommand], tail, `${name} ${subcommand}`)];
   }
