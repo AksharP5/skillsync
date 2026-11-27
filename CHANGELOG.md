@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.15.3](https://github.com/AksharP5/skillsync/compare/v0.15.2...v0.15.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* accept --target and -t together ([#259](https://github.com/AksharP5/skillsync/issues/259)) ([8e6e762](https://github.com/AksharP5/skillsync/commit/8e6e762ddee66b4243b6ec76c9d5ad5093b1e2b9))
+* ask to rerun setup when a device's private target paths are missing ([#264](https://github.com/AksharP5/skillsync/issues/264)) ([7c73768](https://github.com/AksharP5/skillsync/commit/7c737683d5a3e9049d5edb34526e273762447935))
+* check for git and an authenticated gh before connect ([#263](https://github.com/AksharP5/skillsync/issues/263)) ([9691788](https://github.com/AksharP5/skillsync/commit/9691788098ea442584744ec24d333c3db182f5e0))
+* detect skills whose frontmatter name has no ASCII letters ([#257](https://github.com/AksharP5/skillsync/issues/257)) ([d7ea8b1](https://github.com/AksharP5/skillsync/commit/d7ea8b1b5a42808eba683f10579e9dce6793e90d))
+* exit 1 from doctor when a check fails ([#262](https://github.com/AksharP5/skillsync/issues/262)) ([30d59db](https://github.com/AksharP5/skillsync/commit/30d59dbf70207c363bed0861d20d14d403d9cc8f))
+* keep a copy of files that rollback replaces ([#271](https://github.com/AksharP5/skillsync/issues/271)) ([324dd7b](https://github.com/AksharP5/skillsync/commit/324dd7b2763794d3eea5e076fce40e230c4538a4))
+* keep CLAUDE.md on the selected profile when other paths are given ([#275](https://github.com/AksharP5/skillsync/issues/275)) ([867dd1e](https://github.com/AksharP5/skillsync/commit/867dd1e770a1a88b42fcddd3cf16525690e8d079))
+* merge registry rebase conflicts and abort other rebase conflicts cleanly ([#267](https://github.com/AksharP5/skillsync/issues/267)) ([48e0de1](https://github.com/AksharP5/skillsync/commit/48e0de1bc65ee343515ba59a04c53532226fef99))
+* recover locks whose PID was reused after a reboot or restart ([#268](https://github.com/AksharP5/skillsync/issues/268)) ([c90e070](https://github.com/AksharP5/skillsync/commit/c90e070c8063c98101eac31539fbc718379203f1))
+* reject conflicting targets at 'target add' instead of breaking every sync ([#273](https://github.com/AksharP5/skillsync/issues/273)) ([921d2fc](https://github.com/AksharP5/skillsync/commit/921d2fc39bd3d1c0c0df6eb6648337a2971b0334))
+* reject removing a target that is not configured ([#260](https://github.com/AksharP5/skillsync/issues/260)) ([926d90a](https://github.com/AksharP5/skillsync/commit/926d90afa3754b94cc07b24b19c795079af758b1))
+* relink a CLAUDE.md that points at a managed AGENTS.md ([#270](https://github.com/AksharP5/skillsync/issues/270)) ([2ac12c7](https://github.com/AksharP5/skillsync/commit/2ac12c7d17727072d800ce1d3cb45752fd623763))
+* remove dangling projections behind a symlinked target folder ([#266](https://github.com/AksharP5/skillsync/issues/266)) ([6d6280d](https://github.com/AksharP5/skillsync/commit/6d6280d00358970626e7f995107e2dc8eb01ce5a))
+* report symlinked folders in managed copies as local changes ([#258](https://github.com/AksharP5/skillsync/issues/258)) ([50e47d7](https://github.com/AksharP5/skillsync/commit/50e47d7625a73909b4574eed4f9255b6c44207d0))
+* restore a cleaned-up skill that another device assigned before the cleanup was pushed ([#272](https://github.com/AksharP5/skillsync/issues/272)) ([6374ecc](https://github.com/AksharP5/skillsync/commit/6374ecc235c06789a910fc9939c4faf869ae79b7))
+* run the default subcommand when only options are given ([#261](https://github.com/AksharP5/skillsync/issues/261)) ([416d56b](https://github.com/AksharP5/skillsync/commit/416d56b3fd91bd3caebd3f2107212817bd0831c1))
+* skip new local skills that fail the content check instead of aborting sync ([#265](https://github.com/AksharP5/skillsync/issues/265)) ([5a0fa66](https://github.com/AksharP5/skillsync/commit/5a0fa665ec1d43d5833131c027cf6b3ff872498e))
+* write through a symlinked config file ([#274](https://github.com/AksharP5/skillsync/issues/274)) ([cef559c](https://github.com/AksharP5/skillsync/commit/cef559cc56d67a34741cc1150e43c2f29a07ad1f))
+
 ## [0.15.2](https://github.com/AksharP5/skillsync/compare/v0.15.1...v0.15.2) (2026-11-23)
 
 
