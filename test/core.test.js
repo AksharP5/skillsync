@@ -391,6 +391,10 @@ test('removing a target cleans SkillSync-owned projections but preserves unmanag
     await readFile(path.join(target, 'local-only', 'SKILL.md'), 'utf8'),
     '# Local\n',
   );
+  await assert.rejects(
+    removeTargetAndPrune({ vaultPath: vault, deviceId: 'macbook', name: 'codx' }),
+    /Unknown target on this device: codx/,
+  );
 });
 
 test('scanTargets records unmanaged local skills from a separate scan path', async () => {
@@ -425,6 +429,21 @@ test('scanTargets records unmanaged local skills from a separate scan path', asy
     ],
   );
   assert.deepEqual(device.installed['bog-hyperframes'], ['hermes']);
+});
+
+test('scanTargets falls back to the folder name when the frontmatter name has no slug characters', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'vault');
+  const target = path.join(root, 'claude-skills');
+  await mkdir(path.join(vault, 'skills'), { recursive: true });
+  await rebuildRegistry(vault);
+  await makeSkill(target, 'translate-ja', '---\nname: 日本語翻訳\n---\n# Translate\n');
+  const deviceId = 'laptop';
+  await addTarget({ vaultPath: vault, deviceId, name: 'claude', targetPath: target });
+
+  const device = await scanTargets({ vaultPath: vault, deviceId });
+
+  assert.deepEqual(device.detected.claude.map((skill) => skill.name), ['translate-ja']);
 });
 
 test('scanTargets preserves duplicate local paths and deduplicates shared reports by name', async () => {
