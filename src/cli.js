@@ -544,15 +544,17 @@ async function identityForCheckout(repoPath) {
     : { repoPath, deviceId: defaultDeviceId() };
 }
 
+async function requireGitHubTools() {
+  if (!await commandExists('git')) throw new Error('git is required');
+  if (!await commandExists('gh')) throw new Error('gh CLI is required. Install GitHub CLI, run gh auth login, then retry.');
+  await gh(['auth', 'status']).catch(() => {
+    throw new Error('gh is not authenticated. Run: gh auth login');
+  });
+}
+
 async function setup(rest) {
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
-  if (!await commandExists('git')) throw new Error('git is required');
-  if (!await commandExists('gh')) throw new Error('gh CLI is required for setup. Install GitHub CLI, run gh auth login, then retry.');
-  try {
-    await gh(['auth', 'status']);
-  } catch {
-    throw new Error('gh is not authenticated. Run: gh auth login');
-  }
+  await requireGitHubTools();
 
   const repoArg = flagValue(rest, '--repo');
   const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
@@ -605,6 +607,7 @@ async function setup(rest) {
 }
 
 async function connect(rest) {
+  await requireGitHubTools();
   const repoArg = rest[0];
   const repo = await resolveRepoCloneUrl(repoArg);
   const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
