@@ -60,7 +60,12 @@ export async function loadConfig(configPath = defaultConfigPath()) {
 
 export async function saveConfig(config, configPath = defaultConfigPath()) {
   await mkdir(path.dirname(configPath), { recursive: true });
-  await writeJson(configPath, { version: 1, ...config });
+  // Write through a symlinked config, such as one managed in a dotfiles repo, instead of replacing the link.
+  const destination = await realpath(configPath).catch((error) => {
+    if (error.code === 'ENOENT') return configPath;
+    throw error;
+  });
+  await writeJson(destination, { version: 1, ...config });
 }
 
 export async function isConfigured(configPath = defaultConfigPath()) {
