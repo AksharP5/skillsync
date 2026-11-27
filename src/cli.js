@@ -1947,7 +1947,7 @@ async function deleteSkill(rest) {
 }
 
 function parseTargets(rest) {
-  const targets = flagList(rest, [hasFlag(rest, '--target') ? '--target' : '-t']);
+  const targets = flagList(rest, ['--target', '-t']);
   if (hasFlag(rest, '--global') || hasFlag(rest, '-g')) targets.unshift('global');
   return targets.length ? [...new Set(targets)] : undefined;
 }

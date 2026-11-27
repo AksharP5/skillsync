@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { addTarget, applyLinks, installSkill, managedProjections } from '../src/core/device.js';
@@ -73,4 +73,13 @@ test('installed-copy diagnostics refresh source content and permissions while ch
 
   await applyLinks({ ...options, discardLocalChanges: true });
   assert.deepEqual((await managedProjections(options)).map(copy => copy.status), ['ok', 'ok']);
+});
+
+test('symlinks to directories or missing paths in a copy are reported as local changes', async t => {
+  const { options, copies } = await createCopies(t);
+  await symlink(path.dirname(copies[0]), path.join(copies[0], 'linked-dir'));
+  await symlink(path.join(copies[0], 'missing'), path.join(copies[1], 'dangling'));
+  await assert.rejects(applyLinks(options), /Managed copy has local changes/);
+  assert.equal((await applyLinks({ ...options, discardLocalChanges: true })).operations.length, 2);
+  assert.deepEqual((await applyLinks(options)).operations, []);
 });
