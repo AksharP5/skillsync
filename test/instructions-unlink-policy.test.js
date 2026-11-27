@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -12,7 +12,7 @@ import { git } from '../src/core/git.js';
 const execFileAsync = promisify(execFile);
 const content = '# Shared instructions\n';
 
-async function fixture(t, { installed = true, manual = false, claudeOnly = false } = {}) {
+async function fixture(t, { installed = true, manual = false, claudeOnly = false, chained = false } = {}) {
   const home = await mkdtemp(path.join(tmpdir(), 'skillsync-unlink-policy-'));
   t.after(() => rm(home, { recursive: true, force: true, maxRetries: 3 }));
   const vault = path.join(home, 'vault');
@@ -21,6 +21,10 @@ async function fixture(t, { installed = true, manual = false, claudeOnly = false
   const claude = path.join(home, '.claude', 'CLAUDE.md');
   await mkdir(path.dirname(codex), { recursive: true });
   await writeFile(codex, content);
+  if (chained) {
+    await mkdir(path.dirname(claude), { recursive: true });
+    await symlink(codex, claude);
+  }
   await git(['init', '--bare', '--initial-branch=main', remote]);
   await git(['init', '--initial-branch=main', vault]);
   await git(['config', 'user.name', 'SkillSync Test'], vault);
@@ -169,3 +173,17 @@ for (const claudeOnly of [false, true]) {
     });
   });
 }
+
+test('a CLAUDE.md that links to AGENTS.md is relinked to the profile so AGENTS.md can be unlinked', async (t) => {
+  const { vault, codex, claude, cli } = await fixture(t, { chained: true });
+  await cli(['sync']);
+  const profile = await realpath(path.join(vault, 'globals', 'agents', 'workstation.md'));
+  assert.equal(await realpath(path.resolve(path.dirname(claude), await readlink(claude))), profile);
+
+  await cli(['instructions', 'unlink', codex]);
+  await cli(['sync']);
+
+  assert.equal((await lstat(codex)).isFile(), true);
+  assert.equal(await readFile(codex, 'utf8'), content);
+  assert.equal(await realpath(claude), profile);
+});
