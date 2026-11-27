@@ -380,6 +380,8 @@ On upgrade from an older baseline or migration from a legacy manifest, the first
 
 Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Scan and install paths can use different directory aliases for the same folder in both copy and symlink modes. Nested folders, mismatched names, and symlinked skill folders remain detected for explicit import.
 
+A new skill that fails the content check, for example because it contains a symlink or something that looks like a secret, is skipped with a warning and left untouched. The rest of the sync continues. Fix the folder and add it with `skillsync add`.
+
 Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.
 
 Before moving an existing target, SkillSync checks the proposed destination for conflicts and required write access. A refused move leaves the existing target path and projections intact; fix the destination and repeat the move.
@@ -521,7 +523,7 @@ skillsync policy set delete-unassigned-skills on
 
 A full `skillsync sync` then removes a vault skill only when it has no assignment on any device and no device reports a detected local copy. Existing unassigned skills are included, while detected local skills are protected. Changes made for another device remain protected until that device syncs and reports its updated local state.
 
-Automatic cleanup rechecks current policy and references while holding a private per-vault references lease through deletion or restoration. Assignment commands, report publication, policy saves, and SkillSync-managed Git pull/rebase use the same cross-process lease. A competing writer fails busy and can be retried. If a report publishes changed detections for the syncing device after its scan starts, sync stops for a retry and preserves that report instead of replacing it with the older scan. Standalone reported scans use the same checkpoint through publication. A private publication revision changes even for identical inventories, so repeated observations and inventories that change away and back cannot bypass the check. The revision is checked under references again at applied-report publication, including syncs without a pull. An install committed first protects the skill; after deletion, assignment commands reject the missing canonical skill even if stale registry metadata remains. Explicit vault deletion still removes assigned skills intentionally.
+Automatic cleanup rechecks current policy and references while holding a private per-vault references lease through deletion or restoration. Assignment commands, report publication, policy saves, and SkillSync-managed Git pull/rebase use the same cross-process lease. A competing writer fails busy and can be retried. If a report publishes changed detections for the syncing device after its scan starts, sync stops for a retry and preserves that report instead of replacing it with the older scan. Standalone reported scans use the same checkpoint through publication. A private publication revision changes even for identical inventories, so repeated observations and inventories that change away and back cannot bypass the check. The revision is checked under references again at applied-report publication, including syncs without a pull. An install committed first protects the skill, including one another device pushes after cleanup removed the skill here but before that removal was pushed: the skill is restored before pushing; after deletion, assignment commands reject the missing canonical skill even if stale registry metadata remains. Explicit vault deletion still removes assigned skills intentionally.
 
 First-use private state initialization and legacy path migration recheck missing state under the same references lease, preserving setup completed by another process. Already initialized state keeps its existing read path.
 
@@ -548,6 +550,8 @@ If preserving those files fails, repair the reported storage or permission error
 If the filesystem cannot prove a folder's identity after an interrupted backup, sync keeps the recovery state and reports the affected folder. Move that folder outside the vault to preserve its contents, then run sync again. This can occur on filesystems that do not provide stable creation times.
 
 Sync stops if Git leaves unresolved conflicts, including conflicts while restoring local edits after a pull. Resolve and stage the affected files before retrying. `--no-pull` does not bypass this check.
+
+When two devices change the vault at the same time, sync rebases this device's commits onto the remote. Conflicts only in `registry.json`, such as two devices adding skills at once, are merged automatically. Any other rebase conflict stops sync with the branch restored and the conflicting files listed; resolve them with `git pull --rebase` in the vault, finish with `git rebase --continue`, then sync again.
 
 Preview local skill projection changes without pulling or writing:
 
@@ -585,7 +589,7 @@ Restore the most recent successful local projection apply in an emergency:
 skillsync rollback
 ```
 
-Rollback restores files only. It does not change assignments or target settings.
+Rollback restores files only. It does not change assignments or target settings. Folders it replaces, including copies edited after the apply, are kept in the backup's `replaced` folder, and the command prints that location.
 
 Validate vault structure, registry hashes, JSON files, symlinks, and common credential formats without changing the vault:
 

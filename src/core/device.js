@@ -263,6 +263,10 @@ export async function migrateLegacyLocalPathState({
     const desired = await readDeviceState(devicePath(vaultPath, deviceId));
     const legacy = isLegacyDeviceManifest(desired) ? desired : null;
     const source = reported || legacy;
+    // Current reports keep target paths only in private state, so they cannot be rebuilt here.
+    if (Object.values(source?.targets ?? {}).some((target) => typeof target?.path !== 'string')) {
+      throw new Error(`Local paths for ${deviceId} are not initialized; run SkillSync setup or reconnect this device`);
+    }
     const normalized = normalizeReportedState(
       source,
       deviceId,
@@ -729,6 +733,7 @@ export async function addTarget({
     }
     await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   };
+  if (!previousTarget) await groupTargetRoots({ ...device.targets, [name]: nextTarget });
   if (previousTarget
     && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
     const plan = await planLinks({
@@ -765,7 +770,7 @@ async function requireWritableTargetRoot(targetPath) {
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   assertSafePathSegment(name, 'Target name');
   let device = await loadLocalDevice(vaultPath, deviceId);
-  if (!Object.hasOwn(device.targets, name)) return device;
+  if (!Object.hasOwn(device.targets, name)) throw new Error(`Unknown target on this device: ${name}`);
   await removeOwnedTargetProjections({
     vaultPath,
     device,
@@ -1023,6 +1028,10 @@ function presentSkillNames(devices) {
   return present;
 }
 
+export async function referencedSkillNames(vaultPath) {
+  return presentSkillNames(await listDevices(vaultPath));
+}
+
 export async function listUnusedSkills(vaultPath, { deviceId, detected, inventoryRevision } = {}) {
   const registry = await loadRegistry(vaultPath);
   const devices = await listDevices(vaultPath);
@@ -1070,33 +1079,10 @@ export async function removeTargetAndPrune(options) {
   return { device, pruned: [] };
 }
 
-export async function planLinks({
-  vaultPath,
-  deviceId = defaultDeviceId(),
-  discardLocalChanges = false,
-  readOnly = false,
-  replaceUnmanagedPaths = [],
-  device: providedDevice,
-  registry: providedRegistry,
-}) {
-  const device = providedDevice || await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
-  const registry = providedRegistry || await loadRegistry(vaultPath);
-  const approvedReplacements = new Set(await Promise.all(
-    replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
-  ));
-  const desiredByTarget = new Map();
-  for (const [skillName, targets] of Object.entries(device.installed)) {
-    assertSafePathSegment(skillName, 'Skill name');
-    if (!registry.skills[skillName]) continue;
-    for (const targetName of targets) {
-      if (!device.targets[targetName]) continue;
-      if (!desiredByTarget.has(targetName)) desiredByTarget.set(targetName, new Set());
-      desiredByTarget.get(targetName).add(skillName);
-    }
-  }
-
+// Targets that share a folder form one group; groups must agree on mode and must not nest.
+async function groupTargetRoots(targets, desiredByTarget = new Map()) {
   const targetGroups = new Map();
-  for (const [targetName, targetConfig] of Object.entries(device.targets)) {
+  for (const [targetName, targetConfig] of Object.entries(targets)) {
     const targetPath = path.resolve(expandHome(targetConfig.path));
     const canonicalPath = await canonicalTargetRoot(targetPath);
     const existing = targetGroups.get(canonicalPath);
@@ -1122,6 +1108,35 @@ export async function planLinks({
       throw new Error(`Configured skill targets cannot overlap: ${root}`);
     }
   }
+  return targetGroups;
+}
+
+export async function planLinks({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  discardLocalChanges = false,
+  readOnly = false,
+  replaceUnmanagedPaths = [],
+  device: providedDevice,
+  registry: providedRegistry,
+}) {
+  const device = providedDevice || await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
+  const registry = providedRegistry || await loadRegistry(vaultPath);
+  const approvedReplacements = new Set(await Promise.all(
+    replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
+  ));
+  const desiredByTarget = new Map();
+  for (const [skillName, targets] of Object.entries(device.installed)) {
+    assertSafePathSegment(skillName, 'Skill name');
+    if (!registry.skills[skillName]) continue;
+    for (const targetName of targets) {
+      if (!device.targets[targetName]) continue;
+      if (!desiredByTarget.has(targetName)) desiredByTarget.set(targetName, new Set());
+      desiredByTarget.get(targetName).add(skillName);
+    }
+  }
+
+  const targetGroups = await groupTargetRoots(device.targets, desiredByTarget);
 
   const operations = [];
   const sourceHashes = new Map();
@@ -1444,11 +1459,19 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
       const projection = await projectionInfo(sourcePath, vaultPath);
       if (projection.ownedSymlink || projection.ownedCopy) continue;
 
+      // A skill that fails the content check is reported like a conflict so the rest of the sync still runs.
       const comparison = await compareSkillToVault({
         vaultPath,
         sourcePath,
         name: skill.name,
+      }).catch((error) => {
+        if (error.code !== 'SKILLSYNC_CHECK_FAILED') throw error;
+        return { status: 'rejected', name: skill.name, reason: error.message };
       });
+      if (comparison.status === 'rejected') {
+        conflicts.push({ name: comparison.name, target: targetName, path: sourcePath, reason: comparison.reason });
+        continue;
+      }
       if (comparison.status === 'different') {
         conflicts.push({
           name: comparison.name,
@@ -1654,14 +1677,22 @@ async function symlinkInfo(targetPath, vaultPath) {
       if (error.code === 'ENOENT') return null;
       throw error;
     });
-    const resolved = canonical || path.resolve(path.dirname(targetPath), linked);
+    // A dangling link resolves from the folder that really holds it. Older versions wrote
+    // links relative to the configured alias instead, so either reading counts as owned.
+    const candidates = canonical
+      ? [canonical]
+      : [
+        path.resolve(await realpathOrResolve(path.dirname(targetPath)), linked),
+        path.resolve(path.dirname(targetPath), linked),
+      ];
     const vaultSkills = path.resolve(vaultPath, 'skills');
     const canonicalVaultSkills = await realpathOrResolve(vaultSkills);
+    const insideVault = (candidate) => [vaultSkills, canonicalVaultSkills]
+      .some((root) => candidate.startsWith(root + path.sep));
     return {
-      resolved,
+      resolved: candidates.find(insideVault) ?? candidates[0],
       reachable: Boolean(canonical),
-      owned: [vaultSkills, canonicalVaultSkills]
-        .some((root) => resolved.startsWith(root + path.sep)),
+      owned: candidates.some(insideVault),
     };
   } catch (error) {
     if (error.code === 'ENOENT') return null;

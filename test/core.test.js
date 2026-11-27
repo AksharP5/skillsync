@@ -260,25 +260,46 @@ test('applyLinks repairs skill links through a symlinked target directory', asyn
   assert.equal(projection.status, 'ok');
 });
 
-test('projection plans reject overlapping target roots', async () => {
+test('a dangling projection behind a symlinked target directory is removed after its skill is deleted', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'home', '.skillsync', 'repo');
+  const physicalTarget = path.join(root, 'dotfiles-skills');
+  const target = path.join(root, 'home', '.claude', 'skills');
+  await mkdir(physicalTarget, { recursive: true });
+  await mkdir(path.dirname(target), { recursive: true });
+  await symlink(physicalTarget, target, 'dir');
+  await makeSkill(path.join(vault, 'skills'), 'foo');
+  await rebuildRegistry(vault);
+  const deviceId = 'laptop';
+  await addTarget({ vaultPath: vault, deviceId, name: 'claude', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'foo', targets: ['claude'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await deleteSkillFromVault({ vaultPath: vault, skillName: 'foo' });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await assert.rejects(() => lstat(path.join(target, 'foo')), { code: 'ENOENT' });
+});
+
+test('adding a target rejects one that overlaps or mixes modes with an existing target', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const target = path.join(root, 'skills');
   await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'parent', targetPath: target });
-  await addTarget({
-    vaultPath: vault,
-    deviceId: 'macbook',
-    name: 'nested',
-    targetPath: path.join(target, 'nested'),
-  });
 
   await assert.rejects(
-    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    () => addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'nested', targetPath: path.join(target, 'nested') }),
     /Configured skill targets cannot overlap/,
   );
+  await assert.rejects(
+    () => addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'copies', targetPath: target, mode: 'copy' }),
+    /must use the same projection mode/,
+  );
+  assert.deepEqual(Object.keys((await loadLocalDevice(vault, 'macbook')).targets), ['parent']);
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
 });
 
-test('projection plans reject overlapping target roots through symlink aliases', async () => {
+test('adding a target rejects overlapping target roots through symlink aliases', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const physicalTarget = path.join(root, 'physical-skills');
@@ -291,15 +312,13 @@ test('projection plans reject overlapping target roots through symlink aliases',
     name: 'alias',
     targetPath: aliasTarget,
   });
-  await addTarget({
-    vaultPath: vault,
-    deviceId: 'macbook',
-    name: 'nested',
-    targetPath: path.join(physicalTarget, 'nested'),
-  });
-
   await assert.rejects(
-    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    () => addTarget({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      name: 'nested',
+      targetPath: path.join(physicalTarget, 'nested'),
+    }),
     /Configured skill targets cannot overlap/,
   );
 });
@@ -390,6 +409,10 @@ test('removing a target cleans SkillSync-owned projections but preserves unmanag
   assert.equal(
     await readFile(path.join(target, 'local-only', 'SKILL.md'), 'utf8'),
     '# Local\n',
+  );
+  await assert.rejects(
+    removeTargetAndPrune({ vaultPath: vault, deviceId: 'macbook', name: 'codx' }),
+    /Unknown target on this device: codx/,
   );
 });
 

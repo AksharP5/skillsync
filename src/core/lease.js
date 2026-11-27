@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, rename, rmdir, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import { ensureDir, readJson, removePath, writePrivateJson } from './fs.js';
@@ -11,6 +11,10 @@ async function pathInfo(filePath) {
   });
 }
 
+const processToken = randomUUID();
+// Linux only; elsewhere a lock from before a reboot is judged by its PID alone.
+const bootId = await readFile('/proc/sys/kernel/random/boot_id', 'utf8').then((id) => id.trim(), () => null);
+
 function processIsRunning(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -19,6 +23,13 @@ function processIsRunning(pid) {
   } catch (error) {
     return error.code === 'EPERM';
   }
+}
+
+// A crashed owner's PID can belong to another process after a reboot, or to this one after a restart.
+function ownerIsRunning(owner) {
+  if (!processIsRunning(owner?.pid)) return false;
+  if (bootId && owner.boot_id && owner.boot_id !== bootId) return false;
+  return owner.pid !== process.pid || !owner.process || owner.process === processToken;
 }
 
 export async function acquireDirectoryLease(root, { label = 'apply', recover } = {}) {
@@ -32,6 +43,8 @@ export async function acquireDirectoryLease(root, { label = 'apply', recover } =
     await writePrivateJson(path.join(pendingPath, ownerName), {
       version: 1,
       pid: process.pid,
+      process: processToken,
+      ...(bootId ? { boot_id: bootId } : {}),
       started_at: new Date().toISOString(),
     });
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -45,7 +58,7 @@ export async function acquireDirectoryLease(root, { label = 'apply', recover } =
         const owner = previousOwner
           ? await readJson(path.join(lockPath, previousOwner), null).catch(() => null)
           : null;
-        if (processIsRunning(owner?.pid)) {
+        if (ownerIsRunning(owner)) {
           throw new Error(`Another SkillSync ${label} is already running`);
         }
         const lockInfo = await pathInfo(lockPath);

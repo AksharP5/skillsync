@@ -179,7 +179,34 @@ export async function cloneRepo(repo, repoPath) {
   await run('git', ['clone', repo, repoPath], { inherit: true });
 }
 
-export async function pullRebase(repoPath, { beforePull } = {}) {
+async function rebaseInProgress(repoPath) {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    const { stdout } = await git(['rev-parse', '--git-path', name], repoPath);
+    if (await exists(path.resolve(repoPath, stdout.trim()))) return true;
+  }
+  return false;
+}
+
+// Finishes a stopped rebase while resolveConflicts handles every conflicted path;
+// otherwise aborts it, so the branch and any autostashed changes are restored.
+async function settleRebase(repoPath, resolveConflicts, failure) {
+  while (await rebaseInProgress(repoPath)) {
+    const { stdout } = await git(['diff', '--name-only', '--diff-filter=U', '-z'], repoPath);
+    const paths = stdout.split('\0').filter(Boolean);
+    if (!paths.length || !resolveConflicts || !await resolveConflicts(paths)) {
+      await git(['rebase', '--abort'], repoPath);
+      throw new Error([
+        `Remote vault changes conflict with local commits${paths.length ? ` in ${paths.join(', ')}` : ''}.`,
+        `Run git pull --rebase in ${repoPath}, resolve the conflicts, finish with git rebase --continue, then sync again.`,
+        failure.message,
+      ].join('\n'));
+    }
+    await git(['add', '--', ...paths], repoPath);
+    failure = await git(['-c', 'core.editor=true', 'rebase', '--continue'], repoPath).then(() => failure, (error) => error);
+  }
+}
+
+export async function pullRebase(repoPath, { beforePull, resolveConflicts } = {}) {
   if (!await isGitRepo(repoPath)) return;
   return withVaultReferences(repoPath, async () => {
     await beginInventoryUpdate(repoPath);
@@ -187,7 +214,10 @@ export async function pullRebase(repoPath, { beforePull } = {}) {
     try {
       const { stdout: previousHead } = await git(['rev-parse', '--revs-only', 'HEAD'], repoPath);
       if (beforePull) await beforePull(previousHead.trim() || null);
-      await git(['pull', '--rebase', '--autostash'], repoPath);
+      await git(['pull', '--rebase', '--autostash'], repoPath).catch(async (error) => {
+        if (!await rebaseInProgress(repoPath)) throw error;
+        await settleRebase(repoPath, resolveConflicts, error);
+      });
       await assertNoGitConflicts(repoPath);
       return previousHead.trim() || null;
     } catch (error) {
@@ -228,7 +258,7 @@ export function isPushRejectedBecauseRemoteHasWork(error) {
   );
 }
 
-export async function pushWithPullRebaseRetry(repoPath, { beforePush, beforePullRebase, afterPullRebase } = {}) {
+export async function pushWithPullRebaseRetry(repoPath, { beforePush, beforePullRebase, afterPullRebase, resolveConflicts } = {}) {
   if (!await isGitRepo(repoPath)) return { pushed: false, rebased: false };
   try {
     if (beforePush) await beforePush();
@@ -236,7 +266,7 @@ export async function pushWithPullRebaseRetry(repoPath, { beforePush, beforePull
     return { pushed: true, rebased: false };
   } catch (error) {
     if (!isPushRejectedBecauseRemoteHasWork(error)) throw error;
-    const previousHead = await pullRebase(repoPath, { beforePull: beforePullRebase });
+    const previousHead = await pullRebase(repoPath, { beforePull: beforePullRebase, resolveConflicts });
     if (afterPullRebase) await afterPullRebase(previousHead);
     if (beforePush) await beforePush();
     await push(repoPath);

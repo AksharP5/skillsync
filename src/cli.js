@@ -332,7 +332,10 @@ async function runCommand([command = 'ui', ...rest]) {
 function parseArguments(spec, rest, name) {
   const usage = `Usage: ${spec.usage ?? name}`;
   if (spec.subcommands) {
-    const [subcommand = spec.default, ...tail] = rest;
+    // Options alone, as in `plugins --agent claude`, apply to the default subcommand.
+    const [subcommand, ...tail] = spec.default && (!rest.length || rest[0].startsWith('-'))
+      ? [spec.default, ...rest]
+      : rest;
     if (!Object.hasOwn(spec.subcommands, subcommand)) throw new Error(usage);
     return [subcommand, ...parseArguments(spec.subcommands[subcommand], tail, `${name} ${subcommand}`)];
   }
@@ -541,15 +544,17 @@ async function identityForCheckout(repoPath) {
     : { repoPath, deviceId: defaultDeviceId() };
 }
 
+async function requireGitHubTools() {
+  if (!await commandExists('git')) throw new Error('git is required');
+  if (!await commandExists('gh')) throw new Error('gh CLI is required. Install GitHub CLI, run gh auth login, then retry.');
+  await gh(['auth', 'status']).catch(() => {
+    throw new Error('gh is not authenticated. Run: gh auth login');
+  });
+}
+
 async function setup(rest) {
   const yes = hasFlag(rest, '--yes') || hasFlag(rest, '-y');
-  if (!await commandExists('git')) throw new Error('git is required');
-  if (!await commandExists('gh')) throw new Error('gh CLI is required for setup. Install GitHub CLI, run gh auth login, then retry.');
-  try {
-    await gh(['auth', 'status']);
-  } catch {
-    throw new Error('gh is not authenticated. Run: gh auth login');
-  }
+  await requireGitHubTools();
 
   const repoArg = flagValue(rest, '--repo');
   const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
@@ -602,6 +607,7 @@ async function setup(rest) {
 }
 
 async function connect(rest) {
+  await requireGitHubTools();
   const repoArg = rest[0];
   const repo = await resolveRepoCloneUrl(repoArg);
   const selectedPath = path.resolve(expandHome(flagValue(rest, '--path', defaultRepoPath())));
@@ -2132,12 +2138,15 @@ async function syncCommand(rest) {
     console.log(`Auto-adopted ${adopted.name} from ${adopted.target}.`);
   }
   for (const conflict of result.autoImportConflicts || []) {
-    console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.`);
+    console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.${conflict.reason ? `\n${conflict.reason}` : ''}`);
   }
   printInstructionSyncMessages(result);
   printPluginSyncMessages(result);
   if (result.prunedSkills?.length) {
     console.log(`Removed unused vault skills: ${result.prunedSkills.join(', ')}.`);
+  }
+  if (result.restoredSkills?.length) {
+    console.log(`Kept vault skills another device started using: ${result.restoredSkills.join(', ')}.`);
   }
   console.log(result.pushed ? 'Synced and pushed changes.' : 'Synced. No local changes to push.');
 }
@@ -2174,27 +2183,33 @@ async function rollbackCommand() {
     deviceId: config.deviceId,
   });
   console.log(`Restored ${result.restored} skill projection${result.restored === 1 ? '' : 's'} from ${result.backupId}.`);
+  if (result.replacedPath) console.log(`Copies of the replaced folders are in ${result.replacedPath}.`);
   console.log('Rollback restores files only; it does not change assignments or target settings.');
 }
 
 async function doctor() {
   const gitOk = await commandExists('git');
   const ghOk = await commandExists('gh');
+  let healthy = gitOk && ghOk;
   console.log(`${gitOk ? '✓' : '✗'} git`);
   console.log(`${ghOk ? '✓' : '✗'} gh`);
   if (ghOk) {
     try { await gh(['auth', 'status']); console.log('✓ gh auth'); }
-    catch { console.log('✗ gh auth'); }
+    catch { console.log('✗ gh auth'); healthy = false; }
   }
   try {
     const config = await loadConfig();
     console.log(`✓ config: ${config.repoPath}`);
-    console.log(`${await isGitRepo(config.repoPath) ? '✓' : '✗'} vault git repo`);
+    const repoOk = await isGitRepo(config.repoPath);
+    healthy &&= repoOk;
+    console.log(`${repoOk ? '✓' : '✗'} vault git repo`);
     const result = await checkVault(config.repoPath);
     console.log(`✓ vault checked: ${result.skills} skills, ${result.files} files`);
   } catch (error) {
     console.log(`✗ config/vault: ${error.message}`);
+    healthy = false;
   }
+  if (!healthy) process.exitCode = 1;
 }
 
 async function service() {
@@ -2252,12 +2267,15 @@ async function daemon(rest) {
         console.log(`[${new Date().toISOString()}] auto-adopted ${adopted.name} from ${adopted.target}`);
       }
       for (const conflict of result.autoImportConflicts || []) {
-        console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}`);
+        console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}${conflict.reason ? `: ${conflict.reason}` : ''}`);
       }
       printInstructionSyncMessages(result, `[${new Date().toISOString()}] `);
       printPluginSyncMessages(result, `[${new Date().toISOString()}] `, { onlyChanged: true });
       if (result.prunedSkills?.length) {
         console.log(`[${new Date().toISOString()}] removed unused vault skills: ${result.prunedSkills.join(', ')}`);
+      }
+      if (result.restoredSkills?.length) {
+        console.log(`[${new Date().toISOString()}] kept vault skills another device started using: ${result.restoredSkills.join(', ')}`);
       }
       console.log(`[${new Date().toISOString()}] synced`);
     } catch (error) {

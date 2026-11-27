@@ -439,9 +439,21 @@ async function rollbackBackup({ vaultPath, deviceId, allowedRoots, backupId: id 
   );
   const manifest = await readJson(path.join(backupPath, 'manifest.json'));
   if (manifest.state !== 'applied') throw new Error(`Projection backup is not available: ${id}`);
+  await preflightBackup(backupPath, manifest, deviceId, allowedRoots);
+  // Keep what rollback replaces, which can include edits made after the apply.
+  const replacedPath = path.join(backupPath, 'replaced');
+  const replaced = [];
+  for (const [index, entry] of manifest.entries.entries()) {
+    replaced.push(await captureEntry(entry.destination, replacedPath, index));
+  }
+  await writePrivateJson(path.join(replacedPath, 'manifest.json'), { entries: replaced });
   await restoreBackup(backupPath, manifest, deviceId, allowedRoots);
   await updateManifest(backupPath, manifest, 'rolled-back');
-  return { backupId: id, restored: manifest.entries.length };
+  return {
+    backupId: id,
+    restored: manifest.entries.length,
+    replacedPath: replaced.some((entry) => entry.stored) ? replacedPath : null,
+  };
 }
 
 export async function rollbackFilesystemBackup({
