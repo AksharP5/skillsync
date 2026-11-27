@@ -263,6 +263,10 @@ export async function migrateLegacyLocalPathState({
     const desired = await readDeviceState(devicePath(vaultPath, deviceId));
     const legacy = isLegacyDeviceManifest(desired) ? desired : null;
     const source = reported || legacy;
+    // Current reports keep target paths only in private state, so they cannot be rebuilt here.
+    if (Object.values(source?.targets ?? {}).some((target) => typeof target?.path !== 'string')) {
+      throw new Error(`Local paths for ${deviceId} are not initialized; run SkillSync setup or reconnect this device`);
+    }
     const normalized = normalizeReportedState(
       source,
       deviceId,
@@ -765,7 +769,7 @@ async function requireWritableTargetRoot(targetPath) {
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   assertSafePathSegment(name, 'Target name');
   let device = await loadLocalDevice(vaultPath, deviceId);
-  if (!Object.hasOwn(device.targets, name)) return device;
+  if (!Object.hasOwn(device.targets, name)) throw new Error(`Unknown target on this device: ${name}`);
   await removeOwnedTargetProjections({
     vaultPath,
     device,
@@ -1444,11 +1448,19 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
       const projection = await projectionInfo(sourcePath, vaultPath);
       if (projection.ownedSymlink || projection.ownedCopy) continue;
 
+      // A skill that fails the content check is reported like a conflict so the rest of the sync still runs.
       const comparison = await compareSkillToVault({
         vaultPath,
         sourcePath,
         name: skill.name,
+      }).catch((error) => {
+        if (error.code !== 'SKILLSYNC_CHECK_FAILED') throw error;
+        return { status: 'rejected', name: skill.name, reason: error.message };
       });
+      if (comparison.status === 'rejected') {
+        conflicts.push({ name: comparison.name, target: targetName, path: sourcePath, reason: comparison.reason });
+        continue;
+      }
       if (comparison.status === 'different') {
         conflicts.push({
           name: comparison.name,

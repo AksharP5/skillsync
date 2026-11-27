@@ -380,6 +380,8 @@ On upgrade from an older baseline or migration from a legacy manifest, the first
 
 Automatic adoption requires a folder directly inside the target whose folder name matches the skill name. Scan and install paths can use different directory aliases for the same folder in both copy and symlink modes. Nested folders, mismatched names, and symlinked skill folders remain detected for explicit import.
 
+A new skill that fails the content check, for example because it contains a symlink or something that looks like a secret, is skipped with a warning and left untouched. The rest of the sync continues. Fix the folder and add it with `skillsync add`.
+
 Removing or moving a target cleans up its owned projections, including pending uninstalls. Skills still assigned to another target sharing the same folder remain in place. Unmanaged folders and locally edited copies stay protected.
 
 Before moving an existing target, SkillSync checks the proposed destination for conflicts and required write access. A refused move leaves the existing target path and projections intact; fix the destination and repeat the move.

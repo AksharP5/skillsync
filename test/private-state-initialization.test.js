@@ -109,3 +109,18 @@ for (const initialize of [initializeLocalPathState, migrateLegacyLocalPathState]
     await assertPreserved(f);
   });
 }
+
+test('a device whose private paths were lost is told to rerun setup and recovers after it', async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(await publish(f), { ok: true, pruned: [] });
+  await fs.rm(f.localState);
+
+  await assert.rejects(
+    syncVault({ ...f.options, pull: false, pushChanges: false }),
+    /Local paths for local are not initialized; run SkillSync setup or reconnect this device/,
+  );
+
+  await initializeLocalPathState(f.options);
+  assert.deepEqual(await publish(f), { ok: true, pruned: [] });
+  await assertPreserved(f);
+});
