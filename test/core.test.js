@@ -260,6 +260,27 @@ test('applyLinks repairs skill links through a symlinked target directory', asyn
   assert.equal(projection.status, 'ok');
 });
 
+test('a dangling projection behind a symlinked target directory is removed after its skill is deleted', async () => {
+  const root = await tempDir();
+  const vault = path.join(root, 'home', '.skillsync', 'repo');
+  const physicalTarget = path.join(root, 'dotfiles-skills');
+  const target = path.join(root, 'home', '.claude', 'skills');
+  await mkdir(physicalTarget, { recursive: true });
+  await mkdir(path.dirname(target), { recursive: true });
+  await symlink(physicalTarget, target, 'dir');
+  await makeSkill(path.join(vault, 'skills'), 'foo');
+  await rebuildRegistry(vault);
+  const deviceId = 'laptop';
+  await addTarget({ vaultPath: vault, deviceId, name: 'claude', targetPath: target });
+  await installSkill({ vaultPath: vault, deviceId, skillName: 'foo', targets: ['claude'] });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await deleteSkillFromVault({ vaultPath: vault, skillName: 'foo' });
+  await applyLinks({ vaultPath: vault, deviceId });
+
+  await assert.rejects(() => lstat(path.join(target, 'foo')), { code: 'ENOENT' });
+});
+
 test('projection plans reject overlapping target roots', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
