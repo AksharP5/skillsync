@@ -1027,6 +1027,10 @@ function presentSkillNames(devices) {
   return present;
 }
 
+export async function referencedSkillNames(vaultPath) {
+  return presentSkillNames(await listDevices(vaultPath));
+}
+
 export async function listUnusedSkills(vaultPath, { deviceId, detected, inventoryRevision } = {}) {
   const registry = await loadRegistry(vaultPath);
   const devices = await listDevices(vaultPath);

@@ -6,6 +6,7 @@ import {
   autoImportNewLocalSkills,
   markDeviceApplied,
   migrateLegacyLocalPathState,
+  referencedSkillNames,
   scanTargets,
   sweepUnusedSkills,
 } from './device.js';
@@ -22,6 +23,7 @@ import {
   readInventoryRevision,
   pushWithPullRebaseRetry,
   withGitPrivatePathCache,
+  withVaultReferences,
 } from './git.js';
 import {
   applyGlobalInstructions,
@@ -236,12 +238,33 @@ async function sync({
     await mergeRegistryConflict(vaultPath);
     return true;
   }
-  if (pull && await isGitRepo(vaultPath)) {
-    await pullRebase(vaultPath, { beforePull, resolveConflicts });
-    await afterPull();
+  // Skills deleted by automatic cleanup stay listed here until that deletion is pushed.
+  const sweptPath = await gitPrivatePath(vaultPath, 'swept-skills.json');
+  const readSwept = async () => (await readJson(sweptPath, []))
+    .map((name) => assertSafePathSegment(name, 'Swept skill name'));
+  // A device may assign or report a swept skill before the deletion is pushed; the
+  // rebase cannot see that, so bring the skill back from the remote.
+  async function restoreReferencedSweptSkills() {
+    if (!sweptPath) return;
+    await withVaultReferences(vaultPath, async () => {
+      const swept = await readSwept();
+      if (!swept.length) return;
+      const referenced = await referencedSkillNames(vaultPath);
+      const pending = [];
+      for (const name of swept) {
+        if (!referenced.has(name)) {
+          pending.push(name);
+          continue;
+        }
+        const restored = await git(['checkout', '@{u}', '--', `skills/${name}`], vaultPath).then(() => true, () => false);
+        if (restored) result.restoredSkills.push(name);
+      }
+      await writePrivateJson(sweptPath, pending);
+    });
   }
   const result = {
     autoImported: [],
+    restoredSkills: [],
     autoImportConflicts: [],
     instructionProviderConflicts: [],
     instructionProviderBackups: [],
@@ -251,6 +274,11 @@ async function sync({
     prunedInstructionProfiles: [],
     prunedSkills: [],
   };
+  if (pull && await isGitRepo(vaultPath)) {
+    await pullRebase(vaultPath, { beforePull, resolveConflicts });
+    await afterPull();
+    await restoreReferencedSweptSkills();
+  }
   let pluginsReconciled = false;
   async function reconcileLocalState() {
     await ensureVault(vaultPath);
@@ -291,9 +319,13 @@ async function sync({
         const inventoryRevision = await readInventoryRevision(vaultPath);
         const scanned = await scanTargets({ vaultPath, deviceId, save: false });
         if (pull) {
-          result.prunedSkills.push(...await sweepUnusedSkills({
+          const pruned = await sweepUnusedSkills({
             vaultPath, deviceId, detected: scanned.detected, inventoryRevision,
-          }));
+          });
+          result.prunedSkills.push(...pruned);
+          if (pruned.length && sweptPath) {
+            await writePrivateJson(sweptPath, [...new Set([...await readSwept(), ...pruned])].sort());
+          }
         }
         await checkVault(vaultPath);
         await markDeviceApplied({
@@ -317,6 +349,7 @@ async function sync({
         resolveConflicts,
         afterPullRebase: async () => {
           await afterPull();
+          await restoreReferencedSweptSkills();
           await reconcileLocalState();
           committed = await commitAllIfChanged(vaultPath, commitMessage) || committed;
         },
@@ -325,6 +358,7 @@ async function sync({
       pushed = pushResult.pushed;
       rebasedBeforePush = pushResult.rebased;
     }
+    if (sweptPath && !await hasLocalCommitsToPush(vaultPath)) await rm(sweptPath, { force: true });
   }
   // Plugin updates can take minutes, so they run after skill sync has released the apply lock.
   for (const [key, agent] of runPluginUpdates && deviceId ? PLUGIN_RESULTS : []) {

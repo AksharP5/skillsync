@@ -2145,6 +2145,9 @@ async function syncCommand(rest) {
   if (result.prunedSkills?.length) {
     console.log(`Removed unused vault skills: ${result.prunedSkills.join(', ')}.`);
   }
+  if (result.restoredSkills?.length) {
+    console.log(`Kept vault skills another device started using: ${result.restoredSkills.join(', ')}.`);
+  }
   console.log(result.pushed ? 'Synced and pushed changes.' : 'Synced. No local changes to push.');
 }
 
@@ -2270,6 +2273,9 @@ async function daemon(rest) {
       printPluginSyncMessages(result, `[${new Date().toISOString()}] `, { onlyChanged: true });
       if (result.prunedSkills?.length) {
         console.log(`[${new Date().toISOString()}] removed unused vault skills: ${result.prunedSkills.join(', ')}`);
+      }
+      if (result.restoredSkills?.length) {
+        console.log(`[${new Date().toISOString()}] kept vault skills another device started using: ${result.restoredSkills.join(', ')}`);
       }
       console.log(`[${new Date().toISOString()}] synced`);
     } catch (error) {
