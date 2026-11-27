@@ -281,25 +281,25 @@ test('a dangling projection behind a symlinked target directory is removed after
   await assert.rejects(() => lstat(path.join(target, 'foo')), { code: 'ENOENT' });
 });
 
-test('projection plans reject overlapping target roots', async () => {
+test('adding a target rejects one that overlaps or mixes modes with an existing target', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const target = path.join(root, 'skills');
   await addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'parent', targetPath: target });
-  await addTarget({
-    vaultPath: vault,
-    deviceId: 'macbook',
-    name: 'nested',
-    targetPath: path.join(target, 'nested'),
-  });
 
   await assert.rejects(
-    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    () => addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'nested', targetPath: path.join(target, 'nested') }),
     /Configured skill targets cannot overlap/,
   );
+  await assert.rejects(
+    () => addTarget({ vaultPath: vault, deviceId: 'macbook', name: 'copies', targetPath: target, mode: 'copy' }),
+    /must use the same projection mode/,
+  );
+  assert.deepEqual(Object.keys((await loadLocalDevice(vault, 'macbook')).targets), ['parent']);
+  await applyLinks({ vaultPath: vault, deviceId: 'macbook' });
 });
 
-test('projection plans reject overlapping target roots through symlink aliases', async () => {
+test('adding a target rejects overlapping target roots through symlink aliases', async () => {
   const root = await tempDir();
   const vault = path.join(root, 'vault');
   const physicalTarget = path.join(root, 'physical-skills');
@@ -312,15 +312,13 @@ test('projection plans reject overlapping target roots through symlink aliases',
     name: 'alias',
     targetPath: aliasTarget,
   });
-  await addTarget({
-    vaultPath: vault,
-    deviceId: 'macbook',
-    name: 'nested',
-    targetPath: path.join(physicalTarget, 'nested'),
-  });
-
   await assert.rejects(
-    () => applyLinks({ vaultPath: vault, deviceId: 'macbook' }),
+    () => addTarget({
+      vaultPath: vault,
+      deviceId: 'macbook',
+      name: 'nested',
+      targetPath: path.join(physicalTarget, 'nested'),
+    }),
     /Configured skill targets cannot overlap/,
   );
 });

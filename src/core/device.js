@@ -733,6 +733,7 @@ export async function addTarget({
     }
     await saveLocalReportedDevice(vaultPath, device, { inventoryRevision });
   };
+  if (!previousTarget) await groupTargetRoots({ ...device.targets, [name]: nextTarget });
   if (previousTarget
     && (previousTarget.path !== nextTarget.path || previousTarget.mode !== nextTarget.mode)) {
     const plan = await planLinks({
@@ -1078,33 +1079,10 @@ export async function removeTargetAndPrune(options) {
   return { device, pruned: [] };
 }
 
-export async function planLinks({
-  vaultPath,
-  deviceId = defaultDeviceId(),
-  discardLocalChanges = false,
-  readOnly = false,
-  replaceUnmanagedPaths = [],
-  device: providedDevice,
-  registry: providedRegistry,
-}) {
-  const device = providedDevice || await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
-  const registry = providedRegistry || await loadRegistry(vaultPath);
-  const approvedReplacements = new Set(await Promise.all(
-    replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
-  ));
-  const desiredByTarget = new Map();
-  for (const [skillName, targets] of Object.entries(device.installed)) {
-    assertSafePathSegment(skillName, 'Skill name');
-    if (!registry.skills[skillName]) continue;
-    for (const targetName of targets) {
-      if (!device.targets[targetName]) continue;
-      if (!desiredByTarget.has(targetName)) desiredByTarget.set(targetName, new Set());
-      desiredByTarget.get(targetName).add(skillName);
-    }
-  }
-
+// Targets that share a folder form one group; groups must agree on mode and must not nest.
+async function groupTargetRoots(targets, desiredByTarget = new Map()) {
   const targetGroups = new Map();
-  for (const [targetName, targetConfig] of Object.entries(device.targets)) {
+  for (const [targetName, targetConfig] of Object.entries(targets)) {
     const targetPath = path.resolve(expandHome(targetConfig.path));
     const canonicalPath = await canonicalTargetRoot(targetPath);
     const existing = targetGroups.get(canonicalPath);
@@ -1130,6 +1108,35 @@ export async function planLinks({
       throw new Error(`Configured skill targets cannot overlap: ${root}`);
     }
   }
+  return targetGroups;
+}
+
+export async function planLinks({
+  vaultPath,
+  deviceId = defaultDeviceId(),
+  discardLocalChanges = false,
+  readOnly = false,
+  replaceUnmanagedPaths = [],
+  device: providedDevice,
+  registry: providedRegistry,
+}) {
+  const device = providedDevice || await loadLocalDevice(vaultPath, deviceId, { ensure: !readOnly });
+  const registry = providedRegistry || await loadRegistry(vaultPath);
+  const approvedReplacements = new Set(await Promise.all(
+    replaceUnmanagedPaths.map((targetPath) => canonicalTargetRoot(targetPath)),
+  ));
+  const desiredByTarget = new Map();
+  for (const [skillName, targets] of Object.entries(device.installed)) {
+    assertSafePathSegment(skillName, 'Skill name');
+    if (!registry.skills[skillName]) continue;
+    for (const targetName of targets) {
+      if (!device.targets[targetName]) continue;
+      if (!desiredByTarget.has(targetName)) desiredByTarget.set(targetName, new Set());
+      desiredByTarget.get(targetName).add(skillName);
+    }
+  }
+
+  const targetGroups = await groupTargetRoots(device.targets, desiredByTarget);
 
   const operations = [];
   const sourceHashes = new Map();
