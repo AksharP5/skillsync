@@ -2138,7 +2138,7 @@ async function syncCommand(rest) {
     console.log(`Auto-adopted ${adopted.name} from ${adopted.target}.`);
   }
   for (const conflict of result.autoImportConflicts || []) {
-    console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.`);
+    console.log(`Skipped auto-adoption conflict for ${conflict.name} at ${conflict.path}.${conflict.reason ? `\n${conflict.reason}` : ''}`);
   }
   printInstructionSyncMessages(result);
   printPluginSyncMessages(result);
@@ -2263,7 +2263,7 @@ async function daemon(rest) {
         console.log(`[${new Date().toISOString()}] auto-adopted ${adopted.name} from ${adopted.target}`);
       }
       for (const conflict of result.autoImportConflicts || []) {
-        console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}`);
+        console.warn(`[${new Date().toISOString()}] auto-adoption conflict for ${conflict.name} at ${conflict.path}${conflict.reason ? `: ${conflict.reason}` : ''}`);
       }
       printInstructionSyncMessages(result, `[${new Date().toISOString()}] `);
       printPluginSyncMessages(result, `[${new Date().toISOString()}] `, { onlyChanged: true });
