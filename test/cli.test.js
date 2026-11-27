@@ -617,6 +617,7 @@ for (const { args, deviceId = 'local', targets, global = true } of [
   { args: ['--device', 'local', '--target', 'codex'], targets: ['claude'] },
   { args: ['-d', 'local', '-t', ' codex, claude, codex '], targets: [] },
   { args: ['--target', 'codex', '--target', 'claude'], targets: [] },
+  { args: ['--target', 'codex', '-t', 'claude'], targets: [] },
   { args: ['--global'], targets: ['claude', 'codex'], global: false },
   { args: ['-d', 'remote', '-t', 'codex'], deviceId: 'remote', targets: ['claude'] },
 ]) {
@@ -1476,3 +1477,37 @@ register('./loader.mjs',import.meta.url); process.stdin.isTTY=true;`);
     });
   });
 }
+
+test('doctor exits 1 when a check fails', async () => {
+  const home = await tempDir();
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'doctor'], { env: cliEnv(home) }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stdout, /✗ config\/vault/);
+      return true;
+    },
+  );
+});
+
+test('connect explains that GitHub CLI is required when gh is missing', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const bin = path.join(home, 'bin');
+  await mkdir(bin);
+  for (const command of ['git', 'sh']) {
+    const real = (await execFileAsync('/bin/sh', ['-c', `command -v ${command}`])).stdout.trim();
+    await symlink(real, path.join(bin, command));
+  }
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'connect', 'owner/vault'], {
+      env: { ...cliEnv(home), PATH: bin },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /gh CLI is required/);
+      return true;
+    },
+  );
+});

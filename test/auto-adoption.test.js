@@ -217,3 +217,25 @@ test('auto-adoption requires a skill to occupy its configured projection path', 
   await assert.rejects(() => lstat(path.join(targetPath, 'canonical-name')), { code: 'ENOENT' });
   await assert.rejects(() => lstat(path.join(targetPath, 'nested')), { code: 'ENOENT' });
 });
+
+test('a new skill that fails the content check is skipped without blocking the sync', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'skillsync-adoption-check-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const options = { vaultPath: path.join(root, 'vault'), deviceId: 'local' };
+  const target = path.join(root, 'skills');
+  await addTarget({ ...options, name: 'codex', targetPath: target });
+  await scanTargets(options);
+  await makeSkill(path.join(target, 'linked'), 'linked');
+  await symlink('SKILL.md', path.join(target, 'linked', 'alias.md'));
+  await makeSkill(path.join(target, 'clean'), 'clean');
+
+  const syncOptions = { ...options, pull: false, pushChanges: false };
+  const result = await syncVault(syncOptions);
+
+  assert.deepEqual(result.autoImported, [{ name: 'clean', target: 'codex', status: 'added' }]);
+  assert.equal(result.autoImportConflicts.length, 1);
+  assert.equal(result.autoImportConflicts[0].name, 'linked');
+  assert.match(result.autoImportConflicts[0].reason, /Skill check failed/);
+  assert.equal((await lstat(path.join(target, 'linked'))).isDirectory(), true);
+  assert.deepEqual((await syncVault(syncOptions)).autoImportConflicts, []);
+});
