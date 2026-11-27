@@ -1666,14 +1666,22 @@ async function symlinkInfo(targetPath, vaultPath) {
       if (error.code === 'ENOENT') return null;
       throw error;
     });
-    const resolved = canonical || path.resolve(path.dirname(targetPath), linked);
+    // A dangling link resolves from the folder that really holds it. Older versions wrote
+    // links relative to the configured alias instead, so either reading counts as owned.
+    const candidates = canonical
+      ? [canonical]
+      : [
+        path.resolve(await realpathOrResolve(path.dirname(targetPath)), linked),
+        path.resolve(path.dirname(targetPath), linked),
+      ];
     const vaultSkills = path.resolve(vaultPath, 'skills');
     const canonicalVaultSkills = await realpathOrResolve(vaultSkills);
+    const insideVault = (candidate) => [vaultSkills, canonicalVaultSkills]
+      .some((root) => candidate.startsWith(root + path.sep));
     return {
-      resolved,
+      resolved: candidates.find(insideVault) ?? candidates[0],
       reachable: Boolean(canonical),
-      owned: [vaultSkills, canonicalVaultSkills]
-        .some((root) => resolved.startsWith(root + path.sep)),
+      owned: candidates.some(insideVault),
     };
   } catch (error) {
     if (error.code === 'ENOENT') return null;
