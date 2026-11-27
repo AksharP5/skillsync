@@ -2180,21 +2180,26 @@ async function rollbackCommand() {
 async function doctor() {
   const gitOk = await commandExists('git');
   const ghOk = await commandExists('gh');
+  let healthy = gitOk && ghOk;
   console.log(`${gitOk ? '✓' : '✗'} git`);
   console.log(`${ghOk ? '✓' : '✗'} gh`);
   if (ghOk) {
     try { await gh(['auth', 'status']); console.log('✓ gh auth'); }
-    catch { console.log('✗ gh auth'); }
+    catch { console.log('✗ gh auth'); healthy = false; }
   }
   try {
     const config = await loadConfig();
     console.log(`✓ config: ${config.repoPath}`);
-    console.log(`${await isGitRepo(config.repoPath) ? '✓' : '✗'} vault git repo`);
+    const repoOk = await isGitRepo(config.repoPath);
+    healthy &&= repoOk;
+    console.log(`${repoOk ? '✓' : '✗'} vault git repo`);
     const result = await checkVault(config.repoPath);
     console.log(`✓ vault checked: ${result.skills} skills, ${result.files} files`);
   } catch (error) {
     console.log(`✗ config/vault: ${error.message}`);
+    healthy = false;
   }
+  if (!healthy) process.exitCode = 1;
 }
 
 async function service() {
