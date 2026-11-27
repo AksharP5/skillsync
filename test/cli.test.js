@@ -1489,3 +1489,25 @@ test('doctor exits 1 when a check fails', async () => {
     },
   );
 });
+
+test('connect explains that GitHub CLI is required when gh is missing', async (t) => {
+  const home = await tempDir();
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const bin = path.join(home, 'bin');
+  await mkdir(bin);
+  for (const command of ['git', 'sh']) {
+    const real = (await execFileAsync('/bin/sh', ['-c', `command -v ${command}`])).stdout.trim();
+    await symlink(real, path.join(bin, command));
+  }
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.resolve('src/cli.js'), 'connect', 'owner/vault'], {
+      env: { ...cliEnv(home), PATH: bin },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /gh CLI is required/);
+      return true;
+    },
+  );
+});
