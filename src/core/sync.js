@@ -28,7 +28,7 @@ import {
   reconcileGlobalInstructionProviders,
 } from './instructions.js';
 import { syncPlugins, updatePlugins } from './plugins.js';
-import { ensureVault, refreshChangedRegistryEntries } from './registry.js';
+import { REGISTRY_FILE, ensureVault, mergeRegistryConflict, refreshChangedRegistryEntries } from './registry.js';
 
 async function pathInfo(filePath) {
   return lstat(filePath, { bigint: true }).catch((error) => {
@@ -230,8 +230,14 @@ async function sync({
     await rm(recoveryPath, { force: true });
     recovery = null;
   }
+  // The registry is generated from skill folders, so concurrent additions can be merged by rebuilding it.
+  async function resolveConflicts(paths) {
+    if (paths.some((file) => file !== REGISTRY_FILE)) return false;
+    await mergeRegistryConflict(vaultPath);
+    return true;
+  }
   if (pull && await isGitRepo(vaultPath)) {
-    await pullRebase(vaultPath, { beforePull });
+    await pullRebase(vaultPath, { beforePull, resolveConflicts });
     await afterPull();
   }
   const result = {
@@ -308,6 +314,7 @@ async function sync({
     if (committed || await hasLocalCommitsToPush(vaultPath)) {
       const pushResult = await pushWithPullRebaseRetry(vaultPath, {
         beforePullRebase: beforePull,
+        resolveConflicts,
         afterPullRebase: async () => {
           await afterPull();
           await reconcileLocalState();

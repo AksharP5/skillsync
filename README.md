@@ -551,6 +551,8 @@ If the filesystem cannot prove a folder's identity after an interrupted backup, 
 
 Sync stops if Git leaves unresolved conflicts, including conflicts while restoring local edits after a pull. Resolve and stage the affected files before retrying. `--no-pull` does not bypass this check.
 
+When two devices change the vault at the same time, sync rebases this device's commits onto the remote. Conflicts only in `registry.json`, such as two devices adding skills at once, are merged automatically. Any other rebase conflict stops sync with the branch restored and the conflicting files listed; resolve them with `git pull --rebase` in the vault, finish with `git rebase --continue`, then sync again.
+
 Preview local skill projection changes without pulling or writing:
 
 ```bash
