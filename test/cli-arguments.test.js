@@ -267,6 +267,7 @@ test('documented aliases, option order and dashed paths keep working', async (t)
     ['installed', '-d', 'local'],
     ['agents', 'profiles'],
     ['plugin', 'show', 'shared'],
+    ['plugins', '--agent', 'codex'],
     ['devices', 'show', 'local'],
     ['packs', 'install', 'demo', '-g'],
     ['install', 'demo', '-d', 'remote', '-t', 'codex'],

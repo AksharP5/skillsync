@@ -769,7 +769,7 @@ async function requireWritableTargetRoot(targetPath) {
 export async function removeTarget({ vaultPath, deviceId = defaultDeviceId(), name }) {
   assertSafePathSegment(name, 'Target name');
   let device = await loadLocalDevice(vaultPath, deviceId);
-  if (!Object.hasOwn(device.targets, name)) return device;
+  if (!Object.hasOwn(device.targets, name)) throw new Error(`Unknown target on this device: ${name}`);
   await removeOwnedTargetProjections({
     vaultPath,
     device,
