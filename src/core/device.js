@@ -1444,11 +1444,19 @@ export async function autoImportNewLocalSkills({ vaultPath, deviceId = defaultDe
       const projection = await projectionInfo(sourcePath, vaultPath);
       if (projection.ownedSymlink || projection.ownedCopy) continue;
 
+      // A skill that fails the content check is reported like a conflict so the rest of the sync still runs.
       const comparison = await compareSkillToVault({
         vaultPath,
         sourcePath,
         name: skill.name,
+      }).catch((error) => {
+        if (error.code !== 'SKILLSYNC_CHECK_FAILED') throw error;
+        return { status: 'rejected', name: skill.name, reason: error.message };
       });
+      if (comparison.status === 'rejected') {
+        conflicts.push({ name: comparison.name, target: targetName, path: sourcePath, reason: comparison.reason });
+        continue;
+      }
       if (comparison.status === 'different') {
         conflicts.push({
           name: comparison.name,
