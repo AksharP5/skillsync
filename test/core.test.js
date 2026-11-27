@@ -391,6 +391,10 @@ test('removing a target cleans SkillSync-owned projections but preserves unmanag
     await readFile(path.join(target, 'local-only', 'SKILL.md'), 'utf8'),
     '# Local\n',
   );
+  await assert.rejects(
+    removeTargetAndPrune({ vaultPath: vault, deviceId: 'macbook', name: 'codx' }),
+    /Unknown target on this device: codx/,
+  );
 });
 
 test('scanTargets records unmanaged local skills from a separate scan path', async () => {
